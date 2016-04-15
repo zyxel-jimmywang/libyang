@@ -34,12 +34,12 @@ extern "C" {
  *
  * @section about-features Main Features
  *
+ * - Parsing (and validating) schemas in YANG format.
  * - Parsing (and validating) schemas in YIN format.
  * - Parsing, validating and printing instance data in XML format.
  * - Parsing, validating and printing instance data in JSON format.
  * - Manipulation with the instance data.
- *
- * - \todo Parsing (and validating) schemas in YANG format.
+ * - Support for adding default values into instance data.
  *
  * @subsection about-features-others Extra (side-effect) Features
  *
@@ -196,8 +196,6 @@ extern "C" {
  *
  *   Basic YANG schemas format described in [RFC 6020](http://tools.ietf.org/html/rfc6020).
  *   Currently, only YANG 1.0 is supported.
- *
- *   \todo YANG input is not yet implemented
  *
  * - YIN
  *
@@ -1078,6 +1076,10 @@ const char *ly_errmsg(void);
  *
  * The path always corresponds to the error message available via ly_errmsg(), so
  * whenever a subsequent error message is printed, the path is erased or rewritten.
+ * The path reflects the type of the processed tree - data path for data tree functions
+ * and schema path in case of schema tree functions. In case of processing YIN schema
+ * or XML data, the path can be just XML path. In such a case, the corresponding
+ * ly_vecode (value 1-3) is set.
  *
  * @return Path of the error element.
  */

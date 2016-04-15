@@ -894,6 +894,7 @@ process:
     if (!memcmp("/>", c, 2)) {
         /* we are done, it was EmptyElemTag */
         c += 2;
+        elem->content = lydict_insert(ctx, "", 0);
         closed_flag = 1;
     } else if (*c == '>') {
         /* process element content */
@@ -935,7 +936,7 @@ process:
                     uc = lyxml_getutf8(e, &size);
                 }
                 if (!*e) {
-                    LOGVAL(LYE_EOF, LY_VLOG_XML, elem);
+                    LOGVAL(LYE_EOF, LY_VLOG_NONE, NULL);
                     goto error;
                 }
 
@@ -964,6 +965,10 @@ process:
                     goto error;
                 }
                 c++;
+                if (!(elem->flags & LYXML_ELEM_MIXED) && !elem->content) {
+                    /* there was no content, but we don't want NULL (only if mixed content) */
+                    elem->content = lydict_insert(ctx, "", 0);
+                }
                 closed_flag = 1;
                 break;
 
@@ -1317,10 +1322,10 @@ dump_elem(struct lyout *out, const struct lyxml_elem *e, int level, int options)
         return size;
     }
 
-    if (!e->child && !e->content) {
+    if (!e->child && (!e->content || !e->content[0])) {
         size += ly_print(out, "/>%s", delim);
         return size;
-    } else if (e->content) {
+    } else if (e->content && e->content[0]) {
         ly_print(out, ">");
         size++;
 

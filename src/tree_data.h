@@ -97,7 +97,7 @@ typedef union lyd_value_u {
  */
 #define LYD_VAL_OK       0x00    /**< node is successfully validated including whole subtree */
 #define LYD_VAL_UNIQUE   0x01    /**< Unique value(s) changed, applicable only to ::lys_node_list data nodes */
-#define LYD_VAL_NOT      0x1f    /**< node was not validated yet */
+#define LYD_VAL_NOT      0x0f    /**< node was not validated yet */
 /**
  * @}
  */
@@ -116,7 +116,8 @@ typedef union lyd_value_u {
  */
 struct lyd_node {
     struct lys_node *schema;         /**< pointer to the schema definition of this node */
-    uint8_t validity:5;              /**< [validity flags](@ref validityflags) */
+    uint8_t validity:4;              /**< [validity flags](@ref validityflags) */
+    uint8_t dflt:1;                  /**< flag for default node (applicable only on leafs) to be marked with default attribute */
     uint8_t when_status:3;           /**< bit for checking if the when-stmt condition is resolved - internal use only,
                                           do not use this value! */
 
@@ -147,7 +148,8 @@ struct lyd_node {
 struct lyd_node_leaf_list {
     struct lys_node *schema;         /**< pointer to the schema definition of this node which is ::lys_node_leaflist
                                           structure */
-    uint8_t validity:5;              /**< [validity flags](@ref validityflags) */
+    uint8_t validity:4;              /**< [validity flags](@ref validityflags) */
+    uint8_t dflt:1;                  /**< flag for default node (applicable only on leafs) to be marked with default attribute */
     uint8_t when_status:3;           /**< bit for checking if the when-stmt condition is resolved - internal use only,
                                           do not use this value! */
 
@@ -183,7 +185,8 @@ union lyd_node_anyxml_value {
 struct lyd_node_anyxml {
     struct lys_node *schema;         /**< pointer to the schema definition of this node which is ::lys_node_anyxml
                                           structure */
-    uint8_t validity:5;              /**< [validity flags](@ref validityflags) */
+    uint8_t validity:4;              /**< [validity flags](@ref validityflags) */
+    uint8_t dflt:1;                  /**< flag for default node (applicable only on leafs) to be marked with default attribute */
     uint8_t when_status:3;           /**< bit for checking if the when-stmt condition is resolved - internal use only,
                                           do not use this value! */
 
@@ -284,18 +287,21 @@ struct lyd_node_anyxml {
                                        constrained subtree. */
 #define LYD_OPT_KEEPEMPTYCONT 0x4000 /**< Do not automatically delete empty non-presence containers. */
 
-#define LYD_WD_MASK       0xF0000 /**< Mask for with-defaults modes */
-#define LYD_WD_TRIM       0x10000 /**< Remove all nodes with the value equal to their default value */
-#define LYD_WD_ALL        0x20000 /**< Explicitly add all missing nodes with their default value */
-#define LYD_WD_ALL_TAG    0x40000 /**< Same as LYD_WD_ALL but also adds attribute 'default' with value 'true' to
-                                       all nodes that has its default value. The 'default' attribute has namespace:
-                                       urn:ietf:params:xml:ns:netconf:default:1.0 and thus the attributes are
-                                       created only when the ietf-netconf-with-defaults module is present in libyang
-                                       context. */
-#define LYD_WD_IMPL_TAG   0x80000 /**< Same as LYD_WD_ALL_TAG but the attributes are added only to the nodes that
-                                       are being created and were not part of the original data tree despite their
-                                       value is equal to their default value. There is the same limitation regarding
-                                       the presence of ietf-netconf-with-defaults module in libyang context. */
+#define LYD_WD_MASK        0x1F0000  /**< Mask for with-defaults modes */
+#define LYD_WD_EXPLICIT    0x100000  /**< Explicit mode - add missing default status data, but only in case the data
+                                          type is supposed to include status data (all except #LYD_OPT_CONFIG,
+                                          #LYD_OPT_GETCONF and #LYD_OPT_EDIT */
+#define LYD_WD_TRIM        0x010000  /**< Remove all nodes with the value equal to their default value */
+#define LYD_WD_ALL         0x020000  /**< Explicitly add all missing nodes with their default value */
+#define LYD_WD_ALL_TAG     0x040000  /**< Same as LYD_WD_ALL but also adds attribute 'default' with value 'true' to
+                                          all nodes that has its default value. The 'default' attribute has namespace:
+                                          urn:ietf:params:xml:ns:netconf:default:1.0 and thus the attributes are
+                                          created only when the ietf-netconf-with-defaults module is present in libyang
+                                          context. */
+#define LYD_WD_IMPL_TAG    0x080000  /**< Same as LYD_WD_ALL_TAG but the attributes are added only to the nodes that
+                                          are being created and were not part of the original data tree despite their
+                                          value is equal to their default value. There is the same limitation regarding
+                                          the presence of ietf-netconf-with-defaults module in libyang context. */
 
 /**@} parseroptions */
 
@@ -424,6 +430,7 @@ struct lyd_node *lyd_new_leaf(struct lyd_node *parent, const struct lys_module *
  * @brief Change value of a leaf node.
  *
  * Despite the prototype allows to provide a leaflist node as \p leaf parameter, only leafs are accepted.
+ * Also, changing the value of a list key is prohibited.
  *
  * @param[in] leaf A leaf node to change.
  * @param[in] val_str String form of the new value to be set to the \p leaf. In case the type is #LY_TYPE_INST
@@ -526,6 +533,9 @@ struct lyd_node *lyd_output_new_anyxml_xml(const struct lys_node *schema, struct
  * required and always guaranteed. Specially, when working with RPC output (using #LYD_PATH_OPT_OUTPUT flag),
  * it can therefore happen that a node is created and inserted before \p data_tree.
  *
+ * If \p path points to a list key and the list does not exist, the key value from the predicate is used
+ * and \p value is ignored.
+ *
  * @param[in] data_tree Existing data tree to add to/modify. It is expected to be valid. If creating RPCs,
  * there should only be one RPC and either input or output. Can be NULL.
  * @param[in] ctx Context to use. Mandatory if \p data_tree is NULL.
@@ -535,7 +545,7 @@ struct lyd_node *lyd_output_new_anyxml_xml(const struct lys_node *schema, struct
  * @param[in] value Value of the new leaf/lealf-list. If creating anyxml, this value is internally duplicated
  * (for other options use lyd_*_new_anyxml_*()). If creating nodes of other types, set to NULL.
  * @param[in] options Bitmask of options flags, see @ref pathoptions.
- * @return First created (or updated node with #LYD_PATH_OPT_UPDATE) node,
+ * @return First created (or updated with #LYD_PATH_OPT_UPDATE) node,
  * NULL if #LYD_PATH_OPT_UPDATE was used and the full path exists or the leaf original value matches \p value,
  * NULL and ly_errno is set on error.
  */
@@ -676,16 +686,20 @@ int lyd_validate(struct lyd_node **node, int options, ...);
  * - #LYD_WD_ALL_TAG - add default nodes and add attribute 'default' with value 'true' to all nodes having their default value
  * - #LYD_WD_IMPL_TAG - add default nodes, but add attribute 'default' only to the added nodes
  * @note The LYD_WD_*_TAG modes require to have ietf-netconf-with-defaults module in the context of the data tree.
+ * @note If you already added some tagged default nodes (by parser or previous call of lyd_validate()), you should
+ * specify the same LYD_WD_*_TAG in all subsequent call to lyd_validate(). Otherwise, the tagged nodes will be removed.
  * @return EXIT_SUCCESS ot EXIT_FAILURE
  */
 int lyd_wd_add(struct ly_ctx *ctx, struct lyd_node **root, int options);
 
 /**
- * @brief Remove all default nodes, respectively all nodes with attribute ncwd:default="true" added by
- * #LYD_WD_ALL_TAG or #LYD_WD_IMPL_TAG in lyd_wd_add(), lyd_validate() or lyd_parse_*() functions.
+ * @brief Remove all default nodes, respectively all nodes with set ::lyd_node#dflt added by
+ * #LYD_WD_ALL_TAG or #LYD_WD_IMPL_TAG options in lyd_wd_add(), lyd_validate() or lyd_parse_*() functions.
  *
  * @param[in] root Data tree root. The data tree can be modified so the root can be changed or completely removed.
  * @param[in] options Options for the inserting data to the target data tree options, see @ref parseroptions.
+ *            If #LYD_WD_EXPLICIT is found in options, the default status nodes are kept, so it is better to
+ *            erase all LYD_WD_* flags from the value.
  * @return EXIT_SUCCESS or EXIT_FAILURE
  */
 int lyd_wd_cleanup(struct lyd_node **root, int options);
@@ -748,6 +762,17 @@ struct lyd_attr *lyd_insert_attr(struct lyd_node *parent, const struct lys_modul
  *            in the list.
  */
 void lyd_free_attr(struct ly_ctx *ctx, struct lyd_node *parent, struct lyd_attr *attr, int recursive);
+
+/**
+ * @brief Return main module of the data tree node.
+ *
+ * In case of regular YANG module, it returns ::lys_node#module pointer,
+ * but in case of submodule, it returns pointer to the main module.
+ *
+ * @param[in] node Data tree node to be examined
+ * @return pointer to the main module (schema structure), NULL in case of error.
+ */
+struct lys_module *lyd_node_module(const struct lyd_node *node);
 
 /**
 * @brief Print data tree in the specified format.

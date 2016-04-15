@@ -96,7 +96,7 @@ struct lyd_node_pos {
  * @param[in] module Schema tree where to connect the submodule, belongs-to value must match.
  * @param[in] data String containing the submodule specification in the given \p format.
  * @param[in] format Format of the data to read.
- * @param[in] unres TODO provide description
+ * @param[in] unres list of unresolved items
  * @return Created submodule structure or NULL in case of error.
  */
 struct lys_submodule *lys_submodule_parse(struct lys_module *module, const char *data, LYS_INFORMAT format,
@@ -111,7 +111,7 @@ struct lys_submodule *lys_submodule_parse(struct lys_module *module, const char 
  * @param[in] fd File descriptor of a regular file (e.g. sockets are not supported) containing the submodule
  *            specification in the given \p format.
  * @param[in] format Format of the data to read.
- * @param[in] unres TODO provide description
+ * @param[in] unres list of unresolved items
  * @return Created submodule structure or NULL in case of error.
  */
 struct lys_submodule *lys_submodule_read(struct lys_module *module, int fd, LYS_INFORMAT format,
@@ -179,7 +179,7 @@ int lys_check_id(struct lys_node *node, struct lys_node *parent, struct lys_modu
  * @param[in] node Schema tree node to be duplicated.
  * @param[in] flags Config flag to be inherited in case the origin node does not specify config flag
  * @param[in] nacm NACM flags to be inherited from the parent
- * @param[in] unres TODO provide description
+ * @param[in] unres list of unresolved items
  * @param[in] shallow Whether to copy children and connect to parent/module too.
  * @return Created copy of the provided schema \p node.
  */
@@ -194,39 +194,6 @@ struct lys_node *lys_node_dup(struct lys_module *module, struct lys_node *parent
  * @param[in] src Source node that will replace \p dst.
  */
 void lys_node_switch(struct lys_node *dst, struct lys_node *src);
-
-/**
- * @brief Return main module of the schema tree node.
- *
- * In case of regular YANG module, it returns ::lys_node#module pointer,
- * but in case of submodule, it returns pointer to the main module.
- *
- * @param[in] node Schema tree node to be examined
- * @return pointer to the main module (schema structure), NULL in case of error.
- */
-struct lys_module *lys_node_module(const struct lys_node *node);
-
-/**
- * @brief Return main module of the data tree node.
- *
- * In case of regular YANG module, it returns ::lys_node#module pointer,
- * but in case of submodule, it returns pointer to the main module.
- *
- * @param[in] node Data tree node to be examined
- * @return pointer to the main module (schema structure), NULL in case of error.
- */
-struct lys_module *lyd_node_module(const struct lyd_node *node);
-
-/**
- * @brief Return main module of the module.
- *
- * In case of regular YANG module, it returns itself,
- * but in case of submodule, it returns pointer to the main module.
- *
- * @param[in] module Module to be examined
- * @return pointer to the main module (schema structure).
- */
-struct lys_module *lys_module(const struct lys_module *module);
 
 /**
  * @brief Free a schema when condition
@@ -394,26 +361,12 @@ int lyd_list_equal(struct lyd_node *first, struct lyd_node *second);
  *            LYD_WD_* options are used to select functionality:
  * - #LYD_WD_TRIM - remove all nodes that have value equal to their default value
  * - #LYD_WD_ALL - add default nodes
- * - #LYD_WD_ALL_TAG - add default nodes and add attribute 'default' with value 'true' to all nodes having their default value
- * - #LYD_WD_IMPL_TAG - add default nodes, but add attribute 'default' only to the added nodes
- * @note The *_TAG modes require to have ietf-netconf-with-defaults module in the context of the data tree if other
- * schema for default attribute is not specified as \p wdmod.
- * @param[in] wdmod Optional parameter to specify module in which the default attributes will be created. If NULL
- * the ietf-netconf-with-defaults schema is used.
+ * - #LYD_WD_ALL_TAG - add default nodes and set ::lyd_node#dflt in all nodes having their default value
+ * - #LYD_WD_IMPL_TAG - add default nodes, but set ::lyd_node#dflt only in the added nodes
+ * @note The *_TAG modes require to have ietf-netconf-with-defaults module in the context of the data tree in time of
+ * printing - all the flagged nodes are printed with the 'default' attribute with 'true' value.
  * @return EXIT_SUCCESS ot EXIT_FAILURE
  */
-int lyd_wd_top(struct ly_ctx *ctx, struct lyd_node **root, struct unres_data *unres, int options, const struct lys_module *wdmod);
-
-/**
- * @brief Remove all default nodes, respectively all nodes with attribute X:default="true" where X is the provided
- * \p wdmod.
- *
- * @param[in] root Data tree root. The data tree can be modified so the root can be changed or completely removed.
- * @param[in] wdmod Schema in which the default attributes were created. If NULL the ietf-netconf-with-defaults
- * is used if present in the data tree's context.
- * @param[in] options Options for the inserting data to the target data tree options, see @ref parseroptions.
- * @return EXIT_SUCCESS or EXIT_FAILURE
- */
-int lyd_wd_cleanup_mod(struct lyd_node **root, const struct lys_module *wdmod, int options);
+int lyd_wd_top(struct ly_ctx *ctx, struct lyd_node **root, struct unres_data *unres, int options);
 
 #endif /* LY_TREE_INTERNAL_H_ */

@@ -121,7 +121,7 @@ lys_read_import(struct ly_ctx *ctx, int fd, LYS_INFORMAT format, const char *rev
         module = yang_read_module(ctx, addr, sb.st_size + 2, revision, 0);
         break;
     default:
-        /* TODO */
+        LOGERR(LY_EINVAL, "%s: Invalid format parameter.", __func__);
         break;
     }
     munmap(addr, sb.st_size + 2);
@@ -1324,11 +1324,11 @@ lyp_check_mandatory(struct lys_node *node)
 }
 
 int
-lyp_check_status(uint8_t flags1, struct lys_module *mod1, const char *name1,
-                 uint8_t flags2, struct lys_module *mod2, const char *name2,
+lyp_check_status(uint16_t flags1, struct lys_module *mod1, const char *name1,
+                 uint16_t flags2, struct lys_module *mod2, const char *name2,
                  const struct lys_node *node)
 {
-    uint8_t flg1, flg2;
+    uint16_t flg1, flg2;
 
     flg1 = (flags1 & LYS_STATUS_MASK) ? (flags1 & LYS_STATUS_MASK) : LYS_STATUS_CURR;
     flg2 = (flags2 & LYS_STATUS_MASK) ? (flags2 & LYS_STATUS_MASK) : LYS_STATUS_CURR;

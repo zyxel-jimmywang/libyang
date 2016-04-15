@@ -3511,7 +3511,7 @@ static int
 resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
 {
     struct ly_ctx *ctx;
-    struct lys_node *node = NULL;
+    struct lys_node *node = NULL, *next, *iter;
     const struct lys_node *node_aux;
     struct lys_refine *rfn;
     struct lys_restr *must, **old_must;
@@ -3565,8 +3565,70 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
 
         /* config on any nodetype */
         if (rfn->flags & LYS_CONFIG_MASK) {
+            if (node->parent &&
+                    ((node->parent->flags & LYS_CONFIG_MASK) != (rfn->flags & LYS_CONFIG_MASK)) &&
+                    (rfn->flags & LYS_CONFIG_W)) {
+                /* setting config true under config false is prohibited */
+                LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, "config", "refine");
+                LOGVAL(LYE_SPEC, LY_VLOG_LYS, uses,
+                       "changing config from 'false' to 'true' is prohibited while "
+                       "the target's parent is still config 'false'.");
+                return -1;
+            }
+
             node->flags &= ~LYS_CONFIG_MASK;
             node->flags |= (rfn->flags & LYS_CONFIG_MASK);
+
+            /* inherit config change to the target children */
+            LY_TREE_DFS_BEGIN(node->child, next, iter) {
+                if (rfn->flags & LYS_CONFIG_W) {
+                    if (iter->flags & LYS_CONFIG_SET) {
+                        /* config is set explicitely, go to next sibling */
+                        next = NULL;
+                        goto nextsibling;
+                    }
+                } else { /* LYS_CONFIG_R */
+                    if ((iter->flags & LYS_CONFIG_SET) && (iter->flags & LYS_CONFIG_W)) {
+                        /* error - we would have config data under status data */
+                        LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, "config", "refine");
+                        LOGVAL(LYE_SPEC, LY_VLOG_LYS, uses,
+                               "changing config from 'true' to 'false' is prohibited while the target "
+                               "has still a children with explicit config 'true'.");
+                        return -1;
+                    }
+                }
+                /* change config */
+                iter->flags &= ~LYS_CONFIG_MASK;
+                iter->flags |= (rfn->flags & LYS_CONFIG_MASK);
+
+                /* select next iter - modified LY_TREE_DFS_END */
+                if (iter->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYXML)) {
+                    next = NULL;
+                } else {
+                    next = iter->child;
+                }
+nextsibling:
+                if (!next) {
+                    /* no children */
+                    if (iter == node->child) {
+                        /* we are done, (START) has no children */
+                        break;
+                    }
+                    /* try siblings */
+                    next = iter->next;
+                }
+                while (!next) {
+                    /* parent is already processed, go to its sibling */
+                    iter = lys_parent(iter);
+
+                    /* no siblings, go back through parents */
+                    if (iter == node) {
+                        /* we are done, no next element to process */
+                        break;
+                    }
+                    next = iter->next;
+                }
+            }
         }
 
         /* default value ... */
@@ -3604,19 +3666,18 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
         }
 
         /* min/max-elements on list or leaf-list */
-        /* magic - bit 3 in flags means min set, bit 4 says max set */
         if (node->nodetype == LYS_LIST) {
-            if (rfn->flags & 0x04) {
+            if (rfn->flags & LYS_RFN_MINSET) {
                 ((struct lys_node_list *)node)->min = rfn->mod.list.min;
             }
-            if (rfn->flags & 0x08) {
+            if (rfn->flags & LYS_RFN_MAXSET) {
                 ((struct lys_node_list *)node)->max = rfn->mod.list.max;
             }
         } else if (node->nodetype == LYS_LEAFLIST) {
-            if (rfn->flags & 0x04) {
+            if (rfn->flags & LYS_RFN_MINSET) {
                 ((struct lys_node_leaflist *)node)->min = rfn->mod.list.min;
             }
-            if (rfn->flags & 0x08) {
+            if (rfn->flags & LYS_RFN_MAXSET) {
                 ((struct lys_node_leaflist *)node)->max = rfn->mod.list.max;
             }
         }
@@ -3695,7 +3756,6 @@ resolve_base_ident_sub(const struct lys_module *module, struct lys_ident *ident,
 {
     uint32_t i, j;
     struct lys_ident *base = NULL, *base_iter;
-    struct lys_ident_der *der;
 
     assert(ret);
 
@@ -3747,22 +3807,23 @@ matchfound:
 
         /* maintain backlinks to the derived identitise */
         while (base) {
-            for (der = base->der; der && der->next; der = der->next);
-            if (der) {
-                der->next = malloc(sizeof *der);
-                der = der->next;
+            /* 1. get current number of backlinks */
+            if (base->der) {
+                for (i = 0; base->der[i]; i++);
             } else {
-                ident->base->der = der = malloc(sizeof *der);
+                i = 0;
             }
-            if (!der) {
+            base->der = ly_realloc(base->der, (i + 2) * sizeof *(base->der));
+            if (!base->der) {
                 LOGMEM;
                 return EXIT_FAILURE;
             }
-            der->next = NULL;
-            der->ident = ident;
+            base->der[i] = ident;
+            base->der[i + 1] = NULL; /* array termination */
 
             base = base->base;
         }
+
         *ret = ident->base;
         return EXIT_SUCCESS;
     }
@@ -3788,7 +3849,7 @@ resolve_base_ident(const struct lys_module *module, struct lys_ident *ident, con
     const char *name;
     int i, mod_name_len = 0;
     struct lys_ident *target, **ret;
-    uint8_t flags;
+    uint16_t flags;
     struct lys_module *mod;
 
     assert((ident && !type) || (!ident && type));
@@ -3870,7 +3931,8 @@ resolve_identref(struct lys_ident *base, const char *ident_name, struct lyd_node
 {
     const char *mod_name, *name;
     int mod_name_len, rc;
-    struct lys_ident_der *der;
+    int i;
+    struct lys_ident *der;
 
     if (!base || !ident_name) {
         return NULL;
@@ -3890,12 +3952,13 @@ resolve_identref(struct lys_ident *base, const char *ident_name, struct lyd_node
         return base;
     }
 
-    for (der = base->der; der; der = der->next) {
-        if (!strcmp(der->ident->name, name) && (!mod_name
-                || (!strncmp(der->ident->module->name, mod_name, mod_name_len)
-                && !der->ident->module->name[mod_name_len]))) {
-            /* we have match */
-            return der->ident;
+    if (base->der) {
+        for (der = base->der[i = 0]; base->der[i]; der = base->der[++i]) {
+            if (!strcmp(der->name, name) &&
+                    (!mod_name || (!strncmp(der->module->name, mod_name, mod_name_len) && !der->module->name[mod_name_len]))) {
+                /* we have match */
+                return der;
+            }
         }
     }
 
@@ -3964,7 +4027,10 @@ resolve_unres_schema_uses(struct lys_node_uses *uses, struct unres_schema *unres
             return -1;
         } else if (!uses->grp) {
             if (par_grp && !(uses->flags & LYS_USESGRP)) {
-                par_grp->nacm++;
+                /* hack - in contrast to lys_node, lys_node_grp has bigger nacm field
+                 * (and smaller flags - it uses only a limited set of flags)
+                 */
+                ((struct lys_node_grp *)par_grp)->nacm++;
                 uses->flags |= LYS_USESGRP;
             }
             return EXIT_FAILURE;
@@ -3973,7 +4039,7 @@ resolve_unres_schema_uses(struct lys_node_uses *uses, struct unres_schema *unres
 
     if (uses->grp->nacm) {
         if (par_grp && !(uses->flags & LYS_USESGRP)) {
-            par_grp->nacm++;
+            ((struct lys_node_grp *)par_grp)->nacm++;
             uses->flags |= LYS_USESGRP;
         }
         return EXIT_FAILURE;
@@ -3983,11 +4049,11 @@ resolve_unres_schema_uses(struct lys_node_uses *uses, struct unres_schema *unres
     if (!rc) {
         /* decrease unres count only if not first try */
         if (par_grp && (uses->flags & LYS_USESGRP)) {
-            if (!par_grp->nacm) {
+            if (!((struct lys_node_grp *)par_grp)->nacm) {
                 LOGINT;
                 return -1;
             }
-            par_grp->nacm--;
+            ((struct lys_node_grp *)par_grp)->nacm--;
             uses->flags &= ~LYS_USESGRP;
         }
 
@@ -4000,7 +4066,7 @@ resolve_unres_schema_uses(struct lys_node_uses *uses, struct unres_schema *unres
 
         return EXIT_SUCCESS;
     } else if ((rc == EXIT_FAILURE) && par_grp && !(uses->flags & LYS_USESGRP)) {
-        par_grp->nacm++;
+        ((struct lys_node_grp *)par_grp)->nacm++;
         uses->flags |= LYS_USESGRP;
     }
 

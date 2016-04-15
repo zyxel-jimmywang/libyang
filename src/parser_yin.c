@@ -2221,9 +2221,7 @@ fill_yin_refine(struct lys_module *module, struct lyxml_elem *yin, struct lys_re
                 goto error;
             }
             rfn->mod.list.min = (uint32_t) val;
-
-            /* magic - bit 3 in flags means min set */
-            rfn->flags |= 0x04;
+            rfn->flags |= LYS_RFN_MINSET;
         } else if (!strcmp(sub->name, "max-elements")) {
             /* list or leaf-list */
             if (f_max) {
@@ -2262,9 +2260,7 @@ fill_yin_refine(struct lys_module *module, struct lyxml_elem *yin, struct lys_re
                 }
                 rfn->mod.list.max = (uint32_t) val;
             }
-
-            /* magic - bit 4 in flags means min set */
-            rfn->flags |= 0x08;
+            rfn->flags |= LYS_RFN_MAXSET;
         } else if (!strcmp(sub->name, "presence")) {
             /* container */
             if (rfn->mod.presence) {
@@ -2526,6 +2522,7 @@ read_yin_common(struct lys_module *module, struct lys_node *parent,
                 LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, sub->name);
                 goto error;
             }
+            node->flags |= LYS_CONFIG_SET;
         } else {
             /* skip the lyxml_free */
             continue;
@@ -2535,8 +2532,8 @@ read_yin_common(struct lys_module *module, struct lys_node *parent,
 
     if ((opt & OPT_INHERIT) && !(node->flags & LYS_CONFIG_MASK)) {
         /* get config flag from parent */
-        if (parent) {
-            node->flags |= parent->flags & LYS_CONFIG_MASK;
+        if (parent && (parent->flags & LYS_CONFIG_R)) {
+            node->flags |= LYS_CONFIG_R;
         } else {
             /* default config is true */
             node->flags |= LYS_CONFIG_W;
