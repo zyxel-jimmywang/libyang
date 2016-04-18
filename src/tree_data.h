@@ -290,7 +290,7 @@ struct lyd_node_anyxml {
 #define LYD_WD_MASK        0x1F0000  /**< Mask for with-defaults modes */
 #define LYD_WD_EXPLICIT    0x100000  /**< Explicit mode - add missing default status data, but only in case the data
                                           type is supposed to include status data (all except #LYD_OPT_CONFIG,
-                                          #LYD_OPT_GETCONF and #LYD_OPT_EDIT */
+                                          #LYD_OPT_GETCONFIG and #LYD_OPT_EDIT */
 #define LYD_WD_TRIM        0x010000  /**< Remove all nodes with the value equal to their default value */
 #define LYD_WD_ALL         0x020000  /**< Explicitly add all missing nodes with their default value */
 #define LYD_WD_ALL_TAG     0x040000  /**< Same as LYD_WD_ALL but also adds attribute 'default' with value 'true' to
@@ -432,6 +432,11 @@ struct lyd_node *lyd_new_leaf(struct lyd_node *parent, const struct lys_module *
  * Despite the prototype allows to provide a leaflist node as \p leaf parameter, only leafs are accepted.
  * Also, changing the value of a list key is prohibited.
  *
+ * As for the other data tree manipulation functions, the change is not fully validated to allow multiple changes
+ * in the data tree. Therefore, when all changes on the data tree are done, caller is supposed to call lyd_validate()
+ * to check that the result is valid data tree. Specifically, if a leafref leaf is changed, it is not checked that
+ * the (leafref) value is correct.
+ *
  * @param[in] leaf A leaf node to change.
  * @param[in] val_str String form of the new value to be set to the \p leaf. In case the type is #LY_TYPE_INST
  * or #LY_TYPE_IDENT, JSON node-id format is expected (nodes are prefixed with module names, not XML namespaces).
@@ -563,6 +568,29 @@ struct lyd_node *lyd_new_path(struct lyd_node *data_tree, struct ly_ctx *ctx, co
 struct lyd_node *lyd_dup(const struct lyd_node *node, int recursive);
 
 /**
+ * @brief Merge a (sub)tree into a data tree. Missing nodes are merged, leaf values updated.
+ * If \p target and \p source do not share the top-level schema node, even if they
+ * are from different modules, \p source parents up to top-level node will be created and
+ * linked to the \p target (but only containers can be created this way, lists need keys,
+ * so if lists are missing, an error will be returned).
+ *
+ * In short, this function will always try to return a fully valid data tree and will fail
+ * if it is not possible. Also, in some less common cases, despite both trees \p target and
+ * \p source are valid, the resulting tree may be invalid and this function will succeed.
+ * If you know there are such possibilities in your data trees or you are not sure, always
+ * validate the resulting merged \p target tree.
+ *
+ * @param[in] target Top-level (or an RPC output child) data tree to merge to. Must be valid.
+ * @param[in] source Data tree to merge \p target with. Must be valid (at least as a subtree).
+ * @param[in] options Bitmask of 2 option flags:
+ * LYD_OPT_DESTRUCT - spend \p source in the function, otherwise \p source is left untouched,
+ * LYD_OPT_NOSIBLINGS - merge only the \p source subtree (ignore siblings), otherwise merge
+ * \p source and all its succeeding siblings (preceeding ones are still ignored!).
+ * @return 0 on success, nonzero in case of an error.
+ */
+int lyd_merge(struct lyd_node *target, const struct lyd_node *source, int options);
+
+/**
  * @brief Insert the \p node element as child to the \p parent element. The \p node is inserted as a last child of the
  * \p parent.
  *
@@ -643,15 +671,6 @@ struct ly_set *lyd_get_node(const struct lyd_node *data, const char *expr);
 struct ly_set *lyd_get_node2(const struct lyd_node *data, const struct lys_node *schema);
 
 /**
- * @brief Get all key nodes of a \p list instance.
- *
- * @param[in] list List node, whose keys will be searched for.
- * @return Set of list keys (use dset member of ::ly_set). If no keys are found/defined, the returned set is empty.
- * In case of error, NULL is returned.
- */
-struct ly_set *lyd_get_list_keys(const struct lyd_node *list);
-
-/**
  * @brief Validate \p node data subtree.
  *
  * @param[in, out] node Data tree to be validated. In case the \p options does not includes #LYD_OPT_NOAUTODEL, libyang
@@ -682,7 +701,8 @@ int lyd_validate(struct lyd_node **node, int options, ...);
  * @param[in] options Options for the inserting data to the target data tree options, see @ref parseroptions - only the
  *            LYD_WD_* options are used to select functionality:
  * - #LYD_WD_TRIM - remove all nodes that have value equal to their default value
- * - #LYD_WD_ALL - add default nodes
+ * - #LYD_WD_EXPLICIT - add only status default nodes
+ * - #LYD_WD_ALL - add all (status as well as config) default nodes
  * - #LYD_WD_ALL_TAG - add default nodes and add attribute 'default' with value 'true' to all nodes having their default value
  * - #LYD_WD_IMPL_TAG - add default nodes, but add attribute 'default' only to the added nodes
  * @note The LYD_WD_*_TAG modes require to have ietf-netconf-with-defaults module in the context of the data tree.
