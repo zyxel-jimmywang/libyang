@@ -39,26 +39,96 @@
 #include "xpath.h"
 
 int
-lyd_check_topmandatory(struct ly_ctx *ctx, struct lyd_node *data, int options)
+lyd_check_topmandatory(struct lyd_node *data, struct ly_ctx *ctx, struct lys_node *rpc, int options)
 {
-    assert(ctx);
     int i;
+    struct lyd_node *node;
 
-    /* TODO what about LYD_OPT_NOTIF, LYD_OPT_RPC and LYD_OPT_RPCREPLY ? */
+    assert(ctx);
+
     if ((options & LYD_OPT_NOSIBLINGS) || (options & (LYD_OPT_EDIT | LYD_OPT_GET | LYD_OPT_GETCONFIG))) {
         return EXIT_SUCCESS;
     }
 
-    /* LYD_OPT_DATA || LYD_OPT_CONFIG */
+    if (data && lys_parent(data->schema) && (lys_parent(data->schema)->nodetype != LYS_OUTPUT)) {
+        LOGERR(LY_EINVAL, "Subtree are not top-level data.");
+        return EXIT_FAILURE;
+    }
 
-    /* check for missing mandatory elements (from the top level) according to schemas in context */
-    for (i = 0; i < ctx->models.used; i++) {
-        if (!ctx->models.list[i]->data) {
-            continue;
+    if (!(options & LYD_OPT_TYPEMASK) || (options & (LYD_OPT_DATA | LYD_OPT_CONFIG))) {
+        LY_TREE_FOR(data, node) {
+            if (lys_parent(node->schema) || (node->schema->nodetype & (LYS_NOTIF | LYS_RPC))) {
+                LOGERR(LY_EINVAL, "Subtree includes non-data nodes (a notification, an RPC, or an RPC output).");
+                return EXIT_FAILURE;
+            }
         }
-        if (ly_check_mandatory(data, ctx->models.list[i]->data, (options & LYD_OPT_TYPEMASK) ? 0 : 1)) {
+
+        /* check for missing mandatory elements (from the top level) according to schemas in context */
+        for (i = 0; i < ctx->models.used; i++) {
+            if (!ctx->models.list[i]->data) {
+                continue;
+            }
+            if (ly_check_mandatory(data, ctx->models.list[i]->data, (options & LYD_OPT_TYPEMASK) ? 0 : 1)) {
+                return EXIT_FAILURE;
+            }
+        }
+    } else if (options & LYD_OPT_NOTIF) {
+        if (!data || data->parent || (data->prev != data) || (data->schema->nodetype != LYS_NOTIF)) {
+            LOGERR(LY_EINVAL, "Subtree is not a single notification.");
             return EXIT_FAILURE;
         }
+        if (ly_check_mandatory(data, NULL, 1)) {
+            return EXIT_FAILURE;
+        }
+    } else if (options & LYD_OPT_RPC) {
+        if (!data || data->parent || (data->prev != data) || (data->schema->nodetype != LYS_RPC)) {
+            LOGERR(LY_EINVAL, "Subtree is not a single RPC.");
+            return EXIT_FAILURE;
+        }
+        if (ly_check_mandatory(data, NULL, 1)) {
+            return EXIT_FAILURE;
+        }
+    } else if (options & LYD_OPT_RPCREPLY) {
+        LY_TREE_FOR(data, node) {
+            if (node->parent || (lys_parent(node->schema)->nodetype != LYS_OUTPUT)
+                    || (lys_parent(node->schema) != lys_parent(node->prev->schema))) {
+                LOGERR(LY_EINVAL, "Siblings are not one RPC output.");
+                return EXIT_FAILURE;
+            }
+        }
+
+        if (!rpc) {
+            if (!data) {
+                LOGERR(LY_EINVAL, "Cannot validate whether empty RPC output is a valid response to an unknown RPC.");
+                return EXIT_FAILURE;
+            }
+            rpc = data->schema;
+        } else {
+            rpc = rpc->child;
+            if (rpc && (rpc->nodetype != LYS_OUTPUT)) {
+                rpc = rpc->next;
+            }
+            if (rpc && (rpc->nodetype == LYS_OUTPUT)) {
+                rpc = rpc->child;
+            }
+            if (!rpc) {
+                /* there is no output */
+                if (data) {
+                    LOGVAL(LYE_SPEC, LY_VLOG_LYD, data, "Data found for an RPC output without any children.");
+                    return EXIT_FAILURE;
+                }
+
+                /* no output, no data - fine */
+                return EXIT_SUCCESS;
+            }
+        }
+
+        if (ly_check_mandatory(data, rpc, 1)) {
+            return EXIT_FAILURE;
+        }
+    } else {
+        LOGINT;
+        return EXIT_FAILURE;
     }
 
     return EXIT_SUCCESS;
@@ -1132,7 +1202,7 @@ lyd_merge_siblings(struct lyd_node *target, struct lyd_node *source)
 API int
 lyd_merge(struct lyd_node *target, const struct lyd_node *source, int options)
 {
-    struct lyd_node *node, *node2, *trg_merge_start, *src_merge_start = NULL;
+    struct lyd_node *node = NULL, *node2, *trg_merge_start, *src_merge_start = NULL;
     struct lys_node *src_snode;
     int i, src_depth, depth, first_iter, ret;
 
@@ -1802,6 +1872,7 @@ lyd_validate(struct lyd_node **node, int options, ...)
 {
     struct lyd_node *root, *next1, *next2, *iter, *to_free = NULL;
     struct ly_ctx *ctx = NULL;
+    struct lys_node *rpc = NULL;
     int ret = EXIT_FAILURE, ap_flag = 0;
     va_list ap;
     struct unres_data *unres = NULL;
@@ -1823,8 +1894,12 @@ lyd_validate(struct lyd_node **node, int options, ...)
         /* get context with schemas from the variable arguments */
         va_start(ap, options);
         ap_flag = 1;
-        ctx = va_arg(ap,  struct ly_ctx*);
-        if (!ctx) {
+        if (options & LYD_OPT_RPCREPLY) {
+            rpc = va_arg(ap, struct lys_node *);
+        } else {
+            ctx = va_arg(ap, struct ly_ctx *);
+        }
+        if (!rpc && !ctx) {
             LOGERR(LY_EINVAL, "%s: Invalid variable argument.", __func__);
             goto error;
         }
@@ -1839,7 +1914,7 @@ lyd_validate(struct lyd_node **node, int options, ...)
         }
     }
 
-    if (lyd_check_topmandatory(ctx, *node, options)) {
+    if (lyd_check_topmandatory(*node, ctx, rpc, options)) {
         goto error;
     }
 
@@ -2004,6 +2079,11 @@ lyd_unlink(struct lyd_node *node)
             }
         }
         LY_TREE_DFS_END(node, next, iter)
+    }
+
+    /* invalidate parent to make sure it will be checked in future validation */
+    if (node->parent) {
+        node->parent->validity = LYD_VAL_NOT;
     }
 
     /* unlink from siblings */
