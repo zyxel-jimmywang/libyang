@@ -40,8 +40,8 @@ lyp_is_rpc(struct lys_node *node)
 {
     assert(node);
 
-    while(node->parent) {
-        node = node->parent;
+    while (lys_parent(node)) {
+        node = lys_parent(node);
     }
 
     if (node->nodetype == LYS_RPC) {
@@ -65,19 +65,6 @@ lyp_check_options(int options)
 
     /* "is power of 2" algorithm, with 0 exception */
     return x ? !(x && !(x & (x - 1))) : 0;
-}
-
-void
-lyp_set_implemented(struct lys_module *module)
-{
-    int i;
-
-    assert(module);
-    module->implemented = 1;
-
-    for (i = 0; i < module->inc_size && module->inc[i].submodule; i++) {
-        lyp_set_implemented((struct lys_module *)module->inc[i].submodule);
-    }
 }
 
 /**
@@ -1187,7 +1174,7 @@ lyp_check_identifier(const char *id, enum LY_IDENT type, struct lys_module *modu
         }
 
         /* check locally scoped typedefs (avoid name shadowing) */
-        for (; parent; parent = parent->parent) {
+        for (; parent; parent = lys_parent(parent)) {
             switch (parent->nodetype) {
             case LYS_CONTAINER:
                 size = ((struct lys_node_container *)parent)->tpdf_size;
@@ -1609,15 +1596,16 @@ error:
 }
 
 int
-lyp_add_module(struct lys_module **module, int implement)
+lyp_ctx_add_module(struct lys_module **module)
 {
     struct ly_ctx *ctx;
     struct lys_module **newlist = NULL;
     struct lys_module *mod;
-    int i;
+    int i, match_i = -1, to_implement;
 
     assert(module);
     mod = (*module);
+    to_implement = 0;
     ctx = mod->ctx;
 
     /* add to the context's list of modules */
@@ -1625,7 +1613,7 @@ lyp_add_module(struct lys_module **module, int implement)
         newlist = realloc(ctx->models.list, (2 * ctx->models.size) * sizeof *newlist);
         if (!newlist) {
             LOGMEM;
-            goto error;
+            return EXIT_FAILURE;
         }
         for (i = ctx->models.size; i < ctx->models.size * 2; i++) {
             newlist[i] = NULL;
@@ -1633,160 +1621,64 @@ lyp_add_module(struct lys_module **module, int implement)
         ctx->models.size *= 2;
         ctx->models.list = newlist;
     }
+
     for (i = 0; ctx->models.list[i]; i++) {
         /* check name (name/revision) and namespace uniqueness */
         if (!strcmp(ctx->models.list[i]->name, mod->name)) {
-            if (ctx->models.list[i]->rev_size == mod->rev_size) {
-                /* both have the same number of revisions */
-                if (!mod->rev_size || !strcmp(ctx->models.list[i]->rev[0].date, mod->rev[0].date)) {
-                    /* both have the same revision -> we already have the same module */
-                    /* so free the new one and update the old one's implement flag if needed */
-                    LOGVRB("Module \"%s\" already in context.", ctx->models.list[i]->name);
-
-                    lys_free(mod, NULL, 1);
-                    (*module) = ctx->models.list[i];
-                    if (implement && !(*module)->implemented) {
-                        lyp_set_implemented(*module);
-                    }
-
-                    return EXIT_SUCCESS;
+            if (to_implement) {
+                if (i == match_i) {
+                    continue;
                 }
+                LOGERR(LY_EINVAL, "Module \"%s\" in another revision already implemented.", ctx->models.list[i]->name);
+                return EXIT_FAILURE;
+            } else if (!ctx->models.list[i]->rev_size && mod->rev_size) {
+                LOGERR(LY_EINVAL, "Module \"%s\" without revision already in context.", ctx->models.list[i]->name);
+                return EXIT_FAILURE;
+            } else if (ctx->models.list[i]->rev_size && !mod->rev_size) {
+                LOGERR(LY_EINVAL, "Module \"%s\" with revision already in context.", ctx->models.list[i]->name);
+                return EXIT_FAILURE;
+            } else if ((!mod->rev_size && !ctx->models.list[i]->rev_size)
+                    || !strcmp(ctx->models.list[i]->rev[0].date, mod->rev[0].date)) {
+
+                LOGVRB("Module \"%s\" already in context.", ctx->models.list[i]->name);
+                to_implement = mod->implemented;
+                match_i = i;
+                if (to_implement && !ctx->models.list[i]->implemented) {
+                    /* check first that it is okay to change it to implemented */
+                    i = -1;
+                    continue;
+                }
+                goto already_in_context;
+
+            } else if (mod->implemented && ctx->models.list[i]->implemented) {
+                LOGERR(LY_EINVAL, "Module \"%s\" in another revision already implemented.", ctx->models.list[i]->name);
+                return EXIT_FAILURE;
             }
-            /* else (both elses) keep searching, for now the caller is just adding
+            /* else keep searching, for now the caller is just adding
              * another revision of an already present schema
              */
         } else if (!strcmp(ctx->models.list[i]->ns, mod->ns)) {
             LOGERR(LY_EINVAL, "Two different modules (\"%s\" and \"%s\") have the same namespace \"%s\".",
                    ctx->models.list[i]->name, mod->name, mod->ns);
-            goto error;
+            return EXIT_FAILURE;
         }
+    }
+
+    if (to_implement) {
+        i = match_i;
+        ctx->models.list[i]->implemented = 1;
+        goto already_in_context;
     }
     ctx->models.list[i] = mod;
     ctx->models.used++;
     ctx->models.module_set_id++;
     return EXIT_SUCCESS;
 
-error:
-    return EXIT_FAILURE;
-}
-
-void
-lyp_fail_module(struct lys_module *module)
-{
-    int i, j, flag;
-    struct lys_node *next, *elem;
-    struct lys_module *orig_mod;
-
-    /* remove applied deviations */
-    for (i = 0; i < module->deviation_size; ++i) {
-        if (module->deviation[i].orig_node) {
-            j = resolve_augment_schema_nodeid(module->deviation[i].target_name, NULL, module, (const struct lys_node **)&elem);
-            if (j) {
-                LOGINT;
-                continue;
-            }
-            lys_node_switch(elem, module->deviation[i].orig_node);
-            module->deviation[i].orig_node = elem;
-        }
-
-        /* remove our deviation import, clear deviated flag is possible */
-        orig_mod = lys_node_module(module->deviation[i].orig_node);
-        flag = 0;
-        for (j = 0; j < orig_mod->imp_size; ++j) {
-            if (orig_mod->imp[j].external == 2) {
-                if (orig_mod->imp[j].module == module) {
-                    /* our deviation import, remove it */
-                    --orig_mod->imp_size;
-                    if (j < orig_mod->imp_size) {
-                        memcpy(&orig_mod->imp[j], &orig_mod->imp[j + 1], (orig_mod->imp_size - j) * sizeof *orig_mod->imp);
-                    }
-                    --j;
-                } else {
-                    /* some other deviation, we cannot clear the deviated flag */
-                    flag = 1;
-                }
-            }
-        }
-        if (!flag) {
-            /* it's safe to clear the deviated flag */
-            orig_mod->deviated = 0;
-        }
-    }
-
-    /* remove applied augments */
-    for (i = 0; i < module->augment_size; ++i) {
-        if (module->augment[i].target) {
-            LY_TREE_FOR_SAFE(module->augment[i].target->child, next, elem) {
-                if (elem->parent == (struct lys_node *)&module->augment[i]) {
-                    lys_node_free(elem, NULL, 0);
-                }
-            }
-        }
-    }
-}
-
-void
-lyp_fail_submodule(struct lys_submodule *submodule)
-{
-    struct lys_node *next, *elem;
-    struct lys_module *orig_mod, *module;
-    uint8_t i, j, flag;
-
-    module = submodule->belongsto;
-
-    /* remove parsed data */
-    LY_TREE_FOR_SAFE(module->data, next, elem) {
-        if (elem->module == (struct lys_module *)submodule) {
-            lys_node_free(elem, NULL, 0);
-        }
-    }
-
-    /* remove applied deviations */
-    for (i = 0; i < submodule->deviation_size; ++i) {
-        if (submodule->deviation[i].orig_node) {
-            j = resolve_augment_schema_nodeid(submodule->deviation[i].target_name, NULL, module, (const struct lys_node **)&elem);
-            if (j) {
-                LOGINT;
-                continue;
-            }
-            lys_node_switch(elem, submodule->deviation[i].orig_node);
-            submodule->deviation[i].orig_node = elem;
-        }
-
-        /* remove our deviation import, clear deviated flag is possible */
-        orig_mod = lys_node_module(submodule->deviation[i].orig_node);
-        flag = 0;
-        for (j = 0; j < orig_mod->imp_size; ++j) {
-            if (orig_mod->imp[j].external == 2) {
-                if (orig_mod->imp[j].module == submodule->belongsto) {
-                    /* our deviation import, remove it */
-                    --orig_mod->imp_size;
-                    if (j < orig_mod->imp_size) {
-                        memcpy(&orig_mod->imp[j], &orig_mod->imp[j + 1], (orig_mod->imp_size - j) * sizeof *orig_mod->imp);
-                    }
-                    --j;
-                } else {
-                    /* some other deviation, we cannot clear the deviated flag */
-                    flag = 1;
-                }
-            }
-        }
-        if (!flag) {
-            /* it's safe to clear the deviated flag */
-            orig_mod->deviated = 0;
-        }
-    }
-
-    /* remove applied augments */
-    for (i = 0; i < submodule->augment_size; ++i) {
-        if (submodule->augment[i].target) {
-            LY_TREE_FOR_SAFE(submodule->augment[i].target->child, next, elem) {
-                if (elem->parent == (struct lys_node *)&submodule->augment[i]) {
-                    lys_node_free(elem, NULL, 0);
-                }
-            }
-        }
-    }
+already_in_context:
+    lys_sub_module_remove_devs_augs(mod);
+    lys_free(mod, NULL, 1);
+    (*module) = ctx->models.list[i];
+    return EXIT_SUCCESS;
 }
 
 /**

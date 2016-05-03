@@ -19,7 +19,7 @@
 #include "parser.h"
 #include "xpath.h"
 
-static int 
+static int
 yang_check_string(struct lys_module *module, const char **target, char *what, char *where, char *value)
 {
     if (*target) {
@@ -32,7 +32,7 @@ yang_check_string(struct lys_module *module, const char **target, char *what, ch
     }
 }
 
-int 
+int
 yang_read_common(struct lys_module *module, char *value, enum yytokentype type)
 {
     int ret = 0;
@@ -60,7 +60,7 @@ yang_read_common(struct lys_module *module, char *value, enum yytokentype type)
     return ret;
 }
 
-int 
+int
 yang_read_prefix(struct lys_module *module, void *save, char *value, enum yytokentype type)
 {
     int ret = 0;
@@ -1319,7 +1319,7 @@ yang_read_deviation(struct lys_module *module, char *value)
     struct lys_node *dev_target = NULL;
     struct lys_deviation *dev;
     struct type_deviation *deviation = NULL;
-    int i, j, rc;
+    int rc;
 
     dev = &module->deviation[module->deviation_size];
     dev->target_name = transform_schema2json(module, value);
@@ -1345,66 +1345,12 @@ yang_read_deviation(struct lys_module *module, char *value)
         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Deviating own module is not allowed.");
         goto error;
     }
+
+    lys_deviation_add_ext_imports(lys_node_module(dev_target), module);
+
     /*save pointer to the deviation and deviated target*/
     deviation->deviation = dev;
     deviation->target = dev_target;
-
-    /* mark the target module as deviated */
-    dev_target->module->deviated = 1;
-
-    /* copy our imports to the deviated module (deviations may need them to work) */
-    for (i = 0; i < module->imp_size; ++i) {
-        for (j = 0; j < dev_target->module->imp_size; ++j) {
-            if (module->imp[i].module == dev_target->module->imp[j].module) {
-                break;
-            }
-        }
-
-        if (j < dev_target->module->imp_size) {
-            /* import is already there */
-            continue;
-        }
-
-        /* copy the import, mark it as external */
-        ++dev_target->module->imp_size;
-        dev_target->module->imp = ly_realloc(dev_target->module->imp, dev_target->module->imp_size * sizeof *dev_target->module->imp);
-        if (!dev_target->module->imp) {
-            LOGMEM;
-            goto error;
-        }
-        dev_target->module->imp[dev_target->module->imp_size - 1].module = module->imp[i].module;
-        dev_target->module->imp[dev_target->module->imp_size - 1].prefix = lydict_insert(module->ctx, module->imp[i].prefix, 0);
-        memcpy(dev_target->module->imp[dev_target->module->imp_size - 1].rev, module->imp[i].rev, LY_REV_SIZE);
-        dev_target->module->imp[dev_target->module->imp_size - 1].external = 1;
-    }
-
-    /* copy ourselves to the deviated module as a special import (if we haven't yet, there could be more deviations of the same module) */
-    for (i = 0; i < dev_target->module->imp_size; ++i) {
-        if (dev_target->module->imp[i].module == module) {
-            break;
-        }
-    }
-
-    if (i == dev_target->module->imp_size) {
-        ++dev_target->module->imp_size;
-        dev_target->module->imp = ly_realloc(dev_target->module->imp, dev_target->module->imp_size * sizeof *dev_target->module->imp);
-        if (!dev_target->module->imp) {
-            LOGMEM;
-            goto error;
-        }
-        dev_target->module->imp[dev_target->module->imp_size - 1].module = module;
-        dev_target->module->imp[dev_target->module->imp_size - 1].prefix = lydict_insert(module->ctx, module->prefix, 0);
-        if (module->rev_size) {
-            memcpy(dev_target->module->imp[dev_target->module->imp_size - 1].rev, module->rev[0].date, LY_REV_SIZE);
-        } else {
-            memset(dev_target->module->imp[dev_target->module->imp_size - 1].rev, 0, LY_REV_SIZE);
-        }
-        dev_target->module->imp[dev_target->module->imp_size - 1].external = 2;
-    } else {
-        /* it could have been added by another deviating module that imported this deviating module */
-        dev_target->module->imp[i].external = 2;
-    }
-
 
     return deviation;
 
@@ -1435,7 +1381,7 @@ yang_read_deviate_unsupported(struct type_deviation *dev)
             }
         }
     }
- 
+
     /* unlink and store the original node */
     dev->deviation->orig_node = dev->target;
 
@@ -2201,6 +2147,7 @@ yang_read_module(struct ly_ctx *ctx, const char* data, unsigned int size, const 
 
     struct lys_module *tmp_module, *module = NULL;
     struct unres_schema *unres = NULL;
+    int i;
 
     unres = calloc(1, sizeof *unres);
     if (!unres) {
@@ -2215,7 +2162,7 @@ yang_read_module(struct ly_ctx *ctx, const char* data, unsigned int size, const 
     }
 
     /* initiale module */
-    module->ctx=ctx;
+    module->ctx = ctx;
     module->type = 0;
     module->implemented = (implement ? 1 : 0);
 
@@ -2237,7 +2184,7 @@ yang_read_module(struct ly_ctx *ctx, const char* data, unsigned int size, const 
     }
 
     tmp_module = module;
-    if (lyp_add_module(&module, implement)) {
+    if (lyp_ctx_add_module(&module)) {
         goto error;
     }
 
@@ -2245,11 +2192,28 @@ yang_read_module(struct ly_ctx *ctx, const char* data, unsigned int size, const 
         nacm_inherit(module);
     }
 
+    if (module->augment_size || module->deviation_size) {
+        LOGVRB("Module \"%s\" includes augments or deviations, changing conformance to \"implement\".", module->name);
+        if (lys_module_set_implement(module)) {
+            goto error;
+        }
+
+        if (lys_sub_module_set_dev_aug_target_implement(module)) {
+            goto error;
+        }
+        for (i = 0; i < module->inc_size; ++i) {
+            if (lys_sub_module_set_dev_aug_target_implement((struct lys_module *)module->inc[i].submodule)) {
+                goto error;
+            }
+        }
+    }
+
     unres_schema_free(NULL, &unres);
     LOGVRB("Module \"%s\" successfully parsed.", module->name);
     return module;
 
 error:
+    /* cleanup */
     unres_schema_free(module, &unres);
     if (!module || !module->name) {
         free(module);
@@ -2258,8 +2222,9 @@ error:
     }
 
     LOGERR(ly_errno, "Module \"%s\" parsing failed.", module->name);
-    lyp_fail_module(module);
-    lys_free(module,NULL,1);
+
+    lys_sub_module_remove_devs_augs(module);
+    lys_free(module, NULL, 1);
     return NULL;
 }
 
@@ -2282,10 +2247,7 @@ yang_read_submodule(struct lys_module *module, const char *data, unsigned int si
         goto error;
     }
 
-    /* cleanup */
-
     LOGVRB("Submodule \"%s\" successfully parsed.", submodule->name);
-
     return submodule;
 
 error:
@@ -2300,9 +2262,9 @@ error:
 
     LOGERR(ly_errno, "Submodule \"%s\" parsing failed.", submodule->name);
 
-    lyp_fail_submodule(submodule);
+    lys_sub_module_remove_devs_augs((struct lys_module *)submodule);
+    lys_submodule_module_data_free(submodule);
     lys_submodule_free(submodule, NULL);
-
     return NULL;
 }
 

@@ -38,6 +38,14 @@ const char *lys_module_a = \
         xmlns:a=\"urn:a\">                            \
   <namespace uri=\"urn:a\"/>                          \
   <prefix value=\"a_mod\"/>                           \
+  <revision date=\"2015-01-01\">                      \
+    <description>                                     \
+      <text>version 1</text>                          \
+    </description>                                    \
+    <reference>                                       \
+      <text>RFC XXXX</text>                           \
+    </reference>                                      \
+  </revision>                                         \
   <include module=\"asub\"/>                          \
   <include module=\"atop\"/>                          \
   <feature name=\"foo\"/>                             \
@@ -179,6 +187,13 @@ module a {\n\
   include \"asub\";\n\
   include \"atop\";\n\
 \n\
+  revision \"2015-01-01\" {\n\
+    description\n\
+      \"version 1\";\n\
+    reference\n\
+      \"RFC XXXX\";\n\
+  }\n\
+\n\
   feature foo;\n\
 \n\
   grouping gg {\n\
@@ -227,6 +242,14 @@ char *result_yin = "\
   <prefix value=\"a_mod\"/>\n\
   <include module=\"asub\"/>\n\
   <include module=\"atop\"/>\n\
+  <revision date=\"2015-01-01\">\n\
+    <description>\n\
+      <text>version 1</text>\n\
+    </description>\n\
+    <reference>\n\
+      <text>RFC XXXX</text>\n\
+    </reference>\n\
+  </revision>\n\
   <feature name=\"foo\"/>\n\
   <grouping name=\"gg\">\n\
     <leaf name=\"bar-gggg\">\n\
@@ -343,14 +366,10 @@ static int
 setup_f(void **state)
 {
     (void) state; /* unused */
-    char *config_file = TESTS_DIR"/api/files/a.xml";
-    char *yang_file = TESTS_DIR"/api/files/a.yin";
     char *yang_folder = TESTS_DIR"/api/files";
-    int rc;
 
-    rc = generic_init(config_file, yang_file, yang_folder);
-
-    if (rc) {
+    ctx = ly_ctx_new(yang_folder);
+    if (!ctx) {
         return -1;
     }
 
@@ -446,7 +465,7 @@ test_lys_parse_fd(void **state)
     assert_string_equal("b", module->name);
 
     module = lys_parse_mem(ctx, lys_module_a, LYS_IN_YIN);
-    if (!module) {
+    if (module) {
         fail();
     }
 
@@ -889,7 +908,6 @@ error:
     }
     fail();
 }
-
 
 static void
 test_lys_print_fd_yang(void **state)

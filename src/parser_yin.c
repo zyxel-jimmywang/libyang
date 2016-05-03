@@ -1271,61 +1271,7 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Deviating own module is not allowed.");
         goto error;
     }
-    /* mark the target module as deviated */
-    dev_target->module->deviated = 1;
-
-    /* copy our imports to the deviated module (deviations may need them to work) */
-    for (i = 0; i < module->imp_size; ++i) {
-        for (j = 0; j < dev_target->module->imp_size; ++j) {
-            if (module->imp[i].module == dev_target->module->imp[j].module) {
-                break;
-            }
-        }
-
-        if (j < dev_target->module->imp_size) {
-            /* import is already there */
-            continue;
-        }
-
-        /* copy the import, mark it as external */
-        ++dev_target->module->imp_size;
-        dev_target->module->imp = ly_realloc(dev_target->module->imp, dev_target->module->imp_size * sizeof *dev_target->module->imp);
-        if (!dev_target->module->imp) {
-            LOGMEM;
-            goto error;
-        }
-        dev_target->module->imp[dev_target->module->imp_size - 1].module = module->imp[i].module;
-        dev_target->module->imp[dev_target->module->imp_size - 1].prefix = lydict_insert(module->ctx, module->imp[i].prefix, 0);
-        memcpy(dev_target->module->imp[dev_target->module->imp_size - 1].rev, module->imp[i].rev, LY_REV_SIZE);
-        dev_target->module->imp[dev_target->module->imp_size - 1].external = 1;
-    }
-
-    /* copy ourselves to the deviated module as a special import (if we haven't yet, there could be more deviations of the same module) */
-    for (i = 0; i < dev_target->module->imp_size; ++i) {
-        if (dev_target->module->imp[i].module == module) {
-            break;
-        }
-    }
-
-    if (i == dev_target->module->imp_size) {
-        ++dev_target->module->imp_size;
-        dev_target->module->imp = ly_realloc(dev_target->module->imp, dev_target->module->imp_size * sizeof *dev_target->module->imp);
-        if (!dev_target->module->imp) {
-            LOGMEM;
-            goto error;
-        }
-        dev_target->module->imp[dev_target->module->imp_size - 1].module = module;
-        dev_target->module->imp[dev_target->module->imp_size - 1].prefix = lydict_insert(module->ctx, module->prefix, 0);
-        if (module->rev_size) {
-            memcpy(dev_target->module->imp[dev_target->module->imp_size - 1].rev, module->rev[0].date, LY_REV_SIZE);
-        } else {
-            memset(dev_target->module->imp[dev_target->module->imp_size - 1].rev, 0, LY_REV_SIZE);
-        }
-        dev_target->module->imp[dev_target->module->imp_size - 1].external = 2;
-    } else {
-        /* it could have been added by another deviating module that imported this deviating module */
-        dev_target->module->imp[i].external = 2;
-    }
+    lys_deviation_add_ext_imports(lys_node_module(dev_target), module);
 
     LY_TREE_FOR_SAFE(yin->child, next, child) {
         if (!child->ns || strcmp(child->ns->value, LY_NSYIN)) {
@@ -1403,9 +1349,9 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
             }
 
             /* you cannot remove a key leaf */
-            if ((dev_target->nodetype == LYS_LEAF) && dev_target->parent && (dev_target->parent->nodetype == LYS_LIST)) {
-                for (i = 0; i < ((struct lys_node_list *)dev_target->parent)->keys_size; ++i) {
-                    if (((struct lys_node_list *)dev_target->parent)->keys[i] == (struct lys_node_leaf *)dev_target) {
+            if ((dev_target->nodetype == LYS_LEAF) && lys_parent(dev_target) && (lys_parent(dev_target)->nodetype == LYS_LIST)) {
+                for (i = 0; i < ((struct lys_node_list *)lys_parent(dev_target))->keys_size; ++i) {
+                    if (((struct lys_node_list *)lys_parent(dev_target))->keys[i] == (struct lys_node_leaf *)dev_target) {
                         LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, develem->name);
                         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "\"not-supported\" deviation cannot remove a list key.");
                         goto error;
@@ -4563,7 +4509,7 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
     int c_imp = 0, c_rev = 0, c_tpdf = 0, c_ident = 0, c_inc = 0, c_aug = 0, c_ftrs = 0, c_dev = 0;
 
     /* to simplify code, store the module/submodule being processed as trg */
-    trg = submodule ? (struct lys_module*)submodule : module;
+    trg = submodule ? (struct lys_module *)submodule : module;
 
     /* init */
     memset(&root, 0, sizeof root);
@@ -5097,7 +5043,6 @@ yin_read_submodule(struct lys_module *module, const char *data, struct unres_sch
     lyxml_free(module->ctx, yin);
 
     LOGVRB("Submodule \"%s\" successfully parsed.", submodule->name);
-
     return submodule;
 
 error:
@@ -5112,9 +5057,9 @@ error:
 
     LOGERR(ly_errno, "Submodule \"%s\" parsing failed.", submodule->name);
 
-    lyp_fail_submodule(submodule);
+    lys_sub_module_remove_devs_augs((struct lys_module *)submodule);
+    lys_submodule_module_data_free(submodule);
     lys_submodule_free(submodule, NULL);
-
     return NULL;
 }
 
@@ -5126,6 +5071,7 @@ yin_read_module(struct ly_ctx *ctx, const char *data, const char *revision, int 
     struct lys_module *module = NULL;
     struct unres_schema *unres;
     const char *value;
+    int i;
 
     unres = calloc(1, sizeof *unres);
     if (!unres) {
@@ -5179,16 +5125,29 @@ yin_read_module(struct ly_ctx *ctx, const char *data, const char *revision, int 
         }
     }
 
-    if (lyp_add_module(&module, implement)) {
+    if (lyp_ctx_add_module(&module)) {
         goto error;
     }
 
-    /* cleanup */
+    if (module->augment_size || module->deviation_size) {
+        LOGVRB("Module \"%s\" includes augments or deviations, changing conformance to \"implement\".", module->name);
+        if (lys_module_set_implement(module)) {
+            goto error;
+        }
+
+        if (lys_sub_module_set_dev_aug_target_implement(module)) {
+            goto error;
+        }
+        for (i = 0; i < module->inc_size; ++i) {
+            if (lys_sub_module_set_dev_aug_target_implement((struct lys_module *)module->inc[i].submodule)) {
+                goto error;
+            }
+        }
+    }
+
     lyxml_free(ctx, yin);
     unres_schema_free(NULL, &unres);
-
     LOGVRB("Module \"%s\" successfully parsed.", module->name);
-
     return module;
 
 error:
@@ -5203,8 +5162,7 @@ error:
 
     LOGERR(ly_errno, "Module \"%s\" parsing failed.", module->name);
 
-    lyp_fail_module(module);
+    lys_sub_module_remove_devs_augs(module);
     lys_free(module, NULL, 1);
-
     return NULL;
 }

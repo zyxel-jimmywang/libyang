@@ -314,7 +314,7 @@ const struct lys_module *lys_get_import_module(const struct lys_module *module, 
  *                 Does not return groupings, uses, and augments (but can return augment nodes).
  * @param[out] ret Pointer to the node of the desired type. Can be NULL.
  *
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on forward reference, -1 on error.
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on forward reference.
  */
 int lys_get_sibling(const struct lys_node *siblings, const char *mod_name, int mod_name_len, const char *name,
                     int nam_len, LYS_NODE type, const struct lys_node **ret);
@@ -394,5 +394,17 @@ int lyd_check_topmandatory(struct lyd_node *data, struct ly_ctx *ctx, struct lys
  * @return 0 on success, nonzero on failure.
  */
 int lyd_validate_defaults_unres(struct lyd_node **node, int options, struct ly_ctx *ctx, struct unres_data *unres);
+
+void lys_deviation_add_ext_imports(struct lys_module *dev_target_module, struct lys_module *dev_module);
+
+void lys_switch_deviations(struct lys_module *module);
+
+void lys_sub_module_remove_devs_augs(struct lys_module *module);
+
+int lys_module_set_implement(struct lys_module *module);
+
+int lys_sub_module_set_dev_aug_target_implement(struct lys_module *module);
+
+void lys_submodule_module_data_free(struct lys_submodule *submodule);
 
 #endif /* LY_TREE_INTERNAL_H_ */
