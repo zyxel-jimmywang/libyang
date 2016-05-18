@@ -555,9 +555,7 @@ parse_instance_identifier(const char *id, const char **model, int *mod_len, cons
     ++id;
 
     if ((ret = parse_node_identifier(id, model, mod_len, name, nam_len)) < 1) {
-        return -parsed+ret;
-    } else if (model && !*model) {
-        return -parsed;
+        return -parsed + ret;
     }
 
     parsed += ret;
@@ -828,7 +826,7 @@ parse_schema_nodeid(const char *id, const char **mod_name, int *mod_name_len, co
  * @brief Parse schema predicate (special format internally used).
  *
  * predicate           = "[" *WSP predicate-expr *WSP "]"
- * predicate-expr      = identifier / key-with-value
+ * predicate-expr      = "." / identifier / key-with-value
  * key-with-value      = identifier *WSP "=" *WSP
  *                       ((DQUOTE string DQUOTE) /
  *                        (SQUOTE string SQUOTE))
@@ -841,7 +839,7 @@ parse_schema_nodeid(const char *id, const char **mod_name, int *mod_name_len, co
  * @param[out] has_predicate Flag to mark whether there is another predicate specified.
  */
 int
-parse_schema_list_predicate(const char *id, const char **name, int *nam_len, const char **value, int *val_len,
+parse_schema_json_predicate(const char *id, const char **name, int *nam_len, const char **value, int *val_len,
                             int *has_predicate)
 {
     const char *ptr;
@@ -878,7 +876,9 @@ parse_schema_list_predicate(const char *id, const char **name, int *nam_len, con
     }
 
     /* identifier */
-    if ((ret = parse_identifier(id)) < 1) {
+    if (id[0] == '.') {
+        ret = 1;
+    } else if ((ret = parse_identifier(id)) < 1) {
         return -parsed + ret;
     }
     if (name) {
@@ -1000,11 +1000,11 @@ resolve_data_descendant_schema_nodeid(const char *nodeid, struct lyd_node *start
 
             if (schema->nodetype & (LYS_CHOICE | LYS_CASE)) {
                 continue;
-            } else if (schema->parent->nodetype == LYS_CHOICE) {
+            } else if (lys_parent(schema)->nodetype == LYS_CHOICE) {
                 /* shorthand case */
                 if (!shorthand) {
                     shorthand = 1;
-                    schema = schema->parent;
+                    schema = lys_parent(schema);
                     continue;
                 } else {
                     shorthand = 0;
@@ -1066,7 +1066,7 @@ schema_nodeid_siblingcheck(const struct lys_node *sibling, int8_t *shorthand, co
     }
 
     /* check for shorthand cases - then 'start' does not change */
-    if (sibling->parent && sibling->parent->nodetype == LYS_CHOICE && sibling->nodetype != LYS_CASE) {
+    if (lys_parent(sibling) && (lys_parent(sibling)->nodetype == LYS_CHOICE) && (sibling->nodetype != LYS_CASE)) {
         if (*shorthand != -1) {
             *shorthand = *shorthand ? 0 : 1;
         }
@@ -1357,7 +1357,8 @@ resolve_json_schema_list_predicate(const char *predicate, const struct lys_node_
     const char *name;
     int nam_len, has_predicate, i;
 
-    if ((i = parse_schema_list_predicate(predicate, &name, &nam_len, NULL, NULL, &has_predicate)) < 1) {
+    if (((i = parse_schema_json_predicate(predicate, &name, &nam_len, NULL, NULL, &has_predicate)) < 1)
+            || !strncmp(name, ".", nam_len)) {
         LOGVAL(LYE_PATH_INCHAR, LY_VLOG_NONE, NULL, predicate[-i], &predicate[-i]);
         return -1;
     }
@@ -1471,9 +1472,9 @@ resolve_json_schema_nodeid(const char *nodeid, struct ly_ctx *ctx, const struct 
             if (sibling->name && !strncmp(name, sibling->name, nam_len) && !sibling->name[nam_len]) {
 
                 /* data RPC input/output check */
-                if ((data_nodeid == 1) && sibling->parent && (sibling->parent->nodetype == LYS_OUTPUT)) {
+                if ((data_nodeid == 1) && lys_parent(sibling) && (lys_parent(sibling)->nodetype == LYS_OUTPUT)) {
                     continue;
-                } else if ((data_nodeid == 2) && sibling->parent && (sibling->parent->nodetype == LYS_INPUT)) {
+                } else if ((data_nodeid == 2) && lys_parent(sibling) && (lys_parent(sibling)->nodetype == LYS_INPUT)) {
                     continue;
                 }
 
@@ -1518,17 +1519,24 @@ resolve_json_schema_nodeid(const char *nodeid, struct ly_ctx *ctx, const struct 
                 /* do we have some predicates on it? */
                 if (has_predicate) {
                     r = 0;
-                    if (sibling->nodetype != LYS_LIST) {
+                    if (sibling->nodetype & (LYS_LEAF | LYS_LEAFLIST)) {
+                        if ((r = parse_schema_json_predicate(id, NULL, NULL, NULL, NULL, &has_predicate)) < 1) {
+                            LOGVAL(LYE_PATH_INCHAR, LY_VLOG_NONE, NULL, id[-r], &id[-r]);
+                            return NULL;
+                        }
+                    } else if (sibling->nodetype == LYS_LIST) {
+                        if (resolve_json_schema_list_predicate(id, (const struct lys_node_list *)sibling, &r)) {
+                            return NULL;
+                        }
+                    } else {
                         LOGVAL(LYE_PATH_INCHAR, LY_VLOG_NONE, NULL, id[0], id);
-                        return NULL;
-                    } else if (resolve_json_schema_list_predicate(id, (const struct lys_node_list *)sibling, &r)) {
                         return NULL;
                     }
                     id += r;
                 }
 
                 /* check for shorthand cases - then 'start' does not change */
-                if (sibling->parent && sibling->parent->nodetype == LYS_CHOICE && sibling->nodetype != LYS_CASE) {
+                if (!data_nodeid && lys_parent(sibling) && (lys_parent(sibling)->nodetype == LYS_CHOICE) && (sibling->nodetype != LYS_CASE)) {
                     shorthand = ~shorthand;
                 }
 
@@ -1536,13 +1544,16 @@ resolve_json_schema_nodeid(const char *nodeid, struct ly_ctx *ctx, const struct 
                 if (!id[0]) {
                     if (shorthand) {
                         /* wrong path for shorthand */
-                        sibling = NULL;
-                        break;
+                        str = strndup(nodeid, (name + nam_len) - nodeid);
+                        LOGVAL(LYE_PATH_INNODE, LY_VLOG_STR, str);
+                        free(str);
+                        LOGVAL(LYE_SPEC, LY_VLOG_STR, str, "Schema shorthand case path must include the virtual case statement.");
+                        return NULL;
                     }
                     return sibling;
                 }
 
-                if (!shorthand) {
+                if (data_nodeid || !shorthand) {
                     /* move down the tree, if possible */
                     if (sibling->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYXML)) {
                         LOGVAL(LYE_PATH_INCHAR, LY_VLOG_NONE, NULL, id[0], id);
@@ -1601,7 +1612,8 @@ resolve_partial_json_data_list_predicate(const char *predicate, const char *node
             return -1;
         }
 
-        if ((r = parse_schema_list_predicate(predicate, &name, &nam_len, &value, &val_len, &has_predicate)) < 1) {
+        if (((r = parse_schema_json_predicate(predicate, &name, &nam_len, &value, &val_len, &has_predicate)) < 1)
+                || !strncmp(name, ".", nam_len)) {
             LOGVAL(LYE_PATH_INCHAR, LY_VLOG_NONE, NULL, predicate[-r], &predicate[-r]);
             return -1;
         }
@@ -2242,7 +2254,7 @@ resolve_superior_type(const char *name, const char *mod_name, const struct lys_m
                 break;
 
             default:
-                parent = parent->parent;
+                parent = lys_parent(parent);
                 continue;
             }
 
@@ -2255,7 +2267,7 @@ resolve_superior_type(const char *name, const char *mod_name, const struct lys_m
                 }
             }
 
-            parent = parent->parent;
+            parent = lys_parent(parent);
         }
     } else {
         /* get module where to search */
@@ -2993,7 +3005,7 @@ resolve_path_predicate_schema(const char *path, const struct lys_node *context_n
                 LOGVAL(LYE_NORESOLV, parent ? LY_VLOG_LYS : LY_VLOG_NONE, parent, path_key_expr);
                 return 0;
             }
-            dst_node = dst_node->parent;
+            dst_node = lys_parent(dst_node);
         }
         while (1) {
             if (!dest_pref) {
@@ -3101,7 +3113,7 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
                     if (i == parent_times) {
                         break;
                     }
-                    node = node->parent;
+                    node = lys_parent(node);
                 }
 
                 node = node->child;
@@ -3275,7 +3287,7 @@ resolve_instid(struct lyd_node *data, const char *path)
 {
     int i = 0, j;
     struct lyd_node *result = NULL;
-    const struct lys_module *mod = NULL;
+    const struct lys_module *mod, *prev_mod;
     struct ly_ctx *ctx = data->schema->module->ctx;
     const char *model, *name;
     char *str;
@@ -3292,6 +3304,8 @@ resolve_instid(struct lyd_node *data, const char *path)
         for (; data->prev->next; data = data->prev);
     }
 
+    prev_mod = lyd_node_module(data);
+
     /* search for the instance node */
     while (path[i]) {
         j = parse_instance_identifier(&path[i], &model, &mod_len, &name, &name_len, &has_predicate);
@@ -3301,17 +3315,16 @@ resolve_instid(struct lyd_node *data, const char *path)
         }
         i += j;
 
-        str = strndup(model, mod_len);
-        if (!str) {
-            LOGMEM;
-            goto error;
-        }
-        mod = ly_ctx_get_module(ctx, str, NULL);
-        free(str);
-
-        if (!mod) {
-            /* no instance exists */
-            return NULL;
+        if (model) {
+            str = strndup(model, mod_len);
+            if (!str) {
+                LOGMEM;
+                goto error;
+            }
+            mod = ly_ctx_get_module(ctx, str, NULL);
+            free(str);
+        } else {
+            mod = prev_mod;
         }
 
         if (resolve_data(mod, name, name_len, data, &node_match)) {
@@ -3346,6 +3359,8 @@ resolve_instid(struct lyd_node *data, const char *path)
                 return NULL;
             }
         }
+
+        prev_mod = mod;
     }
 
     if (!node_match.count) {
@@ -3381,7 +3396,7 @@ static void
 inherit_config_flag(struct lys_node *node)
 {
     LY_TREE_FOR(node, node) {
-        node->flags |= node->parent->flags & LYS_CONFIG_MASK;
+        node->flags |= lys_parent(node)->flags & LYS_CONFIG_MASK;
         inherit_config_flag(node->child);
     }
 }
@@ -3550,8 +3565,8 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
 
         /* config on any nodetype */
         if (rfn->flags & LYS_CONFIG_MASK) {
-            if (node->parent &&
-                    ((node->parent->flags & LYS_CONFIG_MASK) != (rfn->flags & LYS_CONFIG_MASK)) &&
+            if (lys_parent(node) &&
+                    ((lys_parent(node)->flags & LYS_CONFIG_MASK) != (rfn->flags & LYS_CONFIG_MASK)) &&
                     (rfn->flags & LYS_CONFIG_W)) {
                 /* setting config true under config false is prohibited */
                 LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, "config", "refine");
@@ -4001,7 +4016,7 @@ resolve_unres_schema_uses(struct lys_node_uses *uses, struct unres_schema *unres
      *       is used to store number of so far unresolved uses. The grouping cannot be used unless the nacm
      *       value is decreased back to 0. To remember that the uses already increased grouping's nacm, the
      *       LYS_USESGRP flag is used. */
-    for (par_grp = uses->parent; par_grp && (par_grp->nodetype != LYS_GROUPING); par_grp = par_grp->parent);
+    for (par_grp = lys_parent((struct lys_node *)uses); par_grp && (par_grp->nodetype != LYS_GROUPING); par_grp = lys_parent(par_grp));
 
     if (!uses->grp) {
         rc = resolve_uses_schema_nodeid(uses->name, (const struct lys_node *)uses, (const struct lys_node_grp **)&uses->grp);
@@ -4163,7 +4178,7 @@ resolve_must(struct lyd_node *node)
 
         lyxp_set_cast(&set, LYXP_SET_BOOLEAN, node, LYXP_MUST);
 
-        if (!set.value.bool) {
+        if (!set.val.bool) {
             LOGVAL(LYE_NOMUST, LY_VLOG_LYD, node, must[i].expr);
             if (must[i].emsg) {
                 LOGVAL(LYE_SPEC, LY_VLOG_LYD, node, must[i].emsg);
@@ -4306,7 +4321,7 @@ resolve_when(struct lyd_node *node)
 
         /* set boolean result of the condition */
         lyxp_set_cast(&set, LYXP_SET_BOOLEAN, node, LYXP_WHEN);
-        if (!set.value.bool) {
+        if (!set.val.bool) {
             ly_vlog_hide(1);
             LOGVAL(LYE_NOWHEN, LY_VLOG_LYD, node, ((struct lys_node_container *)node->schema)->when->cond);
             ly_vlog_hide(0);
@@ -4341,7 +4356,7 @@ resolve_when(struct lyd_node *node)
             }
 
             lyxp_set_cast(&set, LYXP_SET_BOOLEAN, ctx_node, LYXP_WHEN);
-            if (!set.value.bool) {
+            if (!set.val.bool) {
                 ly_vlog_hide(1);
                 LOGVAL(LYE_NOWHEN, LY_VLOG_LYD, node, ((struct lys_node_uses *)parent)->when->cond);
                 ly_vlog_hide(0);
@@ -4373,7 +4388,7 @@ check_augment:
 
             lyxp_set_cast(&set, LYXP_SET_BOOLEAN, ctx_node, LYXP_WHEN);
 
-            if (!set.value.bool) {
+            if (!set.val.bool) {
                 ly_vlog_hide(1);
                 LOGVAL(LYE_NOWHEN, LY_VLOG_LYD, node, ((struct lys_node_augment *)parent->parent)->when->cond);
                 ly_vlog_hide(0);
@@ -4931,7 +4946,7 @@ resolve_unres_data_item(struct lyd_node *node, enum UNRES_ITEM type)
         break;
 
     case UNRES_INSTID:
-        assert(sleaf->type.base == LY_TYPE_INST);
+        assert((sleaf->type.base == LY_TYPE_INST) || (sleaf->type.base == LY_TYPE_UNION));
         ly_errno = 0;
         leaf->value.instance = resolve_instid(node, leaf->value_str);
         if (!leaf->value.instance) {
@@ -5188,6 +5203,8 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int options
             resolved++;
         } else if (rc == -1) {
             ly_vlog_hide(0);
+            /* print only this last error */
+            resolve_unres_data_item(unres->node[i], unres->type[i]);
             return -1;
         }
     }

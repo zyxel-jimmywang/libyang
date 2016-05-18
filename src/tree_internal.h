@@ -270,9 +270,10 @@ void lys_free(struct lys_module *module, void (*private_destructor)(const struct
  * @param[in] schema To check mandatory elements in empty data tree (\p data is NULL), we need
  * the first schema node in a schema to be checked.
  * @param[in] status Include status (read-only) nodes.
+ * @param[in] rpc_output Expect RPC output nodes instead RPC input ones.
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on failure.
  */
-int ly_check_mandatory(const struct lyd_node *data, const struct lys_node *schema, int status);
+int ly_check_mandatory(const struct lyd_node *data, const struct lys_node *schema, int status, int rpc_output);
 
 /**
  * @brief Find the parent node of an attribute.
@@ -282,7 +283,7 @@ int ly_check_mandatory(const struct lyd_node *data, const struct lys_node *schem
  *
  * @return Parent of \p attr, NULL if not found.
  */
-struct lyd_node *lyd_attr_parent(struct lyd_node *root, struct lyd_attr *attr);
+const struct lyd_node *lyd_attr_parent(const struct lyd_node *root, struct lyd_attr *attr);
 
 /**
  * @brief Find an import from \p module with matching \p prefix, \p name, or both,
@@ -343,34 +344,12 @@ int lys_get_data_sibling(const struct lys_module *mod, const struct lys_node *si
  *
  * @param[in] first First data node to compare.
  * @param[in] second Second node to compare.
+ * @param[in] printval Flag for printing validation errors, useful for internal (non-validation) use of this function
  * @return 1 if both the nodes are the same from the YANG point of view,
  *         0 if they differ,
  *         -1 on error.
  */
-int lyd_list_equal(struct lyd_node *first, struct lyd_node *second);
-
-/**
- * @brief Process with-default nodes (according to the with-defaults mode in \p options).
- *
- * @param[in] ctx Optional parameter. If provided, default nodes from all modules in the context will be added (so it
- *            has no effect for #LYD_WD_TRIM). If NULL, only the modules explicitly mentioned in data tree are
- *            taken into account.
- * @param[in] root Data tree root. In case of #LYD_WD_TRIM the data tree can be modified so the root can be changed or
- *            removed. In other modes and with empty data tree, new default nodes can be created so the root pointer
- *            will contain/return the newly created data tree.
- * @param[in,out] unres List of unresolved nodes. If the newly created leafs include some property that needs to be
- *            resolved, it is added into the list. Caller is supposed to resolve the list by resolve_unres_data().
- * @param[in] options Options for the inserting data to the target data tree options, see @ref parseroptions. The
- *            LYD_WD_* options are used to select functionality:
- * - #LYD_WD_TRIM - remove all nodes that have value equal to their default value
- * - #LYD_WD_ALL - add default nodes
- * - #LYD_WD_ALL_TAG - add default nodes and set ::lyd_node#dflt in all nodes having their default value
- * - #LYD_WD_IMPL_TAG - add default nodes, but set ::lyd_node#dflt only in the added nodes
- * @note The *_TAG modes require to have ietf-netconf-with-defaults module in the context of the data tree in time of
- * printing - all the flagged nodes are printed with the 'default' attribute with 'true' value.
- * @return EXIT_SUCCESS ot EXIT_FAILURE
- */
-int lyd_wd_top(struct ly_ctx *ctx, struct lyd_node **root, struct unres_data *unres, int options);
+int lyd_list_equal(struct lyd_node *first, struct lyd_node *second, int printval);
 
 /**
  * @brief Check for (validate) top-level mandatory nodes of a data tree.
@@ -381,19 +360,30 @@ int lyd_wd_top(struct ly_ctx *ctx, struct lyd_node **root, struct unres_data *un
  * @param[in] options Standard @ref parseroptions.
  * @return EXIT_SUCCESS or EXIT_FAILURE.
  */
-int lyd_check_topmandatory(struct lyd_node *data, struct ly_ctx *ctx, struct lys_node *rpc, int options);
+int lyd_check_topmandatory(struct lyd_node *data, struct ly_ctx *ctx, int options);
 
 /**
- * @brief Add default values, validate the data, \p resolve unres, and finally
+ * @brief Add default values, \p resolve unres, and finally
  * remove any redundant default values based on \p options.
  *
- * @param[in,out] node Pointer to the manipulated data tree.
- * @param[in] options All the relevant @ref parseroptions (LYD_WD_*, LYD_OPT_NOAUTODEL).
- * @param[in] ctx libyang context.
+ * @param[in] root Data tree root. In case of #LYD_WD_TRIM the data tree can be modified so the root can be changed or
+ *            removed. In other modes and with empty data tree, new default nodes can be created so the root pointer
+ *            will contain/return the newly created data tree.
+ * @param[in] options Options for the inserting data to the target data tree options, see @ref parseroptions. The
+ *            LYD_WD_* options are used to select functionality:
+ * - #LYD_WD_TRIM - remove all nodes that have value equal to their default value
+ * - #LYD_WD_ALL - add default nodes
+ * - #LYD_WD_ALL_TAG - add default nodes and set ::lyd_node#dflt in all nodes having their default value
+ * - #LYD_WD_IMPL_TAG - add default nodes, but set ::lyd_node#dflt only in the added nodes
+ * @note The *_TAG modes require to have ietf-netconf-with-defaults module in the context of the data tree in time of
+ * printing - all the flagged nodes are printed with the 'default' attribute with 'true' value.
+ * @param[in] ctx Optional parameter. If provided, default nodes from all modules in the context will be added (so it
+ *            has no effect for #LYD_WD_TRIM). If NULL, only the modules explicitly mentioned in data tree are
+ *            taken into account.
  * @param[in] unres Valid unres structure, on function successful exit they are all resolved.
  * @return 0 on success, nonzero on failure.
  */
-int lyd_validate_defaults_unres(struct lyd_node **node, int options, struct ly_ctx *ctx, struct unres_data *unres);
+int lyd_defaults_add_unres(struct lyd_node **node, int options, struct ly_ctx *ctx, struct unres_data *unres);
 
 void lys_deviation_add_ext_imports(struct lys_module *dev_target_module, struct lys_module *dev_module);
 

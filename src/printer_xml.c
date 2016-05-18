@@ -74,12 +74,14 @@ xml_print_ns(struct lyout *out, const struct lyd_node *node)
     assert(out);
     assert(node);
 
+    /* add node attribute modules */
     for (attr = node->attr; attr; attr = attr->next) {
-        if (modlist_add(&mlist, wdmod)) {
+        if (modlist_add(&mlist, attr->module)) {
             goto print;
         }
     }
 
+    /* add node children nodes and attribute modules */
     if (!(node->schema->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYXML))) {
         /* get with-defaults module */
         wdmod = ly_ctx_get_module(node->schema->module->ctx, "ietf-netconf-with-defaults", NULL);
@@ -176,9 +178,9 @@ xml_print_leaf(struct lyout *out, int level, const struct lyd_node *node, int to
     const char *xml_expr;
     uint32_t ns_count, i;
 
-    if (!node->parent || nscmp(node, node->parent)) {
+    if (toplevel || !node->parent || nscmp(node, node->parent)) {
         /* print "namespace" */
-        ns = lys_node_module(node->schema)->ns;
+        ns = lyd_node_module(node)->ns;
         ly_print(out, "%*s<%s xmlns=\"%s\"", LEVEL, INDENT, node->schema->name, ns);
     } else {
         ly_print(out, "%*s<%s", LEVEL, INDENT, node->schema->name);
@@ -268,9 +270,9 @@ xml_print_container(struct lyout *out, int level, const struct lyd_node *node, i
     struct lyd_node *child;
     const char *ns;
 
-    if (!node->parent || nscmp(node, node->parent)) {
+    if (toplevel || !node->parent || nscmp(node, node->parent)) {
         /* print "namespace" */
-        ns = lys_node_module(node->schema)->ns;
+        ns = lyd_node_module(node)->ns;
         ly_print(out, "%*s<%s xmlns=\"%s\"", LEVEL, INDENT, node->schema->name, ns);
     } else {
         ly_print(out, "%*s<%s", LEVEL, INDENT, node->schema->name);
@@ -303,9 +305,9 @@ xml_print_list(struct lyout *out, int level, const struct lyd_node *node, int is
 
     if (is_list) {
         /* list print */
-        if (!node->parent || nscmp(node, node->parent)) {
+        if (toplevel || !node->parent || nscmp(node, node->parent)) {
             /* print "namespace" */
-            ns = lys_node_module(node->schema)->ns;
+            ns = lyd_node_module(node)->ns;
             ly_print(out, "%*s<%s xmlns=\"%s\"", LEVEL, INDENT, node->schema->name, ns);
         } else {
             ly_print(out, "%*s<%s", LEVEL, INDENT, node->schema->name);
@@ -340,9 +342,9 @@ xml_print_anyxml(struct lyout *out, int level, const struct lyd_node *node, int 
     struct lyd_node_anyxml *axml = (struct lyd_node_anyxml *)node;
     const char *ns;
 
-    if (!node->parent || nscmp(node, node->parent)) {
+    if (toplevel || !node->parent || nscmp(node, node->parent)) {
         /* print "namespace" */
-        ns = lys_node_module(node->schema)->ns;
+        ns = lyd_node_module(node)->ns;
         ly_print(out, "%*s<%s xmlns=\"%s\"", LEVEL, INDENT, node->schema->name, ns);
     } else {
         ly_print(out, "%*s<%s", LEVEL, INDENT, node->schema->name);
@@ -357,7 +359,7 @@ xml_print_anyxml(struct lyout *out, int level, const struct lyd_node *node, int 
     if (axml->xml_struct) {
         if (axml->value.xml) {
             lyxml_print_mem(&buf, axml->value.xml, LYXML_PRINT_FORMAT | LYXML_PRINT_SIBLINGS);
-            ly_print(out, "%*s%s", LEVEL, INDENT, buf);
+            ly_print(out, "\n%s", buf);
             free(buf);
         }
     } else {

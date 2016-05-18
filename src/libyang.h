@@ -434,7 +434,7 @@ extern "C" {
  * can cause failure of various libyang functions later.
  *
  * Creating data is generally possible in two ways, they can be combined. You can add nodes one-by-one based on
- * the node name and/or its parent (lyd_new(), lyd_new_anyxml_*(), lyd_new_leaf(), adn their output variants) or
+ * the node name and/or its parent (lyd_new(), lyd_new_anyxml_*(), lyd_new_leaf(), and their output variants) or
  * address the nodes using a simple XPath addressing (lyd_new_path()). The latter enables to create a whole path
  * of nodes, requires less information about the modified data, and is generally simpler to use. The path format
  * specifics can be found [here](@ref howtoxpath).
@@ -463,10 +463,10 @@ extern "C" {
  * - lyd_new_anyxml_xml()
  * - lyd_new_leaf()
  * - lyd_new_path()
- * - lyd_output_new()
- * - lyd_output_new_anyxml_str()
- * - lyd_output_new_anyxml_xml()
- * - lyd_output_new_leaf()
+ * - lyd_new_output()
+ * - lyd_new_output_anyxml_str()
+ * - lyd_new_output_anyxml_xml()
+ * - lyd_new_output_leaf()
  * - lyd_schema_sort()
  * - lyd_unlink()
  * - lyd_free()
@@ -578,10 +578,11 @@ extern "C" {
  * A very small subset of this full XPath is recognized by lyd_new_path(). Basically, only a relative or absolute
  * path can be specified to identify a new data node. However, lists must be identified by all their keys and created
  * with all of them, so for those cases predicates are allowed. Predicates must be ordered the way the keys are ordered
- * and all the keys must be specified. Every predicate includes a single key with its value. These paths are valid XPath
+ * and all the keys must be specified. Every predicate includes a single key with its value. Optionally, leaves and
+ * leaf-lists can have predicates specifying their value in the path itself. All these paths are valid XPath
  * expressions. Example:
  *
- *     /ietf-yang-library:modules-state/module[name='ietf-yang-library'][revision='']/submodules
+ *     /ietf-yang-library:modules-state/module[name='ietf-yang-library'][revision='']/conformance[.='implement']
  *
  * Almost the same XPath is accepted by ly_ctx_get_node(). The difference is that it is not used on data, but schema,
  * which means there are no key values and only one node matches one path. In effect, lists do not have to have any
@@ -890,6 +891,9 @@ const struct lys_submodule *ly_ctx_get_submodule2(const struct lys_module *main_
  * If the \p nodeid is relative, \p start is mandatory and is the starting point
  * for the resolution. The first node identifier does not need a module name.
  *
+ * Predicates on lists are accepted (ignored) in the form of "<key>(=<value>)"
+ * and on leaves/leaf-lists ".(=<value>)".
+ *
  * @param[in] ctx Context to work in.
  * @param[in] start Starting node for a relative schema node identifier, in which
  * case it is mandatory.
@@ -909,6 +913,9 @@ const struct lys_node *ly_ctx_get_node(struct ly_ctx *ctx, const struct lys_node
  *
  * Since input and output is skipped, there could arise ambiguities if one RPC input
  * contains a parameter with the same name as is in output, hence the flag.
+ *
+ * Predicates on lists are accepted (ignored) in the form of "<key>(=<value>)"
+ * and on leaves/leaf-lists ".(=<value>)".
  *
  * @param[in] ctx Context to work in.
  * @param[in] start Starting node for a relative schema node identifier, in which
@@ -980,11 +987,23 @@ struct ly_set *ly_set_new(void);
 /**
  * @brief Add a ::lyd_node or ::lys_node object into the set
  *
+ * Since it is a set, the function checks for duplicity and if the
+ * node is already in the set, the index of the previously added
+ * node is returned.
+ *
  * @param[in] set Set where the \p node will be added.
  * @param[in] node The ::lyd_node or ::lys_node object to be added into the \p set;
- * @return 0 on success
+ * @return -1 on failure, index of the \p node in the set on success
  */
 int ly_set_add(struct ly_set *set, void *node);
+
+/**
+ * @brief Remove all objects from the set, but keep the set container for further use.
+ *
+ * @param[in] set Set to clean.
+ * @return 0 on success
+ */
+int ly_set_clean(struct ly_set *set);
 
 /**
  * @brief Remove a ::lyd_node or ::lys_node object from the set.

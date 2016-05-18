@@ -334,11 +334,6 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, const struct lys_node
         }
     }
 
-    /* first part of validation checks */
-    if (!(options & LYD_OPT_TRUSTED) && lyv_data_context(*result, options, unres)) {
-        goto error;
-    }
-
     /* type specific processing */
     if (schema->nodetype & (LYS_LEAF | LYS_LEAFLIST)) {
         /* type detection and assigning the value */
@@ -362,6 +357,11 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, const struct lys_node
             ((struct lyd_node_anyxml *)*result)->xml_struct = 0;
             ((struct lyd_node_anyxml *)*result)->value.str = lydict_insert(ctx, xml->content, 0);
         }
+    }
+
+    /* first part of validation checks */
+    if (!(options & LYD_OPT_TRUSTED) && lyv_data_context(*result, options, unres)) {
+        goto error;
     }
 
     for (attr = xml->attr; attr; attr = attr->next) {
@@ -499,7 +499,7 @@ lyd_parse_xml(struct ly_ctx *ctx, struct lyxml_elem **root, int options, ...)
     va_list ap;
     int r;
     struct unres_data *unres = NULL;
-    const struct lys_node *rpc = NULL;
+    struct lys_node *rpc = NULL;
     struct lyd_node *result = NULL, *iter, *last;
     struct lyxml_elem *xmlstart, *xmlelem, *xmlaux;
 
@@ -572,13 +572,23 @@ lyd_parse_xml(struct ly_ctx *ctx, struct lyxml_elem **root, int options, ...)
         }
     }
 
+    if (options & LYD_OPT_RPCREPLY) {
+        iter = result;
+        result = lyd_new_output(NULL, lys_node_module(rpc), rpc->name);
+        if (iter && lyd_insert(result, iter)) {
+            LOGINT;
+            lyd_free_withsiblings(iter);
+            goto error;
+        }
+    }
+
     /* check for missing top level mandatory nodes */
-    if (lyd_check_topmandatory(result, ctx, NULL, options)) {
+    if (lyd_check_topmandatory(result, ctx, options)) {
         goto error;
     }
 
     /* add/validate default values, unres */
-    if (lyd_validate_defaults_unres(&result, options, ctx, unres)) {
+    if (lyd_defaults_add_unres(&result, options, ctx, unres)) {
         goto error;
     }
 

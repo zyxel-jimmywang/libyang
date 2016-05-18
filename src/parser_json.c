@@ -204,39 +204,42 @@ error:
 static unsigned int
 lyjson_parse_number(const char *data)
 {
-    unsigned int len;
-    unsigned int i = 0;
+    unsigned int len = 0;
 
-    for (len = 0;
-         data[len] && data[len] != ',' && data[len] != ']' && data[len] != '}' && !lyjson_isspace(data[len]);
-         len++) {
+    if (data[len] == '-') {
+        ++len;
+    }
 
-        switch(data[len]) {
-        case '0':
-            if (!i && isdigit(data[len + 1])) {
-                /* leading 0 is not allowed */
-                LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "JSON number (leading zero)");
-                return 0;
+    if (data[len] == '0') {
+        ++len;
+    } else if (isdigit(data[len])) {
+        ++len;
+        while (isdigit(data[len])) {
+            ++len;
+        }
+    } else {
+        LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid character in JSON Number value ('%c').", data[len]);
+        return 0;
+    }
+
+    if (data[len] == '.') {
+        ++len;
+        if (!isdigit(data[len])) {
+            if (data[len]) {
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid character in JSON Number value ('%c').", data[len]);
+            } else {
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid character in JSON Number value (EOF).");
             }
-            /* no break */
-        case '1':
-        case '2':
-        case '3':
-        case '4':
-        case '5':
-        case '6':
-        case '7':
-        case '8':
-        case '9':
-            i = 1;
-            /* no break */
-        case 0x2d: /* minus */
-            /* ok */
-            break;
-        default:
-            LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "character in JSON Number value");
             return 0;
         }
+        while (isdigit(data[len])) {
+            ++len;
+        }
+    }
+
+    if (data[len] && (data[len] != ',') && (data[len] != ']') && (data[len] != '}') && !lyjson_isspace(data[len])) {
+        LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid character in JSON Number value ('%c').", data[len]);
+        return 0;
     }
 
     return len;
@@ -264,60 +267,61 @@ lyjson_parse_boolean(const char *data)
 static unsigned int
 json_get_anyxml(struct lyd_node_anyxml *axml, const char *data)
 {
-    unsigned int len = 0;
-    char stop, start;
-    int level = 0;
+    struct ly_ctx *ctx;
+    unsigned int len = 0, r;
+    char *str;
 
-    switch (data[len]) {
-    case '"':
-        start = 0;
-        stop = '"';
-        len++;
-        level = 1;
-        break;
-    case '[':
-        start = '[';
-        stop = ']';
-        break;
-    case '{':
-        start = '{';
-        stop = '}';
-        break;
-    default:
-        /* number or one of literals */
-        while (!isspace(data[len])) {
-            len++;
+    ctx = axml->schema->module->ctx;
+
+    if (data[len] == '"') {
+        /* string representations */
+        ++len;
+        str = lyjson_parse_text(&data[len], &r);
+        if (!str) {
+            LOGPATH(LY_VLOG_LYD, axml);
+            return 0;
         }
         axml->xml_struct = 0;
-        axml->value.str = NULL; /* TODO ??? */
-        return len;
+        axml->value.str = lydict_insert_zc(ctx, str);
+        if (data[len + r] != '"') {
+            LOGVAL(LYE_XML_INVAL, LY_VLOG_LYD, axml,
+                   "JSON data (missing quotation-mark at the end of string)");
+            return 0;
+        }
+        len += r + 1;
+    } else if (data[len] == '-' || isdigit(data[len])) {
+        /* numeric type */
+        r = lyjson_parse_number(&data[len]);
+        if (!r) {
+            LOGPATH(LY_VLOG_LYD, axml);
+            return 0;
+        }
+        axml->xml_struct = 0;
+        axml->value.str = lydict_insert(ctx, &data[len], r);
+        len += r;
+    } else if (data[len] == 'f' || data[len] == 't') {
+        /* boolean */
+        r = lyjson_parse_boolean(&data[len]);
+        if (!r) {
+            LOGPATH(LY_VLOG_LYD, axml);
+            return 0;
+        }
+        axml->xml_struct = 0;
+        axml->value.str = lydict_insert(ctx, &data[len], r);
+        len += r;
+    } else if (!strncmp(&data[len], "[null]", 6)) {
+        /* empty */
+        axml->xml_struct = 0;
+        axml->value.str = lydict_insert(ctx, "", 0);
+        len += 6;
+    } else {
+        /* error */
+        LOGVAL(LYE_XML_INVAL, LY_VLOG_LYD, axml, "JSON data (unexpected value)");
+        return 0;
     }
 
-    while (data[len]) {
-        if (start && data[len] == start) {
-            if (!len || data[len - 1] != '\\') {
-                level++;
-            }
-        } else if (data[len] == stop) {
-            if (!len || data[len - 1] != '\\') {
-                level--;
-            }
-        }
-        len++;
-        if (!level) {
-            /* we are done */
-            if (!start) {
-                axml->xml_struct = 0;
-                axml->value.str = lydict_insert(axml->schema->module->ctx, &data[1], len - 2);
-            } else {
-                axml->xml_struct = 0;
-                axml->value.str = NULL; /* TODO ??? */
-            }
-            return len;
-        }
-    }
-
-    return 0;
+    len += skip_ws(&data[len]);
+    return len;
 }
 
 static unsigned int
@@ -357,11 +361,7 @@ repeat:
 
     if (data[len] == '"') {
         /* string representations */
-        if (data[len++] != '"') {
-            LOGVAL(LYE_XML_INVAL, LY_VLOG_LYD, leaf,
-                   "JSON data (missing quotation-mark at the beginning of string)");
-            return 0;
-        }
+        ++len;
         str = lyjson_parse_text(&data[len], &r);
         if (!str) {
             LOGPATH(LY_VLOG_LYD, leaf);
@@ -883,12 +883,6 @@ attr_repeat:
         result->when_status = LYD_WHEN;
     }
 
-    if (!(options & LYD_OPT_TRUSTED) && lyv_data_context(result, options, unres)) {
-        goto error;
-    }
-
-    /* TODO handle notifications */
-
     /* type specific processing */
     if (schema->nodetype & (LYS_LEAF | LYS_LEAFLIST)) {
         /* type detection and assigning the value */
@@ -909,7 +903,7 @@ attr_repeat:
         }
         len += r;
         len += skip_ws(&data[len]);
-    } else if (schema->nodetype & (LYS_CONTAINER | LYS_RPC)) {
+    } else if (schema->nodetype & (LYS_CONTAINER | LYS_RPC | LYS_NOTIF)) {
         if (data[len] != '{') {
             LOGVAL(LYE_XML_INVAL, LY_VLOG_LYD, result, "JSON data (missing begin-object)");
             goto error;
@@ -1045,6 +1039,10 @@ attr_repeat:
     }
 
     /* various validation checks */
+    if (!(options & LYD_OPT_TRUSTED) && lyv_data_context(result, options, unres)) {
+        goto error;
+    }
+
     ly_errno = 0;
     if (!(options & LYD_OPT_TRUSTED) &&
             (lyv_data_content(result, options, unres) ||
@@ -1097,7 +1095,7 @@ lyd_parse_json(struct ly_ctx *ctx, const struct lys_node *parent, const char *da
 
     ly_errno = LY_SUCCESS;
 
-    if (!ctx || !data) {
+    if (!ctx || !data || (options & LYD_OPT_RPCREPLY)) {
         LOGERR(LY_EINVAL, "%s: Invalid parameter.", __func__);
         return NULL;
     }
@@ -1161,12 +1159,12 @@ lyd_parse_json(struct ly_ctx *ctx, const struct lys_node *parent, const char *da
     }
 
     /* check for missing top level mandatory nodes */
-    if (lyd_check_topmandatory(result, ctx, NULL, options)) {
+    if (lyd_check_topmandatory(result, ctx, options)) {
         goto error;
     }
 
     /* add/validate default values, unres */
-    if (lyd_validate_defaults_unres(&result, options, ctx, unres)) {
+    if (lyd_defaults_add_unres(&result, options, ctx, unres)) {
         goto error;
     }
 

@@ -97,7 +97,9 @@ typedef union lyd_value_u {
  */
 #define LYD_VAL_OK       0x00    /**< node is successfully validated including whole subtree */
 #define LYD_VAL_UNIQUE   0x01    /**< Unique value(s) changed, applicable only to ::lys_node_list data nodes */
-#define LYD_VAL_NOT      0x0f    /**< node was not validated yet */
+#define LYD_VAL_NOT      0x07    /**< node was not validated yet */
+#define LYD_VAL_INUSE    0x08    /**< Internal flag for note about various processing on data, should be used only
+                                      internally and removed before the libyang returns to the caller */
 /**
  * @}
  */
@@ -204,6 +206,116 @@ struct lyd_node_anyxml {
     uint8_t xml_struct;              /**< 1 for value.xml, 0 for value.str */
     union lyd_node_anyxml_value value; /**< anyxml value, everything is in the dictionary, there can be more XML siblings */
 };
+
+/**
+ * @brief list of possible types of differencies in #lyd_difflist
+ */
+typedef enum {
+    LYD_DIFF_END = 0,        /**< end of the differences list */
+    LYD_DIFF_DELETED,        /**< deleted node
+                                  - Node is present in the first tree, but not in the second tree.
+                                  - To make both trees the same the node in lyd_difflist::first can be deleted from the
+                                    first tree. The pointer at the same index in the lyd_difflist::second array is
+                                    NULL */
+    LYD_DIFF_CHANGED,        /**< value of a leaf or anyxml is changed, the lyd_difflist::first and lyd_difflist::second
+                                  points to the leaf/anyxml instances in the first and the second tree respectively. */
+    LYD_DIFF_MOVEDAFTER1,    /**< user-ordered (leaf-)list item was moved.
+                                  - To make both trees the same, all #LYD_DIFF_MOVEDAFTER1 transactions must be applied
+                                  to the first tree in the strict order they appear in the difflist. The
+                                  lyd_difflist::first points to the first tree node being moved and the
+                                  lyd_difflist::second points to the first tree node after which the first node is
+                                  supposed to be moved. If the second pointer is NULL, the node is being moved into
+                                  the beginning as the first node of the (leaf-)list instances. */
+    LYD_DIFF_CREATED,        /**< newly created node
+                                  - Node is present in the second tree, but not in the first tree.
+                                  - To make both trees the same the node in lyd_difflist::second is supposed to be
+                                    inserted (copied via lyd_dup()) into the node (as a child) at the same index in the
+                                    lyd_difflist::first array (where is its parent). If the lyd_difflist::first at the
+                                    index is NULL, the missing node is top-level. */
+    LYD_DIFF_MOVEDAFTER2     /**< similar to LYD_DIFF_MOVEDAFTER1, but this time the moved item is in the second tree.
+                                  This type is always used in combination with (as a successor of) #LYD_DIFF_CREATED
+                                  as an instruction to move the newly created node to a specific position. Note, that
+                                  due to applicability to the second tree, the meaning of lyd_difflist:first and
+                                  lyd_difflist:second is inverse in comparison to #LYD_DIFF_MOVEDAFTER1. The
+                                  lyd_difflist::second points to the (previously) created node in the second tree and
+                                  the lyd_difflist::first points to the predecessor node in the second tree. If the
+                                  predecessor is NULL, the node is supposed to bes the first sibling. */
+} LYD_DIFFTYPE;
+
+/**
+ * @brief Structure for the result of lyd_diff(), describing differences between two data trees.
+ */
+struct lyd_difflist {
+    LYD_DIFFTYPE *type;      /**< array of the differences types, terminated by #LYD_DIFF_END value. */
+    struct lyd_node **first; /**< array of nodes in the first tree for the specific type of difference, see the
+                                  description of #LYD_DIFFTYPE values for more information. */
+    struct lyd_node **second;/**< array of nodes in the second tree for the specific type of difference, see the
+                                  description of #LYD_DIFFTYPE values for more information. */
+};
+
+/**
+ * @brief Free the result of lyd_diff(). It frees the structure of the lyd_diff() result, not the referenced nodes.
+ *
+ * @param[in] diff The lyd_diff() result to free.
+ */
+void lyd_free_diff(struct lyd_difflist *diff);
+
+/**
+ * @brief Compare two data trees and provide list of differences.
+ *
+ * Note, that the \p first and the \p second must have the same schema parent (or they must be top-level elements).
+ * In case of using #LYD_OPT_NOSIBLINGS, they both must be instances of the same schema node.
+ *
+ * Order of the resulting set follows these rules:
+ * - To change the first tree into the second tree, the resulting transactions are supposed to be applied in the order
+ *   they appear in the result. First, the changed (#LYD_DIFF_CHANGED) nodes are described followed by the deleted
+ *   (#LYD_DIFF_DELETED) nodes. Then, the moving of the user-ordered nodes present in both trees (#LYD_DIFF_MOVEDAFTER1)
+ *   follows and the last transactions in the results are the newly created (#LYD_DIFF_CREATED) nodes. These nodes are
+ *   supposed to be added as the last siblings, but in some case they can need additional move. In such a case, the
+ *   #LYD_DIFF_MOVEDAFTER2 transactions can appear.
+ * - The order of the changed (#LYD_DIFF_CHANGED) and created (#LYD_DIFF_CREATED) follows the nodes order in the
+ *   second tree - the current siblings are processed first and then the children are processed. Note, that this is
+ *   actually not the BFS:
+ *
+ *           1     2
+ *          / \   / \
+ *         3   4 7   8
+ *        / \
+ *       5   6
+ *
+ * - The order of the deleted (#LYD_DIFF_DELETED) nodes is the DFS:
+ *
+ *           1     6
+ *          / \   / \
+ *         2   5 7   8
+ *        / \
+ *       3   4
+ *
+ * To change the first tree into the second one, it is necessary to follow the order of transactions described in
+ * the result. Note, that it is not possible just to use the transactions in the reverse order to transform the
+ * second tree into the first one. The transactions can be generalized (to be used on a different instance of the
+ * first tree) using lyd_path() to get identifiers for the nodes used in the transactions.
+ *
+ * @param[in] first The first (sub)tree to compare. Without #LYD_OPT_NOSIBLINGS option, all siblings are
+ *            taken into comparison.
+ * @param[in] second The second (sub)tree to compare. Without #LYD_OPT_NOSIBLINGS option, all siblings are
+ *            taken into comparison.
+ * @param[in] options The following @ref parseroptions with the described meanings are accepted:
+ *            - #LYD_OPT_NOSIBLINGS - the \p first and the \p second have to instantiate the same schema node and
+ *              only their content (subtree) is compared.
+ * @return NULL on error, the list of differences on success. In case the trees are the same, the first item in the
+ *         lyd_difflist::type array is #LYD_DIFF_END. The returned structure is supposed to be freed by lyd_free_diff().
+ */
+struct lyd_difflist *lyd_diff(struct lyd_node *first, struct lyd_node *second, int options);
+
+/**
+ * @brief Build path (usable as XPath) of the data node.
+ * @param[in] node Data node to be processed. Note that the node should be from a complete data tree, having a subtree
+ *            (after using lyd_unlink()) can cause generating invalid paths.
+ * @return NULL on error, on success the buffer for the resulting path is allocated and caller is supposed to free it
+ * with free().
+ */
+char *lyd_path(struct lyd_node *node);
 
 /**
  * @defgroup parseroptions Data parser options
@@ -471,44 +583,57 @@ struct lyd_node *lyd_new_anyxml_xml(struct lyd_node *parent, const struct lys_mo
                                     struct lyxml_elem *val_xml);
 
 /**
- * @brief Create a new container node in a data tree, whose schema parent is #LYS_OUTPUT.
+ * @brief Create a new container node in a data tree. Ignore RPC input nodes and instead use RPC output ones.
  *
- * @param[in] schema Schema node of the container.
+ * @param[in] parent Parent node for the node being created. NULL in case of creating top level element.
+ * @param[in] module Module with the node being created.
+ * @param[in] name Schema node name of the new data node. The node can be #LYS_CONTAINER, #LYS_LIST,
+ * #LYS_NOTIF, or #LYS_RPC.
  * @return New node, NULL on error.
  */
-struct lyd_node *lyd_output_new(const struct lys_node *schema);
+struct lyd_node *lyd_new_output(struct lyd_node *parent, const struct lys_module *module, const char *name);
 
 /**
- * @brief Create a new leaf or leaflist node in a data tree, whose schema parent is #LYS_OUTPUT.
+ * @brief Create a new leaf or leaflist node in a data tree with a string value that is converted to
+ * the actual value. Ignore RPC input nodes and instead use RPC output ones.
  *
- * @param[in] schema Schema node of the leaf.
+ * @param[in] parent Parent node for the node being created. NULL in case of creating top level element.
+ * @param[in] module Module with the node being created.
+ * @param[in] name Schema node name of the new data node.
  * @param[in] val_str String form of the value of the node being created. In case the type is #LY_TYPE_INST
  * or #LY_TYPE_IDENT, JSON node-id format is expected (nodes are prefixed with module names, not XML namespaces).
  * @return New node, NULL on error.
  */
-struct lyd_node *lyd_output_new_leaf(const struct lys_node *schema, const char *val_str);
+struct lyd_node *lyd_new_output_leaf(struct lyd_node *parent, const struct lys_module *module, const char *name,
+                                     const char *val_str);
 
 /**
- * @brief Create a new anyxml node in a data tree, whose schema parent is #LYS_OUTPUT
- * and has a string value.
+ * @brief Create a new anyxml node in a data tree with a string value. Ignore RPC input nodes and instead use
+ * RPC output ones.
  *
- * @param[in] schema Schema node of the leaf.
+ * @param[in] parent Parent node for the node being created. NULL in case of creating top level element.
+ * @param[in] module Module with the node being created.
+ * @param[in] name Schema node name of the new data node.
  * @param[in] val_str Well-formed XML string value of the node being created. Must be dynamically allocated
  * and is freed with the data.
  * @return New node, NULL on error.
  */
-struct lyd_node *lyd_output_new_anyxml_str(const struct lys_node *schema, char *val_str);
+struct lyd_node *lyd_new_output_anyxml_str(struct lyd_node *parent, const struct lys_module *module, const char *name,
+                                           char *val_str);
 
 /**
- * @brief Create a new anyxml node in a data tree, whose schema parent is #LYS_OUTPUT
- * and has an XML structure value.
+ * @brief Create a new anyxml node in a data tree with an XML structure value. Ignore RPC input nodes and
+ * instead use RPC output ones.
  *
- * @param[in] schema Schema node of the leaf.
+ * @param[in] parent Parent node for the node being created. NULL in case of creating top level element.
+ * @param[in] module Module with the node being created.
+ * @param[in] name Schema node name of the new data node.
  * @param[in] val_xml XML structure value of the node being created. There can be more siblings,
  * they are freed with the data.
  * @return New node, NULL on error.
  */
-struct lyd_node *lyd_output_new_anyxml_xml(const struct lys_node *schema, struct lyxml_elem *val_xml);
+struct lyd_node *lyd_new_output_anyxml_xml(struct lyd_node *parent, const struct lys_module *module, const char *name,
+                                           struct lyxml_elem *val_xml);
 
 /**
  * @defgroup pathoptions Data path creation options
@@ -535,8 +660,7 @@ struct lyd_node *lyd_output_new_anyxml_xml(const struct lys_node *schema, struct
  *
  * The new node is normally inserted at the end, either as the last child of a parent or as the last sibling
  * if working with top-level elements. However, when manipulating RPC input or output, schema ordering is
- * required and always guaranteed. Specially, when working with RPC output (using #LYD_PATH_OPT_OUTPUT flag),
- * it can therefore happen that a node is created and inserted before \p data_tree.
+ * required and always guaranteed.
  *
  * If \p path points to a list key and the list does not exist, the key value from the predicate is used
  * and \p value is ignored.
@@ -546,7 +670,8 @@ struct lyd_node *lyd_output_new_anyxml_xml(const struct lys_node *schema, struct
  * @param[in] ctx Context to use. Mandatory if \p data_tree is NULL.
  * @param[in] path Simple data XPath of the new node. It can contain only simple node addressing with optional
  * module names as prefixes. List nodes must have predicates, one for each list key in the correct order and
- * with its value as well, see @ref howtoxpath.
+ * with its value as well, leaves and leaf-lists can have predicates too that have preference over \p value,
+ * see @ref howtoxpath.
  * @param[in] value Value of the new leaf/lealf-list. If creating anyxml, this value is internally duplicated
  * (for other options use lyd_*_new_anyxml_*()). If creating nodes of other types, set to NULL.
  * @param[in] options Bitmask of options flags, see @ref pathoptions.
@@ -676,8 +801,7 @@ struct ly_set *lyd_get_node2(const struct lyd_node *data, const struct lys_node 
  * @param[in,out] node Data tree to be validated. In case the \p options does not includes #LYD_OPT_NOAUTODEL, libyang
  *                 can modify the provided tree including the root \p node.
  * @param[in] options Options for the inserting data to the target data tree options, see @ref parseroptions.
- * @param[in] ... if \p options include #LYD_OPT_RPCREPLY then RPC schema node of the data (unsed ony when \p node is NULL),
- *                otherwise libyang context for the data (used only in case the \p node is NULL, so in case of checking empty data tree).
+ * @param[in] ... libyang context for the data (used only in case the \p node is NULL, so in case of checking empty data tree).
  * @return 0 on success, nonzero in case of an error.
  */
 int lyd_validate(struct lyd_node **node, int options, ...);
@@ -691,11 +815,20 @@ int lyd_validate(struct lyd_node **node, int options, ...);
  *
  * Since default nodes are also needed by the validation process, to optimize your application you can add default
  * values directly in lyd_validate() and lyd_parse*() functions using appropriate options value. By default, these
- * functions removes the  default nodes at the end of their processing.
+ * functions remove the default nodes at the end of their processing.
  *
- * @param[in] ctx Optional parameter. If provided, default nodes from all modules in the context will be added (so it
- *            has no effect for #LYD_WD_TRIM). If NULL, only the modules explicitly mentioned in data tree are
- *            taken into account.
+ * \p ctx parameter and \p options with #LYD_OPT_NOSIBLINGS values can result in 4 different scenarios:
+ *
+ * - If \p ctx is set and \p options include #LYD_OPT_NOSIBLINGS, tree default nodes will be added ONLY to \p root,
+ * top-level default nodes will be added from ALL the modules (so it has no effect for #LYD_WD_TRIM).
+ * - If \p ctx is set and \p options do not include #LYD_OPT_NOSIBLINGS, tree default values will be added to ALL
+ * the \p root siblings, top-level nodes will be added from ALL the modules.
+ * - If \p ctx is NULL and \p options include #LYD_OPT_NOSIBLINGS, tree default nodes will be added ONLY to \p root,
+ * top-level default nodes will be added ONLY from the module of \p root.
+ * - If \p ctx is NULL and \p options do not include #LYD_OPT_NOSIBLINGS, tree default nodes will be added to ALL
+ * the \p root siblings, top-level default nodes will be added from ALL the \p root siblings modules.
+ *
+ * @param[in] ctx Optional parameter. Exact meaning described in this function description last paragraph.
  * @param[in] root Data tree root. In case of #LYD_WD_TRIM the data tree can be modified so the root can be changed or
  *            removed. In other modes and with empty data tree, new default nodes can be created so the root pointer
  *            will contain/return the newly created data tree.
