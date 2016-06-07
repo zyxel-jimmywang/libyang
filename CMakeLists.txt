@@ -6,7 +6,7 @@ set(LIBYANG_DESCRIPTION "libyang is YANG data modelling language parser and tool
 # set version
 set(LIBYANG_MAJOR_VERSION 0)
 set(LIBYANG_MINOR_VERSION 9)
-set(LIBYANG_MICRO_VERSION 109)
+set(LIBYANG_MICRO_VERSION 128)
 set(LIBYANG_VERSION ${LIBYANG_MAJOR_VERSION}.${LIBYANG_MINOR_VERSION}.${LIBYANG_MICRO_VERSION})
 set(LIBYANG_SOVERSION ${LIBYANG_MAJOR_VERSION}.${LIBYANG_MINOR_VERSION})
 
@@ -15,6 +15,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/CMakeModules/")
 
 find_package(FLEX)
 find_package(BISON)
+find_program (SED_TOOL NAMES sed)
 
 if(NOT BISON_FOUND)
 	message(WARNING "Missing Bison.\nTarget bison does not exist.")
@@ -31,6 +32,7 @@ else()
 		WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/src
 		COMMAND bison -Wno-other -l -o parser_yang_bis.c --defines=parser_yang_bis.h yang.y
 		COMMAND flex -L -o parser_yang_lex.c --header-file=parser_yang_lex.h yang.l
+		COMMAND ${SED_TOOL} -i 's/int yychar\;/int yychar\;\\nchar *s, *tmp_s\;\\nchar rev[LY_REV_SIZE]\;\\nstruct lys_module *trg\;\\nstruct lys_node *tpdf_parent, *data_node\;\\nvoid *actual\;\\nint config_inherit, actual_type\;\\nint64_t cnt_val\;/' parser_yang_bis.c
 	)
 endif()
 

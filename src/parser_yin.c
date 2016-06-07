@@ -232,6 +232,7 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     struct lyxml_elem *next, *node;
     struct lys_restr **restr;
     struct lys_type_bit bit;
+    struct lys_type *type_der;
     pcre *precomp;
     int i, j, rc, err_offset;
     int ret = -1;
@@ -260,20 +261,24 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             lydict_remove(module->ctx, value);
             goto error;
         }
+        /* name is in dictionary, but moved */
         ++name;
     }
 
     rc = resolve_superior_type(name, type->module_name, module, parent, &type->der);
-    lydict_remove(module->ctx, value);
     if (rc == -1) {
         LOGVAL(LYE_INMOD, LY_VLOG_NONE, NULL, type->module_name);
+        lydict_remove(module->ctx, value);
         goto error;
 
     /* the type could not be resolved or it was resolved to an unresolved typedef */
     } else if (rc == EXIT_FAILURE) {
+        LOGVAL(LYE_NORESOLV, LY_VLOG_NONE, NULL, "type", name);
+        lydict_remove(module->ctx, value);
         ret = EXIT_FAILURE;
         goto error;
     }
+    lydict_remove(module->ctx, value);
     type->base = type->der->type.base;
 
     /* check status */
@@ -754,6 +759,13 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
         if (!type->info.lref.path && !type->der->type.der) {
             LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "path", "type");
             goto error;
+        } else if (type->der->type.der && parent) {
+            for (type_der = &type->der->type; !type_der->info.lref.path && type_der->der; type_der = &type_der->der->type);
+            assert(type_der->info.lref.path && type_der->info.lref.target);
+            /* add pointer to leafref target, only on leaves (not in typedefs) */
+            if (lys_leaf_add_leafref_target(type_der->info.lref.target, (struct lys_node *)type->parent)) {
+                goto error;
+            }
         }
         break;
 
@@ -1502,7 +1514,7 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                     }
 
                     if (d->mod == LY_DEVIATE_DEL) {
-                        if (!leaf->dflt || (leaf->dflt != d->dflt)) {
+                        if (!leaf->dflt || !ly_strequal(leaf->dflt, d->dflt, 1)) {
                             LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, child->name);
                             LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Value differs from the target being deleted.");
                             goto error;
@@ -1700,7 +1712,7 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                     *stritem = lydict_insert(ctx, value, 0);
                 } else if (d->mod == LY_DEVIATE_DEL) {
                     /* check values */
-                    if (*stritem != d->units) {
+                    if (!ly_strequal(*stritem, d->units, 1)) {
                         LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, child->name);
                         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Value differs from the target being deleted.");
                         goto error;
@@ -2232,14 +2244,14 @@ fill_yin_refine(struct lys_module *module, struct lyxml_elem *yin, struct lys_re
             /* leaf-list, list, container or anyxml */
             /* check possibility of statements combination */
             if (rfn->target_type) {
-                rfn->target_type &= (LYS_LIST | LYS_LEAFLIST | LYS_CONTAINER | LYS_ANYXML);
+                rfn->target_type &= (LYS_LEAF | LYS_LIST | LYS_LEAFLIST | LYS_CONTAINER | LYS_ANYXML);
                 if (!rfn->target_type) {
                     LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, sub->name, yin->name);
                     LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid refine target nodetype for the substatements.");
                     goto error;
                 }
             } else {
-                rfn->target_type = LYS_LIST | LYS_LEAFLIST | LYS_CONTAINER | LYS_ANYXML;
+                rfn->target_type = LYS_LEAF | LYS_LIST | LYS_LEAFLIST | LYS_CONTAINER | LYS_ANYXML;
             }
 
             c_must++;
@@ -2682,11 +2694,11 @@ error:
 static struct lys_node *
 read_yin_choice(struct lys_module *module, struct lys_node *parent, struct lyxml_elem *yin, int resolve, struct unres_schema *unres)
 {
-    struct lyxml_elem *sub, *next;
+    struct lyxml_elem *sub, *next, *dflt = NULL;
     struct ly_ctx *const ctx = module->ctx;
     struct lys_node *retval, *node = NULL;
     struct lys_node_choice *choice;
-    const char *value, *dflt_str = NULL;
+    const char *value;
     int f_mand = 0, c_ftrs = 0, ret;
 
     choice = calloc(1, sizeof *choice);
@@ -2743,11 +2755,16 @@ read_yin_choice(struct lys_module *module, struct lys_node *parent, struct lyxml
                 goto error;
             }
         } else if (!strcmp(sub->name, "default")) {
-            if (dflt_str) {
+            if (dflt) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, sub->name, yin->name);
                 goto error;
             }
-            GETVAL(dflt_str, sub, "value");
+            dflt = sub;
+            lyxml_unlink_elem(ctx, dflt, 0);
+
+            continue;
+            /* skip lyxml_free() at the end of the loop, the sub node is processed later as dflt */
+
         } else if (!strcmp(sub->name, "mandatory")) {
             if (f_mand) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, sub->name, yin->name);
@@ -2808,23 +2825,26 @@ read_yin_choice(struct lys_module *module, struct lys_node *parent, struct lyxml
     }
 
     /* check - default is prohibited in combination with mandatory */
-    if (dflt_str && (choice->flags & LYS_MAND_TRUE)) {
+    if (dflt && (choice->flags & LYS_MAND_TRUE)) {
         LOGVAL(LYE_INCHILDSTMT, LY_VLOG_NONE, NULL, "default", "choice");
         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "The \"default\" statement is forbidden on choices with \"mandatory\".");
         goto error;
     }
 
     /* link default with the case */
-    if (dflt_str) {
-        if (unres_schema_add_str(module, unres, choice, UNRES_CHOICE_DFLT, dflt_str) == -1) {
+    if (dflt) {
+        GETVAL(value, dflt, "value");
+        if (unres_schema_add_str(module, unres, choice, UNRES_CHOICE_DFLT, value) == -1) {
             goto error;
         }
+        lyxml_free(ctx, dflt);
     }
 
     return retval;
 
 error:
 
+    lyxml_free(ctx, dflt);
     lys_node_free(retval, NULL, 0);
 
     return NULL;

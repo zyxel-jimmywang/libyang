@@ -455,7 +455,7 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, const struct lys_node
 
     /* if we have empty non-presence container, we can remove it */
     if (!(options & LYD_OPT_KEEPEMPTYCONT) && schema->nodetype == LYS_CONTAINER && !(*result)->child &&
-            !((struct lys_node_container *)schema)->presence) {
+            !(*result)->attr && !((struct lys_node_container *)schema)->presence) {
         goto clear;
     }
 
@@ -573,13 +573,18 @@ lyd_parse_xml(struct ly_ctx *ctx, struct lyxml_elem **root, int options, ...)
     }
 
     if (options & LYD_OPT_RPCREPLY) {
-        iter = result;
+        last = result;
         result = lyd_new_output(NULL, lys_node_module(rpc), rpc->name);
-        if (iter && lyd_insert(result, iter)) {
-            LOGINT;
-            lyd_free_withsiblings(iter);
-            goto error;
-        }
+        /* insert all the output parameters into RPC */
+        do {
+            iter = last;
+            last = iter->next;
+            if (lyd_insert(result, iter)) {
+                LOGINT;
+                lyd_free_withsiblings(last);
+                goto error;
+            }
+        } while (last);
     }
 
     /* check for missing top level mandatory nodes */

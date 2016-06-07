@@ -111,12 +111,12 @@ lys_get_sibling(const struct lys_node *siblings, const char *mod_name, int mod_n
         if (!type || (node->nodetype & type)) {
             /* module name comparison */
             node_mod_name = lys_node_module(node)->name;
-            if ((node_mod_name != mod_name) && (strncmp(node_mod_name, mod_name, mod_name_len) || node_mod_name[mod_name_len])) {
+            if (!ly_strequal(node_mod_name, mod_name, 1) && (strncmp(node_mod_name, mod_name, mod_name_len) || node_mod_name[mod_name_len])) {
                 continue;
             }
 
             /* direct name check */
-            if ((node->name == name) || (!strncmp(node->name, name, nam_len) && !node->name[nam_len])) {
+            if (ly_strequal(node->name, name, 1) || (!strncmp(node->name, name, nam_len) && !node->name[nam_len])) {
                 if (ret) {
                     *ret = node;
                 }
@@ -324,9 +324,6 @@ check_mand_check(const struct lys_node *node, const struct lys_node *stop, const
                 if (!diter) {
                     /* instance not found */
                     missing_parent = set->set.s[i];
-                    if (toplevel) {
-                        data = NULL;
-                    }
                     break;
                 }
                 data = diter;
@@ -345,7 +342,7 @@ check_mand_check(const struct lys_node *node, const struct lys_node *stop, const
 
     if (node->flags & LYS_MAND_TRUE) {
         if (missing_parent) {
-            LOGVAL(LYE_MISSELEM, LY_VLOG_LYD, data, node->name,
+            LOGVAL(LYE_MISSELEM, LY_VLOG_LYD, toplevel ? NULL : data, node->name,
                    (lys_parent(node) ? lys_parent(node)->name : lys_node_module(node)->name));
             return EXIT_FAILURE;
         }
@@ -580,7 +577,7 @@ repeat_choice:
             }
             /* fallthrough */
         case LYS_OUTPUT:
-            if (!rpc_output) {
+            if ((siter->nodetype == LYS_OUTPUT) && !rpc_output) {
                 /* skip */
                 siter = siter->next;
                 break;
@@ -1874,7 +1871,7 @@ lys_list_free(struct ly_ctx *ctx, struct lys_node_list *list)
     lys_when_free(ctx, list->when);
 
     for (i = 0; i < list->unique_size; i++) {
-        for (j = 0; j > list->unique[i].expr_size; j++) {
+        for (j = 0; j < list->unique[i].expr_size; j++) {
             lydict_remove(ctx, list->unique[i].expr[j]);
         }
         free(list->unique[i].expr);
@@ -2125,9 +2122,7 @@ module_free_common(struct lys_module *module, void (*private_destructor)(const s
 
     /* just free the import array, imported modules will stay in the context */
     for (i = 0; i < module->imp_size; i++) {
-        if (!module->imp[i].external) {
-            lydict_remove(ctx, module->imp[i].prefix);
-        }
+        lydict_remove(ctx, module->imp[i].prefix);
     }
     free(module->imp);
 
@@ -2601,7 +2596,7 @@ lys_node_switch(struct lys_node *dst, struct lys_node *src)
 {
     struct lys_node *child;
 
-    assert((dst->module == src->module) && (dst->name == src->name) && (dst->nodetype == src->nodetype));
+    assert((dst->module == src->module) && ly_strequal(dst->name, src->name, 1) && (dst->nodetype == src->nodetype));
 
     /* sibling next */
     if (dst->prev != dst) {
@@ -2897,6 +2892,26 @@ lys_set_private(const struct lys_node *node, void *priv)
     ((struct lys_node *)node)->priv = priv;
 
     return prev;
+}
+
+int
+lys_leaf_add_leafref_target(struct lys_node_leaf *leafref_target, struct lys_node *leafref)
+{
+    if (leafref_target->nodetype != LYS_LEAF) {
+        LOGINT;
+        return -1;
+    }
+
+    if (!leafref_target->child) {
+        leafref_target->child = (void*)ly_set_new();
+        if (!leafref_target->child) {
+            LOGMEM;
+            return -1;
+        }
+    }
+    ly_set_add((struct ly_set *)leafref_target->child, leafref);
+
+    return 0;
 }
 
 static void

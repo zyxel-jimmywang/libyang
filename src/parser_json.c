@@ -946,7 +946,7 @@ attr_repeat:
 
         /* if we have empty non-presence container, we could remove it immediately if there were no attributes of it, who knows */
         if (!(options & LYD_OPT_KEEPEMPTYCONT) && schema->nodetype == LYS_CONTAINER && !result->child &&
-                !((struct lys_node_container *)schema)->presence) {
+                !result->attr && !((struct lys_node_container *)schema)->presence) {
             if (unres_data_add(unres, result, UNRES_EMPTYCONT)) {
                 goto error;
             }
@@ -1028,7 +1028,7 @@ attr_repeat:
                 list = new;
             }
         } while (data[len] == ',');
-        result = list;
+        result = first_sibling;
 
         if (data[len] != ']') {
             LOGVAL(LYE_XML_INVAL, LY_VLOG_LYD, result, "JSON data (missing end-array)");

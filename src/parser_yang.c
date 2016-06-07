@@ -680,6 +680,7 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
     int ret = -1;
     const char *name, *value;
     LY_DATA_TYPE base;
+    struct lys_type *type_der;
 
     base = typ->base;
     value = transform_schema2json(module, typ->name);
@@ -693,7 +694,7 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
         lydict_remove(module->ctx, value);
         goto error;
     }
-    /* module name*/
+    /* module name */
     name = value;
     if (value[i]) {
         typ->type->module_name = lydict_insert(module->ctx, value, i);
@@ -707,16 +708,19 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
     }
 
     rc = resolve_superior_type(name, typ->type->module_name, module, parent, &typ->type->der);
-    lydict_remove(module->ctx, value);
     if (rc == -1) {
         LOGVAL(LYE_INMOD, LY_VLOG_NONE, NULL, typ->type->module_name);
+        lydict_remove(module->ctx, value);
         goto error;
 
-    /* the type could not be resolved or it was resolved to an unresolved typedef*/
+    /* the type could not be resolved or it was resolved to an unresolved typedef or leafref */
     } else if (rc == EXIT_FAILURE) {
+        LOGVAL(LYE_NORESOLV, LY_VLOG_NONE, NULL, "type", name);
+        lydict_remove(module->ctx, value);
         ret = EXIT_FAILURE;
         goto error;
     }
+    lydict_remove(module->ctx, value);
     typ->type->base = typ->type->der->type.base;
     if (base == 0) {
         base = typ->type->der->type.base;
@@ -827,6 +831,16 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
             } else if (!typ->type->der->type.der) {
                 LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "path", "type");
                 goto error;
+            } else {
+                for (type_der = &typ->type->der->type; !type_der->info.lref.path && type_der->der; type_der = &type_der->der->type);
+                if (!type_der->info.lref.path || !type_der->info.lref.target) {
+                    LOGINT;
+                    goto error;
+                }
+                /* add pointer to leafref target, only on leaves (not in typedefs) */
+                if (lys_leaf_add_leafref_target(type_der->info.lref.target, (struct lys_node *)typ->type->parent)) {
+                    goto error;
+                }
             }
         } else {
             LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid restriction in type \"%s\".", typ->type->parent->name);
@@ -1445,7 +1459,7 @@ yang_read_deviate_units(struct ly_ctx *ctx, struct type_deviation *dev, char *va
 
     if (dev->deviate->mod == LY_DEVIATE_DEL) {
         /* check values */
-        if (*stritem != dev->deviate->units) {
+        if (!ly_strequal(*stritem, dev->deviate->units, 1)) {
             LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, dev->deviate->units, "units");
             LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Value differs from the target being deleted.");
             goto error;
@@ -1637,7 +1651,7 @@ yang_read_deviate_default(struct ly_ctx *ctx, struct type_deviation *dev, char *
         leaf = (struct lys_node_leaf *)dev->target;
 
         if (dev->deviate->mod == LY_DEVIATE_DEL) {
-            if (!leaf->dflt || (leaf->dflt != dev->deviate->dflt)) {
+            if (!leaf->dflt || !ly_strequal(leaf->dflt, dev->deviate->dflt, 1)) {
                 LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, dev->deviate->dflt, "default");
                 LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Value differs from the target being deleted.");
                 goto error;

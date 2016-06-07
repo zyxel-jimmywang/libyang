@@ -84,7 +84,9 @@ log_vprintf(LY_LOG_LEVEL level, uint8_t hide, const char *format, const char *pa
         if (!path) {
             /* erase previous path */
             ((struct ly_err *)&ly_errno)->path_index = LY_BUF_SIZE - 1;
-            ((struct ly_err *)&ly_errno)->path_obj = NULL;
+            if (((struct ly_err *)&ly_errno)->path_obj != NULL + 1) {
+                ((struct ly_err *)&ly_errno)->path_obj = NULL;
+            }
         }
 
         /* if the error-app-tag should be set, do it after calling LOGVAL */
@@ -161,7 +163,7 @@ const char *ly_errs[] = {
 
 /* LYE_OBSDATA */      "Obsolete data \"%s\" instantiated.",
 /* LYE_OBSTYPE */      "Data node \"%s\" with obsolete type \"%s\" instantiated.",
-/* LYE_NORESOLV */     "No resolvents found for \"%s\".",
+/* LYE_NORESOLV */     "No resolvents found for %s \"%s\".",
 /* LYE_INELEM */       "Unknown element \"%s\".",
 /* LYE_INELEM_LEN */   "Unknown element \"%.*s\".",
 /* LYE_MISSELEM */     "Missing required element \"%s\" in \"%s\".",
@@ -309,6 +311,8 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
             if (!((struct lys_node *)elem)->parent ||
                     lys_node_module((struct lys_node *)elem) != lys_node_module(lys_parent((struct lys_node *)elem))) {
                 prefix = lys_node_module((struct lys_node *)elem)->name;
+            } else {
+                prefix = NULL;
             }
             do {
                 elem = lys_parent((struct lys_node *)elem);
@@ -319,6 +323,8 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
             if (!((struct lyd_node *)elem)->parent ||
                     lyd_node_module((struct lyd_node *)elem) != lyd_node_module(((struct lyd_node *)elem)->parent)) {
                 prefix = lyd_node_module((struct lyd_node *)elem)->name;
+            } else {
+                prefix = NULL;
             }
 
             /* handle predicates (keys) in case of lists */
