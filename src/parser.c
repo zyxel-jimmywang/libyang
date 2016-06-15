@@ -573,7 +573,11 @@ upper:
             }
 
             errno = 0;
-            strtoll(c, &tail, 10);
+            if (type->base == LY_TYPE_UINT64) {
+                strtoull(c, &tail, 10);
+            } else {
+                strtoll(c, &tail, 10);
+            }
             if (errno) {
                 goto error;
             }
@@ -597,7 +601,11 @@ upper:
     } else if (isdigit(*c) || (*c == '-') || (*c == '+')) {
         /* number */
         errno = 0;
-        strtoll(c, &tail, 10);
+        if (type->base == LY_TYPE_UINT64) {
+            strtoull(c, &tail, 10);
+        } else {
+            strtoll(c, &tail, 10);
+        }
         if (errno) {
             /* out of range value */
             goto error;
@@ -609,7 +617,7 @@ upper:
 
         if (*c == '|') {
             c++;
-            /* process next length-parth */
+            /* process next length-part */
             goto lengthpart;
         } else if (*c == '\0') {
             goto syntax_ok;

@@ -46,11 +46,11 @@ lyd_check_topmandatory(struct lyd_node *data, struct ly_ctx *ctx, int options)
     int i;
     struct lyd_node *node;
 
-    assert(ctx);
-
     if ((options & LYD_OPT_NOSIBLINGS) || (options & (LYD_OPT_EDIT | LYD_OPT_GET | LYD_OPT_GETCONFIG))) {
         return EXIT_SUCCESS;
     }
+
+    assert(ctx);
 
     if (data && lys_parent(data->schema)) {
         LOGERR(LY_EINVAL, "Subtree are not top-level data.");
@@ -2599,6 +2599,22 @@ lyd_schema_sort(struct lyd_node *sibling, int recursive)
 }
 
 API int
+lyd_validate_leafref(struct lyd_node_leaf_list *leafref)
+{
+    if (!leafref || leafref->value_type != LY_TYPE_LEAFREF) {
+        ly_errno = LY_EINVAL;
+        return EXIT_FAILURE;
+    }
+
+    if (leafref->value.leafref) {
+        /* nothing to do */
+        return EXIT_SUCCESS;
+    }
+
+    return resolve_unres_data_item((struct lyd_node *)leafref, UNRES_LEAFREF);
+}
+
+API int
 lyd_validate(struct lyd_node **node, int options, ...)
 {
     struct lyd_node *root, *next1, *next2, *iter, *to_free = NULL;
@@ -2629,10 +2645,15 @@ lyd_validate(struct lyd_node **node, int options, ...)
             LOGERR(LY_EINVAL, "%s: Invalid variable argument.", __func__);
             goto error;
         }
-    } else {
-        ctx = (*node)->schema->module->ctx;
 
-        if (!(options & LYD_OPT_NOSIBLINGS)) {
+        /* LYD_OPT_NOSIBLINGS has no meanings here */
+        options &= ~LYD_OPT_NOSIBLINGS;
+    } else {
+        if (options & LYD_OPT_NOSIBLINGS) {
+            /* ctx is NULL */
+        } else {
+            ctx = (*node)->schema->module->ctx;
+
             /* check that the node is the first sibling */
             while ((*node)->prev->next) {
                 *node = (*node)->prev;
@@ -3161,10 +3182,6 @@ lyd_free(struct lyd_node *node)
     } else { /* LYS_LEAF | LYS_LEAFLIST */
         /* free value */
         switch (((struct lyd_node_leaf_list *)node)->value_type) {
-        case LY_TYPE_BINARY:
-        case LY_TYPE_STRING:
-            lydict_remove(node->schema->module->ctx, ((struct lyd_node_leaf_list *)node)->value.string);
-            break;
         case LY_TYPE_BITS:
             if (((struct lyd_node_leaf_list *)node)->value.bit) {
                 free(((struct lyd_node_leaf_list *)node)->value.bit);
@@ -4368,7 +4385,7 @@ lyd_wd_top(struct lyd_node **root, struct unres_data *unres, int options, struct
         topset = ly_set_new();
     }
     LY_TREE_FOR(*root, iter) {
-        if (!ctx && !(options & (LYD_OPT_RPC | LYD_OPT_RPCREPLY | LYD_OPT_NOTIF))) {
+        if ((!ctx || (options & LYD_OPT_NOSIBLINGS)) && !(options & (LYD_OPT_RPC | LYD_OPT_RPCREPLY | LYD_OPT_NOTIF))) {
             ly_set_add(topset, lys_node_module(iter->schema)->data);
         }
         if (options & (LYD_OPT_CONFIG | LYD_OPT_EDIT | LYD_OPT_GETCONFIG)) {
@@ -4390,8 +4407,10 @@ lyd_wd_top(struct lyd_node **root, struct unres_data *unres, int options, struct
             }
         }
 
-        if (options & LYD_OPT_NOSIBLINGS) {
-            break;
+        if (!ctx && (options & LYD_OPT_NOSIBLINGS)) {
+            /* done, do not add any missing siblings */
+            ret = EXIT_SUCCESS;
+            goto cleanup;
         }
     }
 
@@ -4401,7 +4420,7 @@ lyd_wd_top(struct lyd_node **root, struct unres_data *unres, int options, struct
         goto cleanup;
     }
 
-    if (ctx) {
+    if (ctx && !(options & LYD_OPT_NOSIBLINGS)) {
         /* add all module data into our internal set */
         for (i = 0; i < (unsigned int)ctx->models.used; i++) {
             if (ctx->models.list[i]->data) {
@@ -4564,6 +4583,12 @@ lyd_defaults_add_unres(struct lyd_node **root, int options, struct ly_ctx *ctx, 
             LOGERR(LY_EINVAL, "Additional invalid data with an RPC, RPC reply, or notification.");
             return EXIT_FAILURE;
         }
+    } else if (*root && (*root)->parent) {
+        /* we have inner node, so it will be considered as
+         * a root of subtree where to add default nodes and
+         * no of its siblings will be affected */
+        options |= LYD_OPT_NOSIBLINGS;
+        ctx = NULL;
     }
 
     /* add default values if needed */
@@ -4604,7 +4629,7 @@ lyd_wd_add(struct ly_ctx *ctx, struct lyd_node **root, int options)
 
     ly_errno = LY_SUCCESS;
 
-    if (!root || (!ctx && !(*root))) {
+    if (!root || (!ctx && !(*root)) || (ctx && !(*root) && (options & LYD_OPT_NOSIBLINGS))) {
         ly_errno = LY_EINVAL;
         return EXIT_FAILURE;
     }
@@ -4624,6 +4649,13 @@ lyd_wd_add(struct ly_ctx *ctx, struct lyd_node **root, int options)
         if (!unres) {
             LOGMEM;
             return EXIT_FAILURE;
+        }
+    }
+
+    if (*root && (ctx || !(options & LYD_OPT_NOSIBLINGS))) {
+        /* check that the node is the first sibling */
+        while ((*root)->prev->next) {
+            *root = (*root)->prev;
         }
     }
 

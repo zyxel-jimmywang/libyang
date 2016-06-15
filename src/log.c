@@ -160,6 +160,7 @@ const char *ly_errs[] = {
 /* LYE_INREGEX */      "Regular expression \"%s\" is not valid (%s).",
 /* LYE_INRESOLV */     "Failed to resolve %s \"%s\".",
 /* LYE_INSTATUS */     "A \"%s\" definition %s references \"%s\" definition %s.",
+/* LYE_CIRC_LEAFREFS */"A circular chain of leafrefs detected.",
 
 /* LYE_OBSDATA */      "Obsolete data \"%s\" instantiated.",
 /* LYE_OBSTYPE */      "Data node \"%s\" with obsolete type \"%s\" instantiated.",
@@ -239,6 +240,7 @@ static const LY_VECODE ecode2vecode[] = {
     LYVE_INREGEX,      /* LYE_INREGEX */
     LYVE_INRESOLV,     /* LYE_INRESOLV */
     LYVE_INSTATUS,     /* LYE_INSTATUS */
+    LYVE_CIRC_LEAFREFS,/* LYE_CIRC_LEAFREFS */
 
     LYVE_OBSDATA,      /* LYE_OBSDATA */
     LYVE_OBSDATA,      /* LYE_OBSTYPE */
@@ -295,6 +297,7 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
 {
     int i;
     struct lys_node_list *slist;
+    struct lys_node *sparent;
     struct lyd_node *dlist, *diter;
     const char *name, *prefix = NULL;
     size_t len;
@@ -308,8 +311,8 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
             break;
         case LY_VLOG_LYS:
             name = ((struct lys_node *)elem)->name;
-            if (!((struct lys_node *)elem)->parent ||
-                    lys_node_module((struct lys_node *)elem) != lys_node_module(lys_parent((struct lys_node *)elem))) {
+            if (!(sparent = lys_parent((struct lys_node *)elem)) ||
+                    lys_node_module((struct lys_node *)elem) != lys_node_module(sparent)) {
                 prefix = lys_node_module((struct lys_node *)elem)->name;
             } else {
                 prefix = NULL;
