@@ -1845,10 +1845,8 @@ resolve_len_ran_interval(const char *str_restr, struct lys_type *type, struct le
         break;
     case LY_TYPE_DEC64:
         kind = 2;
-        local_fmin = -9223372036854775808.0;
-        local_fmin /= 1 << type->info.dec64.dig;
-        local_fmax = 9223372036854775807.0;
-        local_fmax /= 1 << type->info.dec64.dig;
+        local_fmin = ((long double)-9223372036854775808.0) / type->info.dec64.div;
+        local_fmax = ((long double)9223372036854775807.0) / type->info.dec64.div;
 
         if (!str_restr && type->info.dec64.range) {
             str_restr = type->info.dec64.range->expr;
@@ -2304,13 +2302,6 @@ check_leafref:
         while (!match->type.info.lref.path) {
             match = match->type.der;
             assert(match);
-        }
-        if (!match->type.info.lref.target) {
-            /* lefref not resolved yet, not good enough */
-            if (ret) {
-                *ret = NULL;
-            }
-            return EXIT_FAILURE;
         }
     }
     return EXIT_SUCCESS;
@@ -3020,13 +3011,16 @@ resolve_path_predicate_schema(const char *path, const struct lys_node *context_n
         }
         pke_parsed += i;
 
-        /* parent is actually the parent of this leaf, so skip the first ".." */
         for (i = 0, dst_node = parent; i < dest_parent_times; ++i) {
             if (!dst_node) {
                 LOGVAL(LYE_NORESOLV, parent ? LY_VLOG_LYS : LY_VLOG_NONE, parent, "leafref predicate", path_key_expr);
                 return 0;
             }
-            dst_node = lys_parent(dst_node);
+            /* path is supposed to be evaluated in data tree, so we have to skip
+             * all schema nodes that cannot be instantiated in data tree */
+            for (dst_node = lys_parent(dst_node);
+                 dst_node && !(dst_node->nodetype & (LYS_CONTAINER | LYS_LIST));
+                 dst_node = lys_parent(dst_node));
         }
         while (1) {
             if (!dest_pref) {
@@ -3115,30 +3109,22 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
                     return -1;
                 }
 
-                node = lys_parent(parent);
-                i = 0;
-                while (1) {
+                for (i = 0, node = parent; i < parent_times; i++) {
+                    /* path is supposed to be evaluated in data tree, so we have to skip
+                     * all schema nodes that cannot be instantiated in data tree */
+                    for (node = lys_parent(node);
+                         node && !(node->nodetype & (LYS_CONTAINER | LYS_LIST));
+                         node = lys_parent(node));
+
                     if (!node) {
                         LOGVAL(LYE_NORESOLV, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent,
                                "leafref", path);
                         return EXIT_FAILURE;
                     }
 
-                    /* this node is a wrong node, we actually need the augment target */
-                    if (node->nodetype == LYS_AUGMENT) {
-                        node = ((struct lys_node_augment *)node)->target;
-                        if (!node) {
-                            continue;
-                        }
-                    }
-
-                    ++i;
-                    if (i == parent_times) {
-                        break;
-                    }
-                    node = lys_parent(node);
                 }
 
+                /* get first node for lys_get_sibling */
                 node = node->child;
             } else {
                 LOGINT;
@@ -3427,9 +3413,11 @@ inherit_config_flag(struct lys_node *node, int flags)
             continue;
         }
         if (!(node->nodetype & (LYS_USES | LYS_GROUPING))) {
-            node->flags |= flags;
+            node->flags = (node->flags & ~LYS_CONFIG_MASK) | flags;
         }
-        inherit_config_flag(node->child, flags);
+        if (!(node->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYXML))) {
+            inherit_config_flag(node->child, flags);
+        }
     }
 }
 
@@ -3541,7 +3529,7 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
 {
     struct ly_ctx *ctx;
     struct lys_node *node = NULL, *next, *iter;
-    struct lys_node *node_aux;
+    struct lys_node *node_aux, *parent, *tmp;
     struct lys_refine *rfn;
     struct lys_restr *must, **old_must;
     int i, j, rc, parent_flags;
@@ -3572,6 +3560,12 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
             LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, uses->grp->name, "uses");
             LOGVAL(LYE_SPEC, LY_VLOG_LYS, uses, "Copying data from grouping failed.");
             return -1;
+        }
+        /* test the name of siblings */
+        LY_TREE_FOR((uses->parent) ? uses->parent->child : lys_main_module(uses->module)->data, tmp) {
+            if (!(tmp->nodetype & (LYS_USES | LYS_GROUPING | LYS_CASE)) && ly_strequal(tmp->name, node_aux->name, 1)) {
+                return -1;
+            }
         }
     }
     ctx = uses->module->ctx;
@@ -3613,8 +3607,9 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
 
         /* config on any nodetype */
         if (rfn->flags & LYS_CONFIG_MASK) {
-            if (lys_parent(node) &&
-                    ((lys_parent(node)->flags & LYS_CONFIG_MASK) != (rfn->flags & LYS_CONFIG_MASK)) &&
+            for (parent = lys_parent(node); parent && parent->nodetype == LYS_USES; parent = lys_parent(parent));
+            if (parent && parent->nodetype != LYS_GROUPING &&
+                    ((parent->flags & LYS_CONFIG_MASK) != (rfn->flags & LYS_CONFIG_MASK)) &&
                     (rfn->flags & LYS_CONFIG_W)) {
                 /* setting config true under config false is prohibited */
                 LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, "config", "refine");
@@ -4525,6 +4520,9 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
         }
 
         break;
+    case UNRES_TYPE_DER_TPDF:
+        tpdf_flag = 1;
+        /* no break */
     case UNRES_TYPE_DER:
         /* parent */
         node = str_snode;
@@ -4536,7 +4534,7 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
 
         if (yin->flags & LY_YANG_STRUCTURE_FLAG) {
             yang = (struct yang_type *)yin;
-            rc = yang_check_type(mod, node, yang, unres);
+            rc = yang_check_type(mod, node, yang, tpdf_flag, unres);
 
             if (rc) {
                 if (rc == -1) {
@@ -4555,7 +4553,7 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
             }
 
         } else {
-            rc = fill_yin_type(mod, node, yin, stype, unres);
+            rc = fill_yin_type(mod, node, yin, stype, tpdf_flag, unres);
             if (!rc) {
                 /* we need to always be able to free this, it's safe only in this case */
                 lyxml_free(mod->ctx, yin);
@@ -4626,7 +4624,7 @@ print_unres_schema_item_fail(void *item, enum UNRES_ITEM type, void *str_node)
 {
     struct lyxml_elem *xml;
     struct lyxml_attr *attr;
-    const char *type_name;
+    const char *type_name = NULL;
 
     switch (type) {
     case UNRES_IDENT:
@@ -4639,6 +4637,7 @@ print_unres_schema_item_fail(void *item, enum UNRES_ITEM type, void *str_node)
         LOGVRB("Resolving %s \"%s\" failed, it will be attempted later.", "leafref",
                ((struct lys_type *)item)->info.lref.path);
         break;
+    case UNRES_TYPE_DER_TPDF:
     case UNRES_TYPE_DER:
         xml = (struct lyxml_elem *)((struct lys_type *)item)->der;
         if (xml->flags & LY_YANG_STRUCTURE_FLAG) {
@@ -4710,7 +4709,7 @@ resolve_unres_schema(struct lys_module *mod, struct unres_schema *unres)
             /* we do not need to have UNRES_TYPE_IDENTREF resolved, we need its type's base only,
              * but UNRES_TYPE_LEAFREF must be resolved (for storing leafref target pointers) */
             if ((unres->type[i] != UNRES_USES) && (unres->type[i] != UNRES_TYPE_DER)
-                    && (unres->type[i] != UNRES_TYPE_LEAFREF)) {
+                    && (unres->type[i] != UNRES_TYPE_DER_TPDF) && (unres->type[i] != UNRES_TYPE_LEAFREF)) {
                 continue;
             }
 
@@ -4725,6 +4724,10 @@ resolve_unres_schema(struct lys_module *mod, struct unres_schema *unres)
                 /* print the error */
                 resolve_unres_schema_item(mod, unres->item[i], unres->type[i], unres->str_snode[i], unres);
                 return -1;
+            } else {
+                /* forward reference, erase ly_errno */
+                ly_errno = LY_SUCCESS;
+                ly_vecode = LYVE_SUCCESS;
             }
         }
     } while (res_count && (res_count < unres_count));
@@ -4735,7 +4738,7 @@ resolve_unres_schema(struct lys_module *mod, struct unres_schema *unres)
 
         for (i = 0; i < unres->count; ++i) {
             if ((unres->type[i] != UNRES_USES) && (unres->type[i] != UNRES_TYPE_DER)
-                    && (unres->type[i] != UNRES_TYPE_LEAFREF)) {
+                    && (unres->type[i] != UNRES_TYPE_DER_TPDF) && (unres->type[i] != UNRES_TYPE_LEAFREF)) {
                 continue;
             }
             resolve_unres_schema_item(mod, unres->item[i], unres->type[i], unres->str_snode[i], unres);
@@ -4826,19 +4829,25 @@ unres_schema_add_node(struct lys_module *mod, struct unres_schema *unres, void *
     ly_vlog_hide(0);
     if (rc != EXIT_FAILURE) {
         if (rc == -1 && ly_errno == LY_EVALID) {
-            path = strdup(ly_errpath());
-            LOGERR(LY_EVALID, "%s%s%s%s", msg = strdup(ly_errmsg()),
-                   path[0] ? " (path: " : "", path[0] ? path : "", path[0] ? ")" : "");
-            free(path);
-            free(msg);
+            if (ly_log_level >= LY_LLERR) {
+                path = strdup(ly_errpath());
+                msg = strdup(ly_errmsg());
+                LOGERR(LY_EVALID, "%s%s%s%s", msg, path[0] ? " (path: " : "", path[0] ? path : "", path[0] ? ")" : "");
+                free(path);
+                free(msg);
+            }
         }
         return rc;
+    } else {
+        /* erase info about validation errors */
+        ly_errno = LY_SUCCESS;
+        ly_vecode = LYVE_SUCCESS;
     }
 
     print_unres_schema_item_fail(item, type, snode);
 
     /* HACK unlinking is performed here so that we do not do any (NS) copying in vain */
-    if (type == UNRES_TYPE_DER) {
+    if (type == UNRES_TYPE_DER || type == UNRES_TYPE_DER_TPDF) {
         yin = (struct lyxml_elem *)((struct lys_type *)item)->der;
         if (!(yin->flags & LY_YANG_STRUCTURE_FLAG)) {
             lyxml_unlink_elem(mod->ctx, yin, 1);
@@ -4937,6 +4946,7 @@ unres_schema_free_item(struct ly_ctx *ctx, struct unres_schema *unres, uint32_t 
     struct yang_type *yang;
 
     switch (unres->type[i]) {
+    case UNRES_TYPE_DER_TPDF:
     case UNRES_TYPE_DER:
         yin = (struct lyxml_elem *)((struct lys_type *)unres->item[i])->der;
         if (yin->flags & LY_YANG_STRUCTURE_FLAG) {
@@ -5193,11 +5203,14 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int options
                     if (!root) {
                         /* false when condition */
                         ly_vlog_hide(0);
-                        path = strdup(ly_errpath());
-                        LOGERR(LY_EVALID, "%s%s%s%s", msg = strdup(ly_errmsg()), path[0] ? " (path: " : "",
-                               path[0] ? path : "", path[0] ? ")" : "");
-                        free(path);
-                        free(msg);
+                        if (ly_log_level >= LY_LLERR) {
+                            path = strdup(ly_errpath());
+                            msg = strdup(ly_errmsg());
+                            LOGERR(LY_EVALID, "%s%s%s%s", msg,
+                                   path[0] ? " (path: " : "", path[0] ? path : "", path[0] ? ")" : "");
+                            free(path);
+                            free(msg);
+                        }
                         return -1;
                     } /* follows else */
 
@@ -5258,6 +5271,10 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int options
             } else if (rc == -1) {
                 ly_vlog_hide(0);
                 return -1;
+            } else {
+                /* forward reference, erase ly_errno */
+                ly_errno = LY_SUCCESS;
+                ly_vecode = LYVE_SUCCESS;
             }
         }
         first = 0;
@@ -5266,11 +5283,13 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int options
     /* do we have some unresolved when-stmt? */
     if (when_stmt > resolved) {
         ly_vlog_hide(0);
-        path = strdup(ly_errpath());
-        LOGERR(LY_EVALID, "%s%s%s%s", msg = strdup(ly_errmsg()), path[0] ? " (path: " : "",
-               path[0] ? path : "", path[0] ? ")" : "");
-        free(path);
-        free(msg);
+        if (ly_log_level >= LY_LLERR) {
+            path = strdup(ly_errpath());
+            msg = strdup(ly_errmsg());
+            LOGERR(LY_EVALID, "%s%s%s%s", msg, path[0] ? " (path: " : "", path[0] ? path : "", path[0] ? ")" : "");
+            free(path);
+            free(msg);
+        }
         return -1;
     }
 

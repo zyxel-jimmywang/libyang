@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 2.6)
 
-set(api_tests test_libyang test_tree_schema test_xml test_dict test_tree_data test_xpath test_diff)
+set(api_tests test_libyang test_tree_schema test_xml test_dict test_tree_data test_xpath test_diff test_merge)
 set(data_tests test_data_initialization test_leafref_remove test_instid_remove test_keys test_autodel test_when test_defaults test_emptycont test_unique test_mandatory test_json test_parse_print)
 set(schema_yin_tests test_print_transform)
-set(schema_tests test_ietf test_augment test_typedef)
+set(schema_tests test_ietf test_augment test_typedef test_import test_include)
+
+include_directories(SYSTEM ${CMOCKA_INCLUDE_DIR})
 
 foreach(test_name IN LISTS api_tests)
     add_executable(${test_name} api/${test_name}.c)

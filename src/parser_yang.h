@@ -42,14 +42,14 @@ struct lys_node_array{
     uint8_t unique;
     uint8_t tpdf;
     union {
-        uint8_t uni;
+        uint uni;
         uint16_t flags;
     };
     union {
-        uint8_t enm;
-        uint8_t pattern;
-        uint8_t bit;
-        uint8_t deviate;
+        uint enm;
+        uint pattern;
+        uint bit;
+        uint deviate;
     };
     uint16_t refine;
     uint16_t augment;
@@ -177,7 +177,7 @@ void *yang_read_type(struct lys_module *module, void *parent, char *value, enum 
 
 void *yang_read_length(struct lys_module *module, struct yang_type *typ, char *value);
 
-int yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_type *typ, struct unres_schema *unres);
+int yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_type *typ, int tpdftype, struct unres_schema *unres);
 
 void yang_delete_type(struct lys_module *module, struct yang_type *stype);
 
@@ -233,7 +233,7 @@ int yang_check_deviate_unique(struct lys_module *module, struct type_deviation *
 int yang_check_deviation(struct lys_module *module, struct type_deviation *dev, struct unres_schema *unres);
 
 int yang_fill_include(struct lys_module *module, struct lys_submodule *submodule, char *value,
-                      char *rev, int inc_size, struct unres_schema *unres);
+                      char *rev, struct unres_schema *unres);
 
 int yang_use_extension(struct lys_module *module, struct lys_node *data_node, void *actual, char *value);
 

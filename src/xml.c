@@ -594,7 +594,7 @@ parse_text(const char *data, char delim, unsigned int *len)
     int32_t n;
 
     for (*len = o = 0; cdsect || data[*len] != delim; o++) {
-        if (!data[*len] || (!cdsect && !memcmp(&data[*len], "]]>", 2))) {
+        if (!data[*len] || (!cdsect && !memcmp(&data[*len], "]]>", 3))) {
             LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "element content, \"]]>\" found");
             goto error;
         }
@@ -1266,6 +1266,9 @@ lyxml_dump_text(struct lyout *out, const char *text)
         case '>':
             /* not needed, just for readability */
             n += ly_print(out, "&gt;");
+            break;
+        case '"':
+            n += ly_print(out, "&quot;");
             break;
         default:
             ly_write(out, &text[i], 1);

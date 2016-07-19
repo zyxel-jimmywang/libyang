@@ -166,9 +166,11 @@ struct lyd_node_leaf_list {
     /* struct lyd_node *child; should be here, but is not */
 
     /* leaflist's specific members */
-    const char *value_str;           /**< string representation of value (for comparison, printing,...) */
-    lyd_val value;                   /**< node's value representation */
-    LY_DATA_TYPE value_type;         /**< type of the value in the node, mainly for union to avoid repeating of type detection */
+    const char *value_str;           /**< string representation of value (for comparison, printing,...), always corresponds to value_type */
+    lyd_val value;                   /**< node's value representation, always corresponds to schema->type.base */
+    LY_DATA_TYPE value_type;         /**< type of the value in the node, mainly for union to avoid repeating of type detection,
+                                          if (schema->type.base == LY_TYPE_LEAFREF), then value_type may be
+                                          (LY_TYPE_LEAFREF_UNRES | leafref target value_type) and (value.leafref == NULL) */
 };
 
 union lyd_node_anyxml_value {
@@ -666,8 +668,8 @@ struct lyd_node *lyd_new_output_anyxml_xml(struct lyd_node *parent, const struct
  * If \p path points to a list key and the list does not exist, the key value from the predicate is used
  * and \p value is ignored.
  *
- * @param[in] data_tree Existing data tree to add to/modify. It is expected to be valid. If creating RPCs,
- * there should only be one RPC and either input or output. Can be NULL.
+ * @param[in] data_tree Existing data tree to add to/modify. If creating RPCs, there should only be one RPC and
+ * either input or output. Can be NULL.
  * @param[in] ctx Context to use. Mandatory if \p data_tree is NULL.
  * @param[in] path Simple data XPath of the new node. It can contain only simple node addressing with optional
  * module names as prefixes. List nodes must have predicates, one for each list key in the correct order and

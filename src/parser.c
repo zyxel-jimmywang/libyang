@@ -35,6 +35,95 @@
 #include "tree_internal.h"
 #include "parser_yang.h"
 
+#define LYP_URANGE_LEN 19
+
+static char *lyp_ublock2urange[][2] = {
+    {"BasicLatin", "[\\x{0000}-\\x{007F}]"},
+    {"Latin-1Supplement", "[\\x{0080}-\\x{00FF}]"},
+    {"LatinExtended-A", "[\\x{0100}-\\x{017F}]"},
+    {"LatinExtended-B", "[\\x{0180}-\\x{024F}]"},
+    {"IPAExtensions", "[\\x{0250}-\\x{02AF}]"},
+    {"SpacingModifierLetters", "[\\x{02B0}-\\x{02FF}]"},
+    {"CombiningDiacriticalMarks", "[\\x{0300}-\\x{036F}]"},
+    {"Greek", "[\\x{0370}-\\x{03FF}]"},
+    {"Cyrillic", "[\\x{0400}-\\x{04FF}]"},
+    {"Armenian", "[\\x{0530}-\\x{058F}]"},
+    {"Hebrew", "[\\x{0590}-\\x{05FF}]"},
+    {"Arabic", "[\\x{0600}-\\x{06FF}]"},
+    {"Syriac", "[\\x{0700}-\\x{074F}]"},
+    {"Thaana", "[\\x{0780}-\\x{07BF}]"},
+    {"Devanagari", "[\\x{0900}-\\x{097F}]"},
+    {"Bengali", "[\\x{0980}-\\x{09FF}]"},
+    {"Gurmukhi", "[\\x{0A00}-\\x{0A7F}]"},
+    {"Gujarati", "[\\x{0A80}-\\x{0AFF}]"},
+    {"Oriya", "[\\x{0B00}-\\x{0B7F}]"},
+    {"Tamil", "[\\x{0B80}-\\x{0BFF}]"},
+    {"Telugu", "[\\x{0C00}-\\x{0C7F}]"},
+    {"Kannada", "[\\x{0C80}-\\x{0CFF}]"},
+    {"Malayalam", "[\\x{0D00}-\\x{0D7F}]"},
+    {"Sinhala", "[\\x{0D80}-\\x{0DFF}]"},
+    {"Thai", "[\\x{0E00}-\\x{0E7F}]"},
+    {"Lao", "[\\x{0E80}-\\x{0EFF}]"},
+    {"Tibetan", "[\\x{0F00}-\\x{0FFF}]"},
+    {"Myanmar", "[\\x{1000}-\\x{109F}]"},
+    {"Georgian", "[\\x{10A0}-\\x{10FF}]"},
+    {"HangulJamo", "[\\x{1100}-\\x{11FF}]"},
+    {"Ethiopic", "[\\x{1200}-\\x{137F}]"},
+    {"Cherokee", "[\\x{13A0}-\\x{13FF}]"},
+    {"UnifiedCanadianAboriginalSyllabics", "[\\x{1400}-\\x{167F}]"},
+    {"Ogham", "[\\x{1680}-\\x{169F}]"},
+    {"Runic", "[\\x{16A0}-\\x{16FF}]"},
+    {"Khmer", "[\\x{1780}-\\x{17FF}]"},
+    {"Mongolian", "[\\x{1800}-\\x{18AF}]"},
+    {"LatinExtendedAdditional", "[\\x{1E00}-\\x{1EFF}]"},
+    {"GreekExtended", "[\\x{1F00}-\\x{1FFF}]"},
+    {"GeneralPunctuation", "[\\x{2000}-\\x{206F}]"},
+    {"SuperscriptsandSubscripts", "[\\x{2070}-\\x{209F}]"},
+    {"CurrencySymbols", "[\\x{20A0}-\\x{20CF}]"},
+    {"CombiningMarksforSymbols", "[\\x{20D0}-\\x{20FF}]"},
+    {"LetterlikeSymbols", "[\\x{2100}-\\x{214F}]"},
+    {"NumberForms", "[\\x{2150}-\\x{218F}]"},
+    {"Arrows", "[\\x{2190}-\\x{21FF}]"},
+    {"MathematicalOperators", "[\\x{2200}-\\x{22FF}]"},
+    {"MiscellaneousTechnical", "[\\x{2300}-\\x{23FF}]"},
+    {"ControlPictures", "[\\x{2400}-\\x{243F}]"},
+    {"OpticalCharacterRecognition", "[\\x{2440}-\\x{245F}]"},
+    {"EnclosedAlphanumerics", "[\\x{2460}-\\x{24FF}]"},
+    {"BoxDrawing", "[\\x{2500}-\\x{257F}]"},
+    {"BlockElements", "[\\x{2580}-\\x{259F}]"},
+    {"GeometricShapes", "[\\x{25A0}-\\x{25FF}]"},
+    {"MiscellaneousSymbols", "[\\x{2600}-\\x{26FF}]"},
+    {"Dingbats", "[\\x{2700}-\\x{27BF}]"},
+    {"BraillePatterns", "[\\x{2800}-\\x{28FF}]"},
+    {"CJKRadicalsSupplement", "[\\x{2E80}-\\x{2EFF}]"},
+    {"KangxiRadicals", "[\\x{2F00}-\\x{2FDF}]"},
+    {"IdeographicDescriptionCharacters", "[\\x{2FF0}-\\x{2FFF}]"},
+    {"CJKSymbolsandPunctuation", "[\\x{3000}-\\x{303F}]"},
+    {"Hiragana", "[\\x{3040}-\\x{309F}]"},
+    {"Katakana", "[\\x{30A0}-\\x{30FF}]"},
+    {"Bopomofo", "[\\x{3100}-\\x{312F}]"},
+    {"HangulCompatibilityJamo", "[\\x{3130}-\\x{318F}]"},
+    {"Kanbun", "[\\x{3190}-\\x{319F}]"},
+    {"BopomofoExtended", "[\\x{31A0}-\\x{31BF}]"},
+    {"EnclosedCJKLettersandMonths", "[\\x{3200}-\\x{32FF}]"},
+    {"CJKCompatibility", "[\\x{3300}-\\x{33FF}]"},
+    {"CJKUnifiedIdeographsExtensionA", "[\\x{3400}-\\x{4DB5}]"},
+    {"CJKUnifiedIdeographs", "[\\x{4E00}-\\x{9FFF}]"},
+    {"YiSyllables", "[\\x{A000}-\\x{A48F}]"},
+    {"YiRadicals", "[\\x{A490}-\\x{A4CF}]"},
+    {"HangulSyllables", "[\\x{AC00}-\\x{D7A3}]"},
+    {"PrivateUse", "[\\x{E000}-\\x{F8FF}]"},
+    {"CJKCompatibilityIdeographs", "[\\x{F900}-\\x{FAFF}]"},
+    {"AlphabeticPresentationForms", "[\\x{FB00}-\\x{FB4F}]"},
+    {"ArabicPresentationForms-A", "[\\x{FB50}-\\x{FDFF}]"},
+    {"CombiningHalfMarks", "[\\x{FE20}-\\x{FE2F}]"},
+    {"CJKCompatibilityForms", "[\\x{FE30}-\\x{FE4F}]"},
+    {"SmallFormVariants", "[\\x{FE50}-\\x{FE6F}]"},
+    {"ArabicPresentationForms-B", "[\\x{FE70}-\\x{FEFE}]"},
+    {"HalfwidthandFullwidthForms", "[\\x{FF00}-\\x{FFEF}]"},
+    {NULL, NULL}
+};
+
 int
 lyp_is_rpc(struct lys_node *node)
 {
@@ -121,12 +210,13 @@ struct lys_module *
 lyp_search_file(struct ly_ctx *ctx, struct lys_module *module, const char *name, const char *revision,
                 struct unres_schema *unres)
 {
-    size_t len, flen;
+    size_t len, flen, match_len = 0, dir_len;
     int fd;
-    char *wd, *cwd, *model_path;
+    char *wd, *cwd;
     DIR *dir;
-    struct dirent *file, *file_match;
-    LYS_INFORMAT format, format_match;
+    struct dirent *file;
+    char *match_name = NULL;
+    LYS_INFORMAT format, match_format = 0;
     struct lys_module *result = NULL;
     int localsearch = 1;
 
@@ -160,6 +250,7 @@ opendir_search:
         }
     }
     dir = opendir(wd);
+    dir_len = strlen(wd);
     LOGVRB("Searching for \"%s\" in %s.", name, wd);
     if (!dir) {
         LOGWRN("Unable to open directory \"%s\" for searching referenced modules (%s)",
@@ -168,8 +259,6 @@ opendir_search:
         goto searchpath;
     }
 
-    file_match = NULL;
-    format_match = 0;
     while ((file = readdir(dir))) {
         if (strncmp(name, file->d_name, len) ||
                 (file->d_name[len] != '.' && file->d_name[len] != '@')) {
@@ -192,56 +281,46 @@ opendir_search:
                 if (strncmp(revision, &file->d_name[len + 1], strlen(revision))) {
                     /* another revision */
                     continue;
+                } else {
+                    /* exact revision */
+                    free(match_name);
+                    asprintf(&match_name, "%s/%s", wd, file->d_name);
+                    match_len = dir_len + 1 + len;
+                    match_format = format;
+                    goto matched;
                 }
             } else {
-                /* try to find exact revision match, use this only if not found */
-                file_match = file;
-                format_match = format;
+                /* continue trying to find exact revision match, use this only if not found */
+                free(match_name);
+                asprintf(&match_name, "%s/%s", wd, file->d_name);
+                match_len = dir_len + 1 +len;
+                match_format = format;
                 continue;
             }
+        } else {
+            /* remember the revision and try to find the newest one */
+            if (match_name) {
+                int a;
+                if (file->d_name[len] != '@' || lyp_check_date(&file->d_name[len + 1])) {
+                    continue;
+                } else if (match_name[match_len] == '@' &&
+                    (a = strncmp(&match_name[match_len + 1], &file->d_name[len + 1], LY_REV_SIZE - 1)) >= 0) {
+                    continue;
+                }
+                free(match_name);
+            }
+
+            asprintf(&match_name, "%s/%s", wd, file->d_name);
+            match_len = dir_len + 1 + len;
+            match_format = format;
+            continue;
         }
-
-        file_match = file;
-        format_match = format;
-        break;
     }
-
-    if (!file_match) {
-        goto searchpath;
-    }
-
-    /* open the file */
-    fd = open(file_match->d_name, O_RDONLY);
-    if (fd < 0) {
-        LOGERR(LY_ESYS, "Unable to open data model file \"%s\" (%s).",
-               file_match->d_name, strerror(errno));
-        goto cleanup;
-    }
-
-    if (module) {
-        result = (struct lys_module *)lys_submodule_read(module, fd, format_match, unres);
-    } else {
-        result = lys_read_import(ctx, fd, format_match, revision);
-    }
-    close(fd);
-
-    if (!result) {
-        goto cleanup;
-    }
-
-    if (asprintf(&model_path, "%s/%s", wd, file_match->d_name) == -1) {
-        LOGMEM;
-        result = NULL;
-        goto cleanup;
-    }
-    result->filepath = lydict_insert_zc(ctx, model_path);
-    /* success */
-    goto cleanup;
 
 searchpath:
     if (!ctx->models.search_path) {
         LOGWRN("No search path defined for the current context.");
-    } else if (!result && localsearch) {
+    } else if (localsearch) {
         /* search in local directory done, try context's search_path */
         if (dir) {
             closedir(dir);
@@ -257,7 +336,44 @@ searchpath:
         goto opendir_search;
     }
 
-    LOGERR(LY_ESYS, "Data model \"%s\" not found (search path is \"%s\")", name, ctx->models.search_path);
+    if (!match_name) {
+        LOGERR(LY_ESYS, "Data model \"%s\" not found (search path is \"%s\")", name, ctx->models.search_path);
+        goto cleanup;
+    }
+
+matched:
+    /* open the file */
+    fd = open(match_name, O_RDONLY);
+    if (fd < 0) {
+        LOGERR(LY_ESYS, "Unable to open data model file \"%s\" (%s).",
+               match_name, strerror(errno));
+        goto cleanup;
+    }
+
+    /* go back to cwd if changed */
+    if (cwd != wd) {
+        if (chdir(cwd)) {
+            LOGWRN("Unable to return back to working directory \"%s\" (%s)",
+                   cwd, strerror(errno));
+        }
+        free(wd);
+        wd = cwd;
+    }
+
+    if (module) {
+        result = (struct lys_module *)lys_submodule_read(module, fd, match_format, unres);
+    } else {
+        result = lys_read_import(ctx, fd, match_format, revision);
+    }
+    close(fd);
+
+    if (!result) {
+        goto cleanup;
+    }
+
+    result->filepath = lydict_insert_zc(ctx, match_name);
+    match_name = NULL;
+    /* success */
 
 cleanup:
     if (cwd != wd) {
@@ -271,6 +387,7 @@ cleanup:
     if (dir) {
         closedir(dir);
     }
+    free(match_name);
 
     return result;
 }
@@ -437,10 +554,8 @@ validate_length_range(uint8_t kind, uint64_t unum, int64_t snum, long double fnu
 static int
 validate_pattern(const char *val_str, struct lys_type *type, struct lyd_node *node)
 {
-    int i, err_offset;
+    int i;
     pcre *precomp;
-    char *perl_regex;
-    const char *err_ptr;
 
     assert(type->base == LY_TYPE_STRING);
 
@@ -453,35 +568,12 @@ validate_pattern(const char *val_str, struct lys_type *type, struct lyd_node *no
     }
 
     for (i = 0; i < type->info.str.pat_count; ++i) {
-        /*
-         * adjust the expression to a Perl equivalent
-         *
-         * http://www.w3.org/TR/2004/REC-xmlschema-2-20041028/#regexs
-         */
-        perl_regex = malloc((strlen(type->info.str.patterns[i].expr) + 2) * sizeof(char));
-        if (!perl_regex) {
-            LOGMEM;
-            return EXIT_FAILURE;
-        }
-        perl_regex[0] = '\0';
-        strcat(perl_regex, type->info.str.patterns[i].expr);
-        if (strncmp(type->info.str.patterns[i].expr
-                + strlen(type->info.str.patterns[i].expr) - 2, ".*", 2)) {
-            strcat(perl_regex, "$");
-        }
-
-        /* must return 0, already checked during parsing */
-        precomp = pcre_compile(perl_regex, PCRE_ANCHORED | PCRE_DOLLAR_ENDONLY | PCRE_NO_AUTO_CAPTURE,
-                               &err_ptr, &err_offset, NULL);
-        if (!precomp) {
+        if (lyp_check_pattern(type->info.str.patterns[i].expr, &precomp)) {
             LOGINT;
-            free(perl_regex);
             return EXIT_FAILURE;
         }
-        free(perl_regex);
 
         if (pcre_exec(precomp, NULL, val_str, strlen(val_str), 0, 0, NULL, 0)) {
-            free(precomp);
             LOGVAL(LYE_NOCONSTR, LY_VLOG_LYD, node, val_str);
             if (type->info.str.patterns[i].emsg) {
                 LOGVAL(LYE_SPEC, LY_VLOG_LYD, node, type->info.str.patterns[i].emsg);
@@ -489,6 +581,7 @@ validate_pattern(const char *val_str, struct lys_type *type, struct lyd_node *no
             if (type->info.str.patterns[i].eapptag) {
                 strncpy(((struct ly_err *)&ly_errno)->apptag, type->info.str.patterns[i].eapptag, LY_APPTAG_LEN - 1);
             }
+            free(precomp);
             return EXIT_FAILURE;
         }
         free(precomp);
@@ -644,6 +737,94 @@ error:
     }
 
     return ret;
+}
+
+/**
+ * @brief Checks pattern syntax. Logs directly.
+ *
+ * @param[in] pattern Pattern to check.
+ * @param[out] pcre_precomp Precompiled PCRE pattern. Can be NULL.
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE otherwise.
+ */
+int
+lyp_check_pattern(const char *pattern, pcre **pcre_precomp)
+{
+    int idx, start, end, err_offset;
+    char *perl_regex, *ptr;
+    const char *err_msg;
+    pcre *precomp;
+
+    /*
+     * adjust the expression to a Perl equivalent
+     *
+     * http://www.w3.org/TR/2004/REC-xmlschema-2-20041028/#regexs
+     */
+    perl_regex = malloc((strlen(pattern) + 2) * sizeof(char));
+    if (!perl_regex) {
+        LOGMEM;
+        return EXIT_FAILURE;
+    }
+    strcpy(perl_regex, pattern);
+    if (strncmp(pattern + strlen(pattern) - 2, ".*", 2)) {
+        strcat(perl_regex, "$");
+    }
+
+    /* substitute Unicode Character Blocks with exact Character Ranges */
+    while ((ptr = strstr(perl_regex, "\\p{Is"))) {
+        start = ptr - perl_regex;
+
+        ptr = strchr(ptr, '}');
+        if (!ptr) {
+            LOGVAL(LYE_INREGEX, LY_VLOG_NONE, NULL, pattern, perl_regex + start + 2, "unterminated character property");
+            free(perl_regex);
+            return EXIT_FAILURE;
+        }
+
+        end = (ptr - perl_regex) + 1;
+
+        /* need more space */
+        if (end - start < LYP_URANGE_LEN) {
+            perl_regex = ly_realloc(perl_regex, strlen(perl_regex) + (LYP_URANGE_LEN - (end - start)) + 1);
+            if (!perl_regex) {
+                LOGMEM;
+                free(perl_regex);
+                return EXIT_FAILURE;
+            }
+        }
+
+        /* find our range */
+        for (idx = 0; lyp_ublock2urange[idx][0]; ++idx) {
+            if (!memcmp(perl_regex + start + 5, lyp_ublock2urange[idx][0], strlen(lyp_ublock2urange[idx][0]))) {
+                break;
+            }
+        }
+        if (!lyp_ublock2urange[idx][0]) {
+            LOGVAL(LYE_INREGEX, LY_VLOG_NONE, NULL, pattern, perl_regex + start + 5, "unknown block name");
+            free(perl_regex);
+            return EXIT_FAILURE;
+        }
+
+        /* make the space in the string and replace the block */
+        memmove(perl_regex + start + LYP_URANGE_LEN, perl_regex + end, strlen(perl_regex + end) + 1);
+        memcpy(perl_regex + start, lyp_ublock2urange[idx][1], LYP_URANGE_LEN);
+    }
+
+    /* must return 0, already checked during parsing */
+    precomp = pcre_compile(perl_regex, PCRE_ANCHORED | PCRE_DOLLAR_ENDONLY | PCRE_NO_AUTO_CAPTURE,
+                           &err_msg, &err_offset, NULL);
+    free(perl_regex);
+    if (!precomp) {
+        LOGVAL(LYE_INREGEX, LY_VLOG_NONE, NULL, pattern, pattern + err_offset, err_msg);
+        return EXIT_FAILURE;
+    }
+
+    if (pcre_precomp) {
+        *pcre_precomp = precomp;
+    } else {
+        free(precomp);
+    }
+
+    return EXIT_SUCCESS;
 }
 
 /*
@@ -811,7 +992,7 @@ lyp_parse_value_(struct lyd_node_leaf_list *node, struct lys_type *stype, int re
 
         if (parse_int(dec, __INT64_C(-9223372036854775807) - __INT64_C(1), __INT64_C(9223372036854775807), 10, &num,
                       (struct lyd_node *)node)
-                || validate_length_range(2, 0, 0, ((long double)num)/(1 << type->info.dec64.dig), stype,
+                || validate_length_range(2, 0, 0, ((long double)num) / type->info.dec64.div, stype,
                                          node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
@@ -1007,7 +1188,9 @@ lyp_parse_value(struct lyd_node_leaf_list *leaf, struct lyxml_elem *xml, int res
             }
 
             if (!lyp_parse_value_(leaf, type, resolve)) {
-                /* success */
+                /* success, erase set ly_errno and ly_vecode */
+                ly_errno = LY_SUCCESS;
+                ly_vecode = LYVE_SUCCESS;
                 break;
             }
 
@@ -1072,8 +1255,47 @@ lyp_get_next_union_type(struct lys_type *type, struct lys_type *prev_type, int *
     return ret;
 }
 
+
 /* does not log */
 static int
+dup_identity_check(const char *id, struct lys_ident *ident, uint32_t size)
+{
+    uint32_t i;
+
+    for (i = 0; i < size; i++) {
+        if (ly_strequal(id, ident[i].name, 1)) {
+            /* name collision */
+            return EXIT_FAILURE;
+        }
+    }
+
+    return EXIT_SUCCESS;
+}
+
+int
+dup_identities_check(const char *id, struct lys_module *module)
+{
+    struct lys_module *mainmod;    
+    int i;
+
+    if (dup_identity_check(id, module->ident, module->ident_size)) {
+        LOGVAL(LYE_DUPID, LY_VLOG_NONE, NULL, "identity", id);
+        return EXIT_FAILURE;
+    }
+
+    /* check identity in submodules */
+    mainmod = lys_main_module(module);
+    for (i = 0; i < mainmod->inc_size && mainmod->inc[i].submodule; ++i)
+    if (dup_identity_check(id, mainmod->inc[i].submodule->ident, mainmod->inc[i].submodule->ident_size)) {
+        LOGVAL(LYE_DUPID, LY_VLOG_NONE, NULL, "identity", id);
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
+}
+
+/* does not log */
+int
 dup_typedef_check(const char *type, struct lys_tpdf *tpdf, int size)
 {
     int i;
@@ -1129,6 +1351,7 @@ lyp_check_identifier(const char *id, enum LY_IDENT type, struct lys_module *modu
     int size;
     struct lys_tpdf *tpdf;
     struct lys_node *node;
+    struct lys_module *mainmod;
 
     assert(id);
 
@@ -1165,6 +1388,7 @@ lyp_check_identifier(const char *id, enum LY_IDENT type, struct lys_module *modu
         break;
     case LY_IDENT_TYPE:
         assert(module);
+        mainmod = lys_main_module(module);
 
         /* check collision with the built-in types */
         if (!strcmp(id, "binary") || !strcmp(id, "bits") ||
@@ -1213,8 +1437,8 @@ lyp_check_identifier(const char *id, enum LY_IDENT type, struct lys_module *modu
         }
 
         /* check submodule's top-level names */
-        for (i = 0; i < module->inc_size && module->inc[i].submodule; i++) {
-            if (dup_typedef_check(id, module->inc[i].submodule->tpdf, module->inc[i].submodule->tpdf_size)) {
+        for (i = 0; i < mainmod->inc_size && mainmod->inc[i].submodule; i++) {
+            if (dup_typedef_check(id, mainmod->inc[i].submodule->tpdf, mainmod->inc[i].submodule->tpdf_size)) {
                 LOGVAL(LYE_DUPID, LY_VLOG_NONE, NULL, "typedef", id);
                 return EXIT_FAILURE;
             }
@@ -1240,6 +1464,7 @@ lyp_check_identifier(const char *id, enum LY_IDENT type, struct lys_module *modu
         break;
     case LY_IDENT_FEATURE:
         assert(module);
+        mainmod = lys_main_module(module);
 
         /* check feature name uniqness*/
         /* check features in the current module */
@@ -1249,8 +1474,8 @@ lyp_check_identifier(const char *id, enum LY_IDENT type, struct lys_module *modu
         }
 
         /* and all its submodules */
-        for (i = 0; i < module->inc_size && module->inc[i].submodule; i++) {
-            if (dup_feature_check(id, (struct lys_module *)module->inc[i].submodule)) {
+        for (i = 0; i < mainmod->inc_size && mainmod->inc[i].submodule; i++) {
+            if (dup_feature_check(id, (struct lys_module *)mainmod->inc[i].submodule)) {
                 LOGVAL(LYE_DUPID, LY_VLOG_NONE, NULL, "feature", id);
                 return EXIT_FAILURE;
             }
@@ -1272,10 +1497,6 @@ lyp_check_date(const char *date)
     int i;
 
     assert(date);
-
-    if (strlen(date) != LY_REV_SIZE - 1) {
-        goto error;
-    }
 
     for (i = 0; i < LY_REV_SIZE - 1; i++) {
         if (i == 4 || i == 7) {
@@ -1338,6 +1559,76 @@ lyp_check_status(uint16_t flags1, struct lys_module *mod1, const char *name1,
     return EXIT_SUCCESS;
 }
 
+static void
+lyp_check_circmod_pop(struct lys_module *module)
+{
+    struct ly_modules_list *models = &module->ctx->models;
+
+    /* update the list of currently being parsed modules */
+    models->parsing_number--;
+    if (models->parsing_number == 1) {
+        free(models->parsing);
+        models->parsing = NULL;
+        models->parsing_number = models->parsing_size = 0;
+    } else {
+        models->parsing[models->parsing_number] = NULL;
+    }
+}
+
+/*
+ * types: 0 - include, 1 - import
+ */
+static int
+lyp_check_circmod(struct lys_module *module, const char *value, int type)
+{
+    LY_ECODE code = type ? LYE_CIRC_IMPORTS : LYE_CIRC_INCLUDES;
+    struct ly_modules_list *models = &module->ctx->models;
+    int i;
+
+    /* circular import check */
+    if (!models->parsing_size) {
+        if (ly_strequal(module->name, value, 1)) {
+            LOGVAL(code, LY_VLOG_NONE, NULL, value);
+            return -1;
+        }
+
+        /* storing - first import, besides the module being imported, add also the starting module */
+        models->parsing_size = models->parsing_number = 2;
+        models->parsing = malloc(2 * sizeof *models->parsing);
+        if (!models->parsing) {
+            LOGMEM;
+            return -1;
+        }
+        models->parsing[0] = module->name;
+        models->parsing[1] = value;
+    } else {
+        for (i = 0; i < models->parsing_number; i++) {
+            if (ly_strequal(models->parsing[i], value, 1)) {
+                LOGVAL(code, LY_VLOG_NONE, NULL, value);
+                return -1;
+            }
+        }
+        /* storing - enlarge the list of modules being currently parsed */
+        models->parsing_number++;
+        if (models->parsing_number >= models->parsing_size) {
+            models->parsing_size++;
+            models->parsing = ly_realloc(models->parsing, models->parsing_size * sizeof *models->parsing);
+            if (!models->parsing) {
+                LOGMEM;
+                return -1;
+            }
+        }
+        models->parsing[models->parsing_number - 1] = value;
+    }
+
+    return 0;
+}
+
+/* returns:
+ *  0 - inc successfully filled
+ * -1 - error, inc is cleaned
+ *  1 - duplication, ignore the inc structure, inc is cleaned
+ */
 int
 lyp_check_include(struct lys_module *module, struct lys_submodule *submodule, const char *value,
                   struct lys_include *inc, struct unres_schema *unres)
@@ -1345,52 +1636,49 @@ lyp_check_include(struct lys_module *module, struct lys_submodule *submodule, co
     char *module_data;
     void (*module_data_free)(void *module_data) = NULL;
     LYS_INFORMAT format = LYS_IN_UNKNOWN;
-    int count, i;
+    int i, j;
 
     /* check that the submodule was not included yet (previous submodule could have included it) */
     for (i = 0; i < module->inc_size; ++i) {
-        if (module->inc[i].submodule && (ly_strequal(module->inc[i].submodule->name, value, 1))) {
-            /* copy the duplicate into the result */
-            memcpy(inc, &module->inc[i], sizeof *inc);
-
-            if (submodule) {
-                /* we don't care if it was external or not */
-                inc->external = 0;
-            } else if (inc->external) {
-                /* remove the duplicate */
-                --module->inc_size;
-                memmove(&module->inc[i], &module->inc[i + 1], (module->inc_size - i) * sizeof *inc);
-                module->inc = ly_realloc(module->inc, module->inc_size * sizeof *module->inc);
-
-                /* it is no longer external */
-                inc->external = 0;
+        if (!module->inc[i].submodule) {
+            /* skip the not yet filled records */
+            continue;
+        }
+        if (ly_strequal(module->inc[i].submodule->name, value, 1)) {
+            /* check revisions, including multiple revisions of a single module is error */
+            if (inc->rev[0] && (!module->inc[i].submodule->rev_size || strcmp(module->inc[i].submodule->rev[0].date, inc->rev))) {
+                /* the already included submodule has
+                 * - no revision, but here we require some
+                 * - different revision than the one required here */
+                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "include");
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Including multiple revisions of submodule \"%s\".", value);
+                return -1;
             }
-            /* if !submodule && !inc->external, we just create a duplicate so it is detected and ended with error */
+            /* we want to load module, which is already included in the main module */
+            if (!submodule && !module->inc[i].external) {
+                /* it was already included by the main module */
+                LOGWRN("Duplicated include of the \"%s\" submodule in the \"%s\" module.", value, module->name);
+            } else if (submodule && module->inc[i].external) {
+                for (j = 0; j < submodule->inc_size && submodule->inc[j].submodule; j++) {
+                    if (ly_strequal(submodule->inc[j].submodule->name, value, 1)) {
+                        LOGWRN("Duplicated include of the \"%s\" submodule in the \"%s\" submodule.", value, submodule->name);
+                        break;
+                    }
+                }
+            }
 
-            return EXIT_SUCCESS;
+            if (!submodule) {
+                /* the included submodule is no longer external */
+                module->inc[i].external = 0;
+            }
+            return 1;
         }
     }
 
-    /* check for circular include, store it if passed */
-    if (!module->ctx->models.parsing) {
-        count = 0;
-    } else {
-        for (count = 0; module->ctx->models.parsing[count]; ++count) {
-            if (ly_strequal(value, module->ctx->models.parsing[count], 1)) {
-                LOGERR(LY_EVALID, "Circular include dependency on the submodule \"%s\".", value);
-                goto error;
-            }
-        }
+    /* circular include check */
+    if (lyp_check_circmod(module, value, 0)) {
+        return -1;
     }
-    ++count;
-    module->ctx->models.parsing =
-        ly_realloc(module->ctx->models.parsing, (count + 1) * sizeof *module->ctx->models.parsing);
-    if (!module->ctx->models.parsing) {
-        LOGMEM;
-        goto error;
-    }
-    module->ctx->models.parsing[count - 1] = value;
-    module->ctx->models.parsing[count] = NULL;
 
     /* try to load the submodule */
     inc->submodule = (struct lys_submodule *)ly_ctx_get_submodule2(module, value);
@@ -1399,6 +1687,7 @@ lyp_check_include(struct lys_module *module, struct lys_submodule *submodule, co
             if (!inc->submodule->rev_size || !ly_strequal(inc->rev, inc->submodule->rev[0].date, 1)) {
                 LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, inc->rev[0], "revision");
                 LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Multiple revisions of the same submodule included.");
+                lyp_check_circmod_pop(module);
                 goto error;
             }
         }
@@ -1422,107 +1711,151 @@ lyp_check_include(struct lys_module *module, struct lys_submodule *submodule, co
         }
     }
 
-    /* remove the new submodule name now that its parsing is finished (even if failed) */
-    if (module->ctx->models.parsing[count] || !ly_strequal(module->ctx->models.parsing[count - 1], value, 1)) {
-        LOGINT;
-    }
-    --count;
-    if (count) {
-        module->ctx->models.parsing[count] = NULL;
-    } else {
-        free(module->ctx->models.parsing);
-        module->ctx->models.parsing = NULL;
-    }
+    /* update the list of currently being parsed modules */
+    lyp_check_circmod_pop(module);
 
     /* check the result */
     if (!inc->submodule) {
-        LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "include");
+        if (!ly_vecode) {
+            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "include");
+        }
         LOGERR(LY_EVALID, "Including \"%s\" module into \"%s\" failed.", value, module->name);
         goto error;
     }
 
-    return EXIT_SUCCESS;
+    /* propagate submodule's includes and imports into the main module */
+    if (submodule && lyp_propagate_submodule(module, inc)) {
+        goto error;
+    }
+
+    return 0;
 
 error:
 
-    return EXIT_FAILURE;
+    return -1;
 }
 
+/* returns:
+ *  0 - imp successfully filled
+ * -1 - error, imp not cleaned
+ */
 int
 lyp_check_import(struct lys_module *module, const char *value, struct lys_import *imp)
 {
-    int count;
+    int i;
+    struct lys_module *dup = NULL;
+    LY_LOG_LEVEL verb;
 
-    /* check for circular import, store it if passed */
-    if (!module->ctx->models.parsing) {
-        count = 0;
-    } else {
-        for (count = 0; module->ctx->models.parsing[count]; ++count) {
-            if (ly_strequal(value, module->ctx->models.parsing[count], 1)) {
-                LOGERR(LY_EVALID, "Circular import dependency on the module \"%s\".", value);
-                goto error;
+    /* check for importing a single module in multiple revisions */
+    for (i = 0; i < module->imp_size; i++) {
+        if (!module->imp[i].module) {
+            /* skip the not yet filled records */
+            continue;
+        }
+        if (ly_strequal(module->imp[i].module->name, value, 1)) {
+            /* check revisions, including multiple revisions of a single module is error */
+            if (imp->rev[0] && (!module->imp[i].module->rev_size || strcmp(module->imp[i].module->rev[0].date, imp->rev))) {
+                /* the already imported module has
+                 * - no revision, but here we require some
+                 * - different revision than the one required here */
+                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "import");
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Importing multiple revisions of module \"%s\".", value);
+                return -1;
+            } else if (!imp->rev[0]) {
+                /* no revision, remember the duplication, but check revisions after loading the module
+                 * because the current revision can be the same (then it is ok) or it can differ (then it
+                 * is error */
+                dup = module->imp[i].module;
+                break;
             }
+
+            /* there is duplication, but since prefixes differs (checked in caller of this function),
+             * it is ok */
+            imp->module = module->imp[i].module;
+            return 0;
         }
     }
-    ++count;
-    module->ctx->models.parsing =
-        ly_realloc(module->ctx->models.parsing, (count + 1) * sizeof *module->ctx->models.parsing);
-    if (!module->ctx->models.parsing) {
-        LOGMEM;
-        goto error;
+
+    /* circular import check */
+    if (lyp_check_circmod(module, value, 1)) {
+        return -1;
     }
-    module->ctx->models.parsing[count - 1] = value;
-    module->ctx->models.parsing[count] = NULL;
 
     /* try to load the module */
+    if (!imp->rev[0]) {
+        /* no revision specified, try to load the newest module from the search locations into the context */
+        verb = ly_log_level;
+        ly_verb(LY_LLSILENT);
+        ly_ctx_load_module(module->ctx, value, imp->rev[0] ? imp->rev : NULL);
+        ly_verb(verb);
+        if (ly_errno == LY_ESYS) {
+            /* it is ok, that the e.g. input file was not found */
+            ly_errno = LY_SUCCESS;
+        } else if (ly_errno != LY_SUCCESS) {
+            /* but it is not ok if e.g. the input data were found and they are invalid */
+            lyp_check_circmod_pop(module);
+            return -1;
+        }
+
+        /* If the loaded module (if any) is really the newest, it will be loaded on the next line
+         * by ly_ctx_get_module() */
+    }
     imp->module = (struct lys_module *)ly_ctx_get_module(module->ctx, value, imp->rev[0] ? imp->rev : NULL);
     if (!imp->module) {
         /* whether to use a user callback is decided in the function */
         imp->module = (struct lys_module *)ly_ctx_load_module(module->ctx, value, imp->rev[0] ? imp->rev : NULL);
     }
 
-    /* remove the new module name now that its parsing is finished (even if failed) */
-    if (module->ctx->models.parsing[count] || !ly_strequal(module->ctx->models.parsing[count - 1], value, 1)) {
-        LOGINT;
-    }
-    --count;
-    if (count) {
-        module->ctx->models.parsing[count] = NULL;
-    } else {
-        free(module->ctx->models.parsing);
-        module->ctx->models.parsing = NULL;
-    }
+    /* update the list of currently being parsed modules */
+    lyp_check_circmod_pop(module);
 
     /* check the result */
     if (!imp->module) {
-        LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "import");
+        if (!ly_vecode) {
+            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "import");
+        }
         LOGERR(LY_EVALID, "Importing \"%s\" module into \"%s\" failed.", value, module->name);
-        goto error;
+        return -1;
     }
 
-    return EXIT_SUCCESS;
+    if (dup) {
+        /* check the revisions */
+        if ((dup != imp->module) ||
+                (dup->rev_size != imp->module->rev_size && (!dup->rev_size || imp->module->rev_size)) ||
+                (dup->rev_size && strcmp(dup->rev[0].date, imp->module->rev[0].date))) {
+            /* - modules are not the same
+             * - one of modules has no revision (except they both has no revision)
+             * - revisions of the modules are not the same */
+            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "import");
+            LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Importing multiple revisions of module \"%s\".", value);
+            return -1;
+        }
+    }
 
-error:
-
-    return EXIT_FAILURE;
+    return 0;
 }
 
 /* Propagate imports and includes into the main module */
 int
-lyp_propagate_submodule(struct lys_module *module, struct lys_submodule *submodule)
+lyp_propagate_submodule(struct lys_module *module, struct lys_include *inc)
 {
-    int i, j, r;
+    uint8_t i, j;
+    size_t size;
     struct lys_include *aux_inc;
     struct lys_import *aux_imp;
+    struct lys_import *impiter;
+    struct ly_set *set;
+
+    set = ly_set_new();
 
     /* propagate imports into the main module */
-    for (i = r = 0; i < submodule->imp_size; i++) {
+    for (i = 0; i < inc->submodule->imp_size; i++) {
         for (j = 0; j < module->imp_size; j++) {
-            if (submodule->imp[i].module == module->imp[j].module &&
-                    !strcmp(submodule->imp[i].rev, module->imp[j].rev)) {
+            if (inc->submodule->imp[i].module == module->imp[j].module &&
+                    !strcmp(inc->submodule->imp[i].rev, module->imp[j].rev)) {
                 /* check prefix match */
-                if (!ly_strequal(submodule->imp[i].prefix, module->imp[j].prefix, 1)) {
-                    LOGVAL(LYE_INID, LY_VLOG_NONE, NULL, submodule->imp[i].prefix,
+                if (!ly_strequal(inc->submodule->imp[i].prefix, module->imp[j].prefix, 1)) {
+                    LOGVAL(LYE_INID, LY_VLOG_NONE, NULL, inc->submodule->imp[i].prefix,
                            "non-matching prefixes of imported module in main module and submodule");
                     goto error;
                 }
@@ -1531,76 +1864,65 @@ lyp_propagate_submodule(struct lys_module *module, struct lys_submodule *submodu
         }
         if (j == module->imp_size) {
             /* new import */
-            r++;
+            ly_set_add(set, &inc->submodule->imp[i], LY_SET_OPT_USEASLIST);
         }
     }
-    if (r) {
-        aux_imp = realloc(module->imp, (module->imp_size + r) * sizeof *module->imp);
+    if (set->number) {
+        if (!(void*)module->imp) {
+            /* no import array in main module */
+            i = 0;
+        } else {
+            /* get array size by searching for stop block */
+            for (i = 0; (void*)module->imp[i].module != (void*)0x1; i++);
+        }
+        size = (i + set->number) * sizeof *module->imp;
+        aux_imp = realloc(module->imp, size + sizeof(void*));
         if (!aux_imp) {
             LOGMEM;
             goto error;
         }
         module->imp = aux_imp;
-        for (i = r = 0; i < submodule->imp_size; i++) {
-            for (j = 0; j < module->imp_size; j++) {
-                if (submodule->imp[i].module == module->imp[j].module) {
-                    break;
-                }
-            }
-            if (j == module->imp_size) {
-                /* new import */
-                /* check prefix uniqueness */
-                if (dup_prefix_check(submodule->imp[i].prefix, module)) {
-                    LOGVAL(LYE_DUPID, LY_VLOG_NONE, NULL, "prefix", submodule->imp[i].prefix);
-                    goto error;
-                }
-                memcpy(&module->imp[module->imp_size + r], &submodule->imp[i], sizeof *submodule->imp);
-                module->imp[module->imp_size + r].prefix = lydict_insert(module->ctx, module->imp[module->imp_size + r].prefix, 0);
-                module->imp[module->imp_size + r].external = 1;
-                r++;
-            }
-        }
-        module->imp_size += r;
-    }
+        memset(&module->imp[module->imp_size + set->number], 0, (i - module->imp_size) * sizeof *module->imp);
+        module->imp[i + set->number].module = (void*)0x1; /* set stop block */
 
-    /* propagate includes into the main module */
-    for (i = r = 0; i < submodule->inc_size; i++) {
-        for (j = 0; j < module->inc_size; j++) {
-            if (submodule->inc[i].submodule == module->inc[j].submodule) {
-                break;
-            }
-        }
-        if (j == module->inc_size) {
-            /* new include */
-            r++;
-        }
-    }
+        for (i = 0; i < set->number; i++) {
+            impiter = (struct lys_import *)set->set.g[i];
 
-    if (r) {
-        aux_inc = realloc(module->inc, (module->inc_size + r) * sizeof *module->inc);
-        if (!aux_inc) {
-            LOGMEM;
-            goto error;
-        }
-        module->inc = aux_inc;
-        for (i = r = 0; i < submodule->inc_size; i++) {
-            for (j = 0; j < module->inc_size; j++) {
-                if (submodule->inc[i].submodule == module->inc[j].submodule) {
-                    break;
-                }
+            /* check prefix uniqueness */
+            if (dup_prefix_check(impiter->prefix, module)) {
+                LOGVAL(LYE_DUPID, LY_VLOG_NONE, NULL, "prefix", impiter->prefix);
+                goto error;
             }
-            if (j == module->inc_size) {
-                /* new include */
-                memcpy(&module->inc[module->inc_size + r], &submodule->inc[i], sizeof *submodule->inc);
-                module->inc[module->inc_size + r].external = 1;
-                r++;
-            }
+
+            memcpy(&module->imp[module->imp_size], impiter, sizeof *module->imp);
+            module->imp[module->imp_size].prefix = lydict_insert(module->ctx, impiter->prefix, 0);
+            module->imp[module->imp_size].external = 1;
+            module->imp_size++;
         }
-        module->inc_size += r;
     }
+    ly_set_free(set);
+    set = NULL;
+
+    /* propagate the included submodule into the main module */
+    for (i = 0; (void*)module->inc[i].submodule != (void*)0x1; i++); /* get array size by searching for stop block */
+    size = (i + 1) * sizeof *module->inc;
+    aux_inc = realloc(module->inc, size + sizeof(void*));
+    if (!aux_inc) {
+        LOGMEM;
+        goto error;
+    }
+    module->inc = aux_inc;
+    memset(&module->inc[module->inc_size + 1], 0, (i - module->inc_size) * sizeof *module->inc);
+    module->inc[i + 1].submodule = (void*)0x1; /* set stop block */
+
+    memcpy(&module->inc[module->inc_size], inc, sizeof *module->inc);
+    module->inc[module->inc_size].external = 1;
+    module->inc_size++;
+
     return EXIT_SUCCESS;
 
 error:
+    ly_set_free(set);
     return EXIT_FAILURE;
 }
 

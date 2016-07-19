@@ -13,7 +13,6 @@
  */
 
 #include <ctype.h>
-#include <pcre.h>
 #include "parser_yang.h"
 #include "parser_yang_lex.h"
 #include "parser.h"
@@ -30,6 +29,61 @@ yang_check_string(struct lys_module *module, const char **target, char *what, ch
         *target = lydict_insert_zc(module->ctx, value);
         return 0;
     }
+}
+
+static int
+yang_check_typedef_identif(struct lys_node *root, struct lys_node *node, char *id)
+{
+    struct lys_node *child, *next;
+    int size;
+    struct lys_tpdf *tpdf;
+
+
+    if (root) {
+        node = root;
+    }
+
+    do {
+        LY_TREE_DFS_BEGIN(node, next, child) {
+            if (child->nodetype & (LYS_CONTAINER | LYS_LIST | LYS_GROUPING | LYS_RPC | LYS_INPUT | LYS_OUTPUT | LYS_NOTIF)) {
+                switch (child->nodetype) {
+                case LYS_CONTAINER:
+                    tpdf = ((struct lys_node_container *)child)->tpdf;
+                    size = ((struct lys_node_container *)child)->tpdf_size;
+                    break;
+                case LYS_LIST:
+                    tpdf = ((struct lys_node_list *)child)->tpdf;
+                    size = ((struct lys_node_list *)child)->tpdf_size;
+                    break;
+                case LYS_GROUPING:
+                    tpdf = ((struct lys_node_grp *)child)->tpdf;
+                    size = ((struct lys_node_grp *)child)->tpdf_size;
+                    break;
+                case LYS_RPC:
+                    tpdf = ((struct lys_node_rpc *)child)->tpdf;
+                    size = ((struct lys_node_rpc *)child)->tpdf_size;
+                    break;
+                case LYS_INPUT:
+                case LYS_OUTPUT:
+                    tpdf = ((struct lys_node_rpc_inout *)child)->tpdf;
+                    size = ((struct lys_node_rpc_inout *)child)->tpdf_size;
+                    break;
+                case LYS_NOTIF:
+                    tpdf = ((struct lys_node_notif *)child)->tpdf;
+                    size = ((struct lys_node_notif *)child)->tpdf_size;
+                    break;
+                default:
+                    size = 0;
+                    break;
+                }
+                if (size && dup_typedef_check(id, tpdf, size)) {
+                    LOGVAL(LYE_DUPID, LY_VLOG_NONE, NULL, "typedef", id);
+                    return EXIT_FAILURE;
+                }
+            } 
+        LY_TREE_DFS_END(node, next, child)}
+    } while (root && (node = node->next));
+    return EXIT_SUCCESS;
 }
 
 int
@@ -90,29 +144,17 @@ int
 yang_fill_import(struct lys_module *module, struct lys_import *imp, char *value)
 {
     const char *exp;
-    int rc, i;
+    int rc;
 
     exp = lydict_insert_zc(module->ctx, value);
     rc = lyp_check_import(module, exp, imp);
     lydict_remove(module->ctx, exp);
+    module->imp_size++;
     if (rc) {
-        goto error;
+        return EXIT_FAILURE;
     }
 
-    /* check duplicities in imported modules */
-    for (i = 0; i < module->imp_size; i++) {
-        if (!strcmp(module->imp[i].module->name, module->imp[module->imp_size].module->name)) {
-            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, module->imp[i].module->name, "import");
-            LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Importing module \"%s\" repeatedly.", module->imp[i].module->name);
-            goto error;
-        }
-    }
-    module->imp_size++;
     return EXIT_SUCCESS;
-
-error:
-    module->imp_size++;
-    return EXIT_FAILURE;
 }
 
 int
@@ -269,6 +311,10 @@ yang_read_identity(struct lys_module *module, char *value)
     ret = &module->ident[module->ident_size];
     ret->name = lydict_insert_zc(module->ctx, value);
     ret->module = module;
+    if (dup_identities_check(ret->name, module)) {
+        lydict_remove(module->ctx, ret->name);
+        return NULL;
+    }
     module->ident_size++;
     return ret;
 }
@@ -674,13 +720,13 @@ end:
 }
 
 int
-yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_type *typ, struct unres_schema *unres)
+yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_type *typ, int tpdftype, struct unres_schema *unres)
 {
     int i, rc;
     int ret = -1;
     const char *name, *value;
     LY_DATA_TYPE base;
-    struct lys_type *type_der;
+    struct lys_node *siter;
 
     base = typ->base;
     value = transform_schema2json(module, typ->name);
@@ -817,6 +863,15 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
                 goto error;
             }
         } else if (typ->type->base == LY_TYPE_LEAFREF) {
+            /* flag resolving for later use */
+            if (!tpdftype) {
+                for (siter = parent; siter && siter->nodetype != LYS_GROUPING; siter = lys_parent(siter));
+                if (siter) {
+                    /* just a flag - do not resolve */
+                    tpdftype = 1;
+                }
+            }
+
             if (typ->type->info.lref.path) {
                 value = typ->type->info.lref.path;
                 /* store in the JSON format */
@@ -825,20 +880,29 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
                 if (!typ->type->info.lref.path) {
                     goto error;
                 }
-                if (unres_schema_add_node(module, unres, typ->type, UNRES_TYPE_LEAFREF, parent) == -1) {
+                /* try to resolve leafref path only when this is instantiated
+                 * leaf, so it is not:
+                 * - typedef's type,
+                 * - in  grouping definition,
+                 * - just instantiated in a grouping definition,
+                 * because in those cases the nodes referenced in path might not be present
+                 * and it is not a bug.  */
+                if (!tpdftype && unres_schema_add_node(module, unres, typ->type, UNRES_TYPE_LEAFREF, parent) == -1) {
                     goto error;
                 }
             } else if (!typ->type->der->type.der) {
                 LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "path", "type");
                 goto error;
             } else {
-                for (type_der = &typ->type->der->type; !type_der->info.lref.path && type_der->der; type_der = &type_der->der->type);
-                if (!type_der->info.lref.path || !type_der->info.lref.target) {
-                    LOGINT;
+                /* copy leafref definition into the derived type */
+                typ->type->info.lref.path = lydict_insert(module->ctx, typ->type->der->type.info.lref.path, 0);
+                /* and resolve the path at the place we are (if not in grouping/typedef) */
+                if (!tpdftype && unres_schema_add_node(module, unres, typ->type, UNRES_TYPE_LEAFREF, parent) == -1) {
                     goto error;
                 }
+
                 /* add pointer to leafref target, only on leaves (not in typedefs) */
-                if (lys_leaf_add_leafref_target(type_der->info.lref.target, (struct lys_node *)typ->type->parent)) {
+                if (typ->type->info.lref.target && lys_leaf_add_leafref_target(typ->type->info.lref.target, (struct lys_node *)typ->type->parent)) {
                     goto error;
                 }
             }
@@ -870,7 +934,8 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
             goto error;
         }
         for (i = 0; i < typ->type->info.uni.count; i++) {
-            if (unres_schema_add_node(module, unres, &typ->type->info.uni.types[i], UNRES_TYPE_DER, parent)) {
+            if (unres_schema_add_node(module, unres, &typ->type->info.uni.types[i],
+                                      tpdftype ? UNRES_TYPE_DER_TPDF : UNRES_TYPE_DER, parent)) {
                 goto error;
             }
             if (typ->type->info.uni.types[i].base == LY_TYPE_EMPTY) {
@@ -1033,18 +1098,10 @@ error:
 void *
 yang_read_pattern(struct lys_module *module, struct yang_type *typ, char *value)
 {
-    pcre *precomp;
-    int err_offset;
-    const char *err_ptr;
-
-    /* check that the regex is valid */
-    precomp = pcre_compile(value, PCRE_NO_AUTO_CAPTURE, &err_ptr, &err_offset, NULL);
-    if (!precomp) {
-        LOGVAL(LYE_INREGEX, LY_VLOG_NONE, NULL, value, err_ptr);
+    if (lyp_check_pattern(value, NULL)) {
         free(value);
         return NULL;
     }
-    free(precomp);
 
     typ->type->info.str.patterns[typ->type->info.str.pat_count].expr = lydict_insert_zc(module->ctx, value);
     typ->type->info.str.pat_count++;
@@ -1079,6 +1136,8 @@ error:
 int
 yang_read_fraction(struct yang_type *typ, uint32_t value)
 {
+    unsigned int i;
+
     if (typ->base == 0 || typ->base == LY_TYPE_DEC64) {
         typ->base = LY_TYPE_DEC64;
     } else {
@@ -1095,6 +1154,10 @@ yang_read_fraction(struct yang_type *typ, uint32_t value)
         goto error;
     }
     typ->type->info.dec64.dig = value;
+    typ->type->info.dec64.div = 10;
+    for (i = 1; i < value; i++) {
+        typ->type->info.dec64.div *= 10;
+    }
     return EXIT_SUCCESS;
 
 error:
@@ -1237,11 +1300,14 @@ void *
 yang_read_typedef(struct lys_module *module, struct lys_node *parent, char *value)
 {
     struct lys_tpdf *ret;
+    struct lys_node *root;
 
-    if (lyp_check_identifier(value, LY_IDENT_TYPE, module, parent)) {
+    root = (parent) ? NULL : lys_main_module(module)->data;
+    if (lyp_check_identifier(value, LY_IDENT_TYPE, module, parent) || yang_check_typedef_identif(root, parent, value)) {
         free(value);
         return NULL;
     }
+
     if (!parent) {
         ret = &module->tpdf[module->tpdf_size];
         module->tpdf_size++;
@@ -1971,38 +2037,30 @@ yang_check_deviation(struct lys_module *module, struct type_deviation *dev, stru
 
 int
 yang_fill_include(struct lys_module *module, struct lys_submodule *submodule, char *value,
-                  char *rev, int inc_size, struct unres_schema *unres)
+                  char *rev, struct unres_schema *unres)
 {
     struct lys_include inc;
     struct lys_module *trg;
-    int i;
     const char *str;
+    int rc;
+    int ret = 0;
 
     str = lydict_insert_zc(module->ctx, value);
     trg = (submodule) ? (struct lys_module *)submodule : module;
     inc.submodule = NULL;
     inc.external = 0;
     memcpy(inc.rev, rev, LY_REV_SIZE);
-    if (lyp_check_include(module, submodule, str, &inc, unres)) {
-        goto error;
+    rc = lyp_check_include(module, submodule, str, &inc, unres);
+    if (!rc) {
+        /* success, copy the filled data into the final array */
+        memcpy(&trg->inc[trg->inc_size], &inc, sizeof inc);
+        trg->inc_size++;
+    } else if (rc == -1) {
+        ret = -1;
     }
-    memcpy(&trg->inc[inc_size], &inc, sizeof inc);
 
-    /* check duplications in include submodules */
-    for (i = 0; i < inc_size; ++i) {
-        if (trg->inc[i].submodule && !strcmp(trg->inc[i].submodule->name, trg->inc[inc_size].submodule->name)) {
-            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, trg->inc[i].submodule->name, "include");
-            LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Including submodule \"%s\" repeatedly.", trg->inc[i].submodule->name);
-            trg->inc[inc_size].submodule = NULL;
-            goto error;
-        }
-    }
     lydict_remove(module->ctx, str);
-    return EXIT_SUCCESS;
-
-error:
-    lydict_remove(module->ctx, str);
-    return EXIT_FAILURE;
+    return ret;
 }
 
 int
@@ -2219,6 +2277,9 @@ yang_read_module(struct ly_ctx *ctx, const char* data, unsigned int size, const 
             goto error;
         }
         for (i = 0; i < module->inc_size; ++i) {
+            if (!module->inc[i].submodule) {
+                continue;
+            }
             if (lys_sub_module_set_dev_aug_target_implement((struct lys_module *)module->inc[i].submodule)) {
                 goto error;
             }

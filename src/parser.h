@@ -15,6 +15,8 @@
 #ifndef LY_PARSER_H_
 #define LY_PARSER_H_
 
+#include <pcre.h>
+
 #include "libyang.h"
 #include "tree_schema.h"
 #include "tree_internal.h"
@@ -63,12 +65,18 @@ int lyp_parse_value(struct lyd_node_leaf_list *leaf, struct lyxml_elem *xml, int
 
 int lyp_check_length_range(const char *expr, struct lys_type *type);
 
+int lyp_check_pattern(const char *pattern, pcre **pcre_precomp);
+
 int fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_elem *yin, struct lys_type *type,
-                  struct unres_schema *unres);
+                  int tpdftype, struct unres_schema *unres);
 
 int lyp_check_status(uint16_t flags1, struct lys_module *mod1, const char *name1,
                      uint16_t flags2, struct lys_module *mod2, const char *name2,
                      const struct lys_node *node);
+
+int dup_typedef_check(const char *type, struct lys_tpdf *tpdf, int size);
+
+int dup_identities_check(const char *id, struct lys_module *module);
 
 /**
  * @brief Get know if the node is part of the RPC's input/output
@@ -99,11 +107,11 @@ int lyp_check_import(struct lys_module *module, const char *value, struct lys_im
  * @brief Propagate imports and includes into the main module
  *
  * @param module Main module
- * @param submodule
+ * @param inc Filled include structure
  * @param line
  * @return 0 for success, 1 for failure
  */
-int lyp_propagate_submodule(struct lys_module *module, struct lys_submodule *submodule);
+int lyp_propagate_submodule(struct lys_module *module, struct lys_include *inc);
 
 int lyp_ctx_add_module(struct lys_module **module);
 
