@@ -50,6 +50,8 @@ struct lys_node_array{
         uint pattern;
         uint bit;
         uint deviate;
+        uint keys;
+        uint base;
     };
     uint16_t refine;
     uint16_t augment;
@@ -82,8 +84,8 @@ struct type_node {
         struct lys_node_leaf *ptr_leaf;
         struct lys_tpdf *ptr_tpdf;
         struct lys_node_augment *ptr_augment;
-        struct lys_node_rpc *ptr_rpc;
-        struct lys_node_rpc_inout *ptr_inout;
+        struct lys_node_rpc_action *ptr_rpc;
+        struct lys_node_inout *ptr_inout;
     };
     uint8_t flag;
 };
@@ -110,11 +112,13 @@ struct yang_type {
 
 #include "parser_yang_bis.h"
 
-char * yang_read_string(const char *input, int size, int indent);
+char * yang_read_string(const char *input, int size, int indent, int version);
 
 int yang_read_common(struct lys_module *module,char *value, enum yytokentype type);
 
-int yang_read_prefix(struct lys_module *module, void *save, char *value, enum yytokentype type);
+int yang_read_prefix(struct lys_module *module, struct lys_import *imp, char *value);
+
+int yang_check_version(struct lys_module *module, struct lys_submodule *submodule, char *value, int repeat);
 
 /**
  * @brief Add node to the array
@@ -165,6 +169,8 @@ void *yang_read_when(struct lys_module *module, struct lys_node *node, enum yyto
 */
 void * yang_read_node(struct lys_module *module, struct lys_node *parent, char *value, int nodetype, int sizeof_struct);
 
+void *yang_read_action(struct lys_module *module, struct lys_node *parent, char *value);
+
 int yang_read_default(struct lys_module *module, void *node, char *value, enum yytokentype type);
 
 int yang_read_units(struct lys_module *module, void *node, char *value, enum yytokentype type);
@@ -181,7 +187,7 @@ int yang_check_type(struct lys_module *module, struct lys_node *parent, struct y
 
 void yang_delete_type(struct lys_module *module, struct yang_type *stype);
 
-void *yang_read_pattern(struct lys_module *module, struct yang_type *typ, char *value);
+int yang_read_pattern(struct lys_module *module, struct lys_restr *pattern, char *value, char modifier);
 
 void *yang_read_range(struct  lys_module *module, struct yang_type *typ, char *value);
 
@@ -233,7 +239,7 @@ int yang_check_deviate_unique(struct lys_module *module, struct type_deviation *
 int yang_check_deviation(struct lys_module *module, struct type_deviation *dev, struct unres_schema *unres);
 
 int yang_fill_include(struct lys_module *module, struct lys_submodule *submodule, char *value,
-                      char *rev, struct unres_schema *unres);
+                      struct lys_include *inc, struct unres_schema *unres);
 
 int yang_use_extension(struct lys_module *module, struct lys_node *data_node, void *actual, char *value);
 

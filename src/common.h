@@ -91,7 +91,7 @@ char *ly_buf(void);
 /*
  * logger
  */
-extern volatile uint8_t ly_log_level;
+extern volatile int8_t ly_log_level;
 
 void ly_log(LY_LOG_LEVEL level, const char *format, ...);
 
@@ -137,6 +137,7 @@ typedef enum {
     LYE_EOF,
     LYE_INSTMT,
     LYE_INCHILDSTMT,
+    LYE_INPAR,
     LYE_INID,
     LYE_INDATE,
     LYE_INARG,
@@ -148,9 +149,13 @@ typedef enum {
     LYE_DUPLEAFLIST,
     LYE_DUPLIST,
     LYE_NOUNIQ,
+    LYE_ENUM_INVAL,
+    LYE_ENUM_INNAME,
     LYE_ENUM_DUPVAL,
     LYE_ENUM_DUPNAME,
     LYE_ENUM_WS,
+    LYE_BITS_INVAL,
+    LYE_BITS_INNAME,
     LYE_BITS_DUPVAL,
     LYE_BITS_DUPNAME,
     LYE_INMOD,
@@ -164,8 +169,10 @@ typedef enum {
     LYE_INRESOLV,
     LYE_INSTATUS,
     LYE_CIRC_LEAFREFS,
+    LYE_CIRC_FEATURES,
     LYE_CIRC_IMPORTS,
     LYE_CIRC_INCLUDES,
+    LYE_INVER,
 
     LYE_OBSDATA,
     LYE_OBSTYPE,
@@ -190,7 +197,9 @@ typedef enum {
     LYE_NOREQINS,
     LYE_NOLEAFREF,
     LYE_NOMANDCHOICE,
+    LYE_INACT,
 
+    LYE_XPATH_INSNODE,
     LYE_XPATH_INTOK,
     LYE_XPATH_EOF,
     LYE_XPATH_INOP_1,
@@ -222,6 +231,9 @@ void ly_vlog(LY_ECODE code, enum LY_VLOG_ELEM elem_type, const void *elem, ...);
 #define LOGPATH(elem_type, elem) ly_vlog(LYE_PATH, elem_type, elem)
 
 void ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *path, uint16_t *index);
+
+struct lys_module *ly_ctx_load_sub_module(struct ly_ctx *ctx, struct lys_module *module, const char *name,
+                                          const char *revision, int implement, struct unres_schema *unres);
 
 /**
  * @brief Basic functionality like strpbrk(3). However, it searches string \p s

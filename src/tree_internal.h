@@ -59,6 +59,11 @@ struct internal_modules {
 #define LY_NSNACM "urn:ietf:params:xml:ns:yang:ietf-netconf-acm"
 
 /**
+ * @brief internal parser flag for actions
+ */
+#define LYD_OPT_ACTION 0x80
+
+/**
  * @brief Internal list of built-in types
  */
 struct ly_types {
@@ -286,6 +291,15 @@ void lys_free(struct lys_module *module, void (*private_destructor)(const struct
 int ly_check_mandatory(const struct lyd_node *data, const struct lys_node *schema, int status, int rpc_output);
 
 /**
+ * @brief Create a data container knowing it's schema node.
+ *
+ * @param[in] parent Data parent of the new node.
+ * @param[in] schema Schema node of the new node.
+ * @return New node, NULL on error.
+ */
+struct lyd_node *_lyd_new(struct lyd_node *parent, const struct lys_node *schema);
+
+/**
  * @brief Find the parent node of an attribute.
  *
  * @param[in] root Root element of the data tree with the attribute.
@@ -354,12 +368,18 @@ int lys_get_data_sibling(const struct lys_module *mod, const struct lys_node *si
  *
  * @param[in] first First data node to compare.
  * @param[in] second Second node to compare.
+ * @param[in] action Option to specify what will be checked:
+ *            -1 - compare keys and all uniques
+ *             0 - compare only keys
+ *             n - compare n-th unique
  * @param[in] printval Flag for printing validation errors, useful for internal (non-validation) use of this function
  * @return 1 if both the nodes are the same from the YANG point of view,
  *         0 if they differ,
  *         -1 on error.
  */
-int lyd_list_equal(struct lyd_node *first, struct lyd_node *second, int printval);
+int lyd_list_equal(struct lyd_node *first, struct lyd_node *second, int action, int printval);
+
+const char *lyd_get_default(const char* unique_expr, struct lyd_node *list);
 
 /**
  * @brief Check for (validate) top-level mandatory nodes of a data tree.
@@ -394,8 +414,6 @@ int lyd_check_topmandatory(struct lyd_node *data, struct ly_ctx *ctx, int option
  * @return 0 on success, nonzero on failure.
  */
 int lyd_defaults_add_unres(struct lyd_node **node, int options, struct ly_ctx *ctx, struct unres_data *unres);
-
-void lys_deviation_add_ext_imports(struct lys_module *dev_target_module, struct lys_module *dev_module);
 
 void lys_switch_deviations(struct lys_module *module);
 

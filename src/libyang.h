@@ -814,15 +814,17 @@ const struct lys_module *ly_ctx_load_module(struct ly_ctx *ctx, const char *name
 /**
  * @brief Callback for retrieving missing included or imported models in a custom way.
  *
- * @param[in] name Missing module name.
- * @param[in] revision Optional missing module revision.
+ * @param[in] mod_name Missing module name.
+ * @param[in] mod_rev Optional missing module revision.
+ * @param[in] submod_name Optional missing submodule name.
+ * @param[in] submod_rev Optional missing submodule revision.
  * @param[in] user_data User-supplied callback data.
  * @param[out] format Format of the returned module data.
  * @param[out] free_module_data Callback for freeing the returned module data. If not set, the data will be left untouched.
  * @return Requested module data or NULL if the callback is not able to provide the requested schema content for any reason.
  */
-typedef char *(*ly_module_clb)(const char *name, const char *revision, void *user_data, LYS_INFORMAT *format,
-                               void (**free_module_data)(void *model_data));
+typedef char *(*ly_module_clb)(const char *mod_name, const char *mod_rev, const char *submod_name, const char *sub_rev,
+                               void *user_data, LYS_INFORMAT *format, void (**free_module_data)(void *model_data));
 
 /**
  * @brief Set missing include or import model callback.
@@ -999,6 +1001,14 @@ struct ly_set {
 struct ly_set *ly_set_new(void);
 
 /**
+ * @brief Duplicate the existing set.
+ *
+ * @param[in] set Original set to duplicate
+ * @return Duplication of the original set.
+ */
+struct ly_set *ly_set_dup(const struct ly_set *set);
+
+/**
  * @brief Add a ::lyd_node or ::lys_node object into the set
  *
  * Since it is a set, the function checks for duplicity and if the
@@ -1082,11 +1092,11 @@ void ly_set_free(struct ly_set *set);
  * @brief Verbosity levels of the libyang logger.
  */
 typedef enum {
-    LY_LLSILENT,   /**< Print no messages. */
-    LY_LLERR,      /**< Print only error messages, default value. */
-    LY_LLWRN,      /**< Print error and warning messages. */
-    LY_LLVRB,      /**< Besides errors and warnings, print some other verbose messages. */
-    LY_LLDBG       /**< Print all messages including some development debug messages. */
+    LY_LLSILENT = -1, /**< Print no messages. */
+    LY_LLERR = 0,     /**< Print only error messages, default value. */
+    LY_LLWRN,         /**< Print error and warning messages. */
+    LY_LLVRB,         /**< Besides errors and warnings, print some other verbose messages. */
+    LY_LLDBG          /**< Print all messages including some development debug messages. */
 } LY_LOG_LEVEL;
 
 /**
@@ -1147,6 +1157,7 @@ typedef enum {
     LYVE_EOF,          /**< unexpected end of input data */
     LYVE_INSTMT,       /**< invalid statement (schema) */
     /* */
+    LYVE_INPAR,        /**< invalid (in)direct parent (schema) */
     LYVE_INID,         /**< invalid identifier (schema) */
     LYVE_INDATE,       /**< invalid date format */
     LYVE_INARG,        /**< invalid value of a statement argument (schema) */
@@ -1158,11 +1169,15 @@ typedef enum {
     LYVE_DUPLEAFLIST,  /**< multiple instances of leaf-list */
     LYVE_DUPLIST,      /**< multiple instances of list */
     LYVE_NOUNIQ,       /**< unique leaves match on 2 list instances (data) */
-    LYVE_ENUM_DUPVAL,  /**< duplicated enum value (schema) */
-    LYVE_ENUM_DUPNAME, /**< duplicated enum name (schema) */
+    LYVE_ENUM_INVAL,   /**< invalid enum value (schema) */
+    LYVE_ENUM_INNAME,  /**< invalid enum name (schema) */
+    /* */
+    /* */
     LYVE_ENUM_WS,      /**< enum name with leading/trailing whitespaces (schema) */
-    LYVE_BITS_DUPVAL,  /**< duplicated bits value (schema) */
-    LYVE_BITS_DUPNAME, /**< duplicated bits name (schema) */
+    LYVE_BITS_INVAL,   /**< invalid bits value (schema) */
+    LYVE_BITS_INNAME,  /**< invalid bits name (schema) */
+    /* */
+    /* */
     LYVE_INMOD,        /**< invalid module name */
     /* */
     LYVE_KEY_NLEAF,    /**< list key is not a leaf (schema) */
@@ -1174,8 +1189,10 @@ typedef enum {
     LYVE_INRESOLV,     /**< no resolvents found (schema) */
     LYVE_INSTATUS,     /**< invalid derivation because of status (schema) */
     LYVE_CIRC_LEAFREFS,/**< circular chain of leafrefs detected (schema) */
+    LYVE_CIRC_FEATURES,/**< circular chain of features detected (schema) */
     LYVE_CIRC_IMPORTS, /**< circular chain of imports detected (schema) */
     LYVE_CIRC_INCLUDES,/**< circular chain of includes detected (schema) */
+    LYVE_INVER,        /**< non-matching YANG versions of module and its submodules (schema) */
 
     LYVE_OBSDATA,      /**< obsolete data instantiation (data) */
     /* */
@@ -1200,7 +1217,9 @@ typedef enum {
     LYVE_NOREQINS,     /**< required instance does not exits (data) */
     LYVE_NOLEAFREF,    /**< leaf pointed to by leafref does not exist (data) */
     LYVE_NOMANDCHOICE, /**< no mandatory choice case branch exists (data) */
+    LYVE_INACT,        /**< action contains some other node than container or list with keys (data) */
 
+    LYVE_XPATH_INSNODE,/**< schema node not found */
     LYVE_XPATH_INTOK,  /**< unexpected XPath token */
     LYVE_XPATH_EOF,    /**< unexpected end of an XPath expression */
     LYVE_XPATH_INOP,   /**< invalid XPath operation operands */

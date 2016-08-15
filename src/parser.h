@@ -57,7 +57,7 @@ enum LY_IDENT {
 };
 
 struct lys_module *lyp_search_file(struct ly_ctx *ctx, struct lys_module *module, const char *name,
-                                   const char *revision, struct unres_schema *unres);
+                                   const char *revision, int implement, struct unres_schema *unres);
 
 struct lys_type *lyp_get_next_union_type(struct lys_type *type, struct lys_type *prev_type, int *found);
 
@@ -79,12 +79,12 @@ int dup_typedef_check(const char *type, struct lys_tpdf *tpdf, int size);
 int dup_identities_check(const char *id, struct lys_module *module);
 
 /**
- * @brief Get know if the node is part of the RPC's input/output
+ * @brief Get know if the node is part of the RPC/action's input/output
  *
  * @param node Schema node to be examined.
  * @return 1 for true, 0 for false
  */
-int lyp_is_rpc(struct lys_node *node);
+int lyp_is_rpc_action(struct lys_node *node);
 
 /**
  * @brief Check validity of parser options.
@@ -96,7 +96,8 @@ int lyp_check_options(int options);
 
 int lyp_check_identifier(const char *id, enum LY_IDENT type, struct lys_module *module, struct lys_node *parent);
 int lyp_check_date(const char *date);
-int lyp_check_mandatory(struct lys_node *node);
+int lyp_check_mandatory_augment(struct lys_node_augment *node);
+int lyp_check_mandatory_choice(struct lys_node *node);
 
 int lyp_check_include(struct lys_module *module, struct lys_submodule *submodule, const char *value,
                       struct lys_include *inc, struct unres_schema *unres);

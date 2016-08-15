@@ -39,7 +39,7 @@ sibling_is_valid_child(const struct lys_node *node, int including, const struct 
 
     /* has a following printed child */
     LY_TREE_FOR((struct lys_node *)(including ? node : node->next), cur) {
-        if (module->type && (cur->module != module)) {
+        if (module != lys_node_module(cur)) {
             continue;
         }
 
@@ -89,7 +89,7 @@ create_indent(int level, const char *old_indent, const struct lys_node *node, in
     }
 
     /* next is a node that will actually be printed */
-    has_next = sibling_is_valid_child(node, 0, module);
+    has_next = sibling_is_valid_child(node, 0, lys_main_module(module));
 
     if (has_next && !next_is_case) {
         strcat(new_indent, "|  ");
@@ -145,20 +145,21 @@ tree_print_type(struct lyout *out, const struct lys_type *type)
 }
 
 static void
-tree_print_features(struct lyout *out, const struct lys_feature **features, uint8_t features_size)
+tree_print_features(struct lyout *out, const struct lys_module *module,
+                    struct lys_iffeature *iffeature, uint8_t iffeature_size)
 {
     int i;
 
-    if (!features_size) {
+    if (!iffeature_size) {
         return;
     }
 
     ly_print(out, " {");
-    for (i = 0; i < features_size; i++) {
+    for (i = 0; i < iffeature_size; i++) {
         if (i > 0) {
             ly_print(out, ",");
         }
-        ly_print(out, "%s", features[i]->name);
+        ly_print_iffeature(out, module, &iffeature[i]);
     }
     ly_print(out, "}?");
 }
@@ -223,7 +224,7 @@ tree_print_container(struct lyout *out, const struct lys_module *module, int lev
 
     ly_print(out, "%s%s", cont->name, (cont->presence ? "!" : ""));
 
-    tree_print_features(out, (const struct lys_feature **)cont->features, cont->features_size);
+    tree_print_features(out, module, cont->iffeature, cont->iffeature_size);
 
     ly_print(out, "\n");
 
@@ -238,7 +239,7 @@ tree_print_container(struct lyout *out, const struct lys_module *module, int lev
             continue;
         }
         tree_print_snode(out, module, level, new_indent, max_child_len, sub,
-                         LYS_CHOICE | LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_ANYXML | LYS_USES,
+                         LYS_CHOICE | LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_ANYXML | LYS_USES | LYS_ACTION,
                          spec_config);
     }
 
@@ -281,7 +282,7 @@ tree_print_choice(struct lyout *out, const struct lys_module *module, int level,
         ly_print(out, " <%s>", choice->dflt->name);
     }
 
-    tree_print_features(out, (const struct lys_feature **)choice->features, choice->features_size);
+    tree_print_features(out, module, choice->iffeature, choice->iffeature_size);
 
     ly_print(out, "\n");
 
@@ -322,7 +323,7 @@ tree_print_case(struct lyout *out, const struct lys_module *module, int level, c
 
     ly_print(out, "%s)", cas->name);
 
-    tree_print_features(out, (const struct lys_feature **)cas->features, cas->features_size);
+    tree_print_features(out, module, cas->iffeature, cas->iffeature_size);
 
     ly_print(out, "\n");
 
@@ -379,7 +380,7 @@ tree_print_anyxml(struct lyout *out, const struct lys_module *module, char *inde
     ly_print(out, "%s%s%*sanyxml", anyxml->name, (anyxml->flags & LYS_MAND_TRUE ? " " : "?"),
             3 + (int)((max_name_len - strlen(anyxml->name)) - prefix_len), "   ");
 
-    tree_print_features(out, (const struct lys_feature **)anyxml->features, anyxml->features_size);
+    tree_print_features(out, module, anyxml->iffeature, anyxml->iffeature_size);
 
     ly_print(out, "\n");
 }
@@ -437,7 +438,7 @@ tree_print_leaf(struct lyout *out, const struct lys_module *module, char *indent
         ly_print(out, " <%s>", leaf->dflt);
     }
 
-    tree_print_features(out, (const struct lys_feature **)leaf->features, leaf->features_size);
+    tree_print_features(out, module, leaf->iffeature, leaf->iffeature_size);
 
     ly_print(out, "\n");
 }
@@ -471,7 +472,7 @@ tree_print_leaflist(struct lyout *out, const struct lys_module *module, char *in
 
     tree_print_type(out, &leaflist->type);
 
-    tree_print_features(out, (const struct lys_feature **)leaflist->features, leaflist->features_size);
+    tree_print_features(out, module, leaflist->iffeature, leaflist->iffeature_size);
 
     ly_print(out, "\n");
 }
@@ -512,7 +513,7 @@ tree_print_list(struct lyout *out, const struct lys_module *module, int level, c
         ly_print(out, "%s%s", list->keys[i]->name, i + 1 < list->keys_size ? " " : "]");
     }
 
-    tree_print_features(out, (const struct lys_feature **)list->features, list->features_size);
+    tree_print_features(out, module, list->iffeature, list->iffeature_size);
 
     ly_print(out, "\n");
 
@@ -527,7 +528,7 @@ tree_print_list(struct lyout *out, const struct lys_module *module, int level, c
             continue;
         }
         tree_print_snode(out, module, level, new_indent, max_child_len, sub,
-                         LYS_CHOICE | LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_USES | LYS_ANYXML,
+                         LYS_CHOICE | LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_USES | LYS_ANYXML | LYS_ACTION,
                          spec_config);
     }
 
@@ -548,12 +549,12 @@ tree_print_uses(struct lyout *out, const struct lys_module *module, int level, c
 }
 
 static void
-tree_print_rpc(struct lyout *out, const struct lys_module *module, int level, char *indent,
-               const struct lys_node *node)
+tree_print_rpc_action(struct lyout *out, const struct lys_module *module, int level, char *indent,
+                      const struct lys_node *node)
 {
     char *new_indent;
     struct lys_node *sub;
-    struct lys_node_rpc *rpc = (struct lys_node_rpc *)node;
+    struct lys_node_rpc_action *rpc = (struct lys_node_rpc_action *)node;
 
     if (lys_is_disabled(node, 0)) {
         return;
@@ -562,7 +563,7 @@ tree_print_rpc(struct lyout *out, const struct lys_module *module, int level, ch
     ly_print(out, "%s%s---x %s", indent,
             (rpc->flags & LYS_STATUS_DEPRC ? "x" : (rpc->flags & LYS_STATUS_OBSLT ? "o" : "+")), rpc->name);
 
-    tree_print_features(out, (const struct lys_feature **)rpc->features, rpc->features_size);
+    tree_print_features(out, module, rpc->iffeature, rpc->iffeature_size);
 
     ly_print(out, "\n");
 
@@ -601,7 +602,7 @@ tree_print_notif(struct lyout *out, const struct lys_module *module, int level, 
             (notif->flags & LYS_STATUS_DEPRC ? "x" : (notif->flags & LYS_STATUS_OBSLT ? "o" : "+")),
             notif->name);
 
-    tree_print_features(out, (const struct lys_feature **)notif->features, notif->features_size);
+    tree_print_features(out, module, notif->iffeature, notif->iffeature_size);
 
     ly_print(out, "\n");
 
@@ -644,7 +645,7 @@ static void
 tree_print_snode(struct lyout *out, const struct lys_module *module, int level, char *indent,
                  unsigned int max_name_len, const struct lys_node *node, int mask, int spec_config)
 {
-    if (lys_is_disabled(node, 0)) {
+    if (lys_is_disabled(node, (node->parent && node->parent->nodetype == LYS_AUGMENT) ? 1 : 0)) {
         return;
     }
 
@@ -669,6 +670,9 @@ tree_print_snode(struct lyout *out, const struct lys_module *module, int level, 
         break;
     case LYS_USES:
         tree_print_uses(out, module, level, indent, max_name_len, node, spec_config);
+        break;
+    case LYS_ACTION:
+        tree_print_rpc_action(out, module, level, indent, node);
         break;
     case LYS_CASE:
         /* a very special case of cases in an augment */
@@ -760,7 +764,7 @@ tree_print_model(struct lyout *out, const struct lys_module *module)
                 break;
             }
             if (node->nodetype == LYS_RPC) {
-                tree_print_rpc(out, module, level, indent, node);
+                tree_print_rpc_action(out, module, level, indent, node);
                 have_rpcs--;
             }
         }

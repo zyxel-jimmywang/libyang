@@ -38,7 +38,6 @@ yang_check_typedef_identif(struct lys_node *root, struct lys_node *node, char *i
     int size;
     struct lys_tpdf *tpdf;
 
-
     if (root) {
         node = root;
     }
@@ -60,13 +59,13 @@ yang_check_typedef_identif(struct lys_node *root, struct lys_node *node, char *i
                     size = ((struct lys_node_grp *)child)->tpdf_size;
                     break;
                 case LYS_RPC:
-                    tpdf = ((struct lys_node_rpc *)child)->tpdf;
-                    size = ((struct lys_node_rpc *)child)->tpdf_size;
+                    tpdf = ((struct lys_node_rpc_action *)child)->tpdf;
+                    size = ((struct lys_node_rpc_action *)child)->tpdf_size;
                     break;
                 case LYS_INPUT:
                 case LYS_OUTPUT:
-                    tpdf = ((struct lys_node_rpc_inout *)child)->tpdf;
-                    size = ((struct lys_node_rpc_inout *)child)->tpdf_size;
+                    tpdf = ((struct lys_node_inout *)child)->tpdf;
+                    size = ((struct lys_node_inout *)child)->tpdf_size;
                     break;
                 case LYS_NOTIF:
                     tpdf = ((struct lys_node_notif *)child)->tpdf;
@@ -80,7 +79,7 @@ yang_check_typedef_identif(struct lys_node *root, struct lys_node *node, char *i
                     LOGVAL(LYE_DUPID, LY_VLOG_NONE, NULL, "typedef", id);
                     return EXIT_FAILURE;
                 }
-            } 
+            }
         LY_TREE_DFS_END(node, next, child)}
     } while (root && (node = node->next));
     return EXIT_SUCCESS;
@@ -115,7 +114,43 @@ yang_read_common(struct lys_module *module, char *value, enum yytokentype type)
 }
 
 int
-yang_read_prefix(struct lys_module *module, void *save, char *value, enum yytokentype type)
+yang_check_version(struct lys_module *module, struct lys_submodule *submodule, char *value, int repeat)
+{
+    int ret = EXIT_SUCCESS;
+
+    if (repeat) {
+        LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, "yang version", "module");
+        ret = EXIT_FAILURE;
+    } else {
+        if (!strcmp(value, "1")) {
+            if (submodule) {
+                if (module->version > 1) {
+                    LOGVAL(LYE_INVER, LY_VLOG_NONE, NULL);
+                    ret = EXIT_FAILURE;
+                 }
+            } else {
+                module->version = 1;
+            }
+        } else if (!strcmp(value, "1.1")) {
+            if (submodule) {
+                if (module->version != 2) {
+                    LOGVAL(LYE_INVER, LY_VLOG_NONE, NULL);
+                    ret = EXIT_FAILURE;
+                }
+            } else {
+                module->version = 2;
+            }
+        } else {
+            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "yang-version");
+            ret = EXIT_FAILURE;
+        }
+    }
+    free(value);
+    return ret;
+}
+
+int
+yang_read_prefix(struct lys_module *module, struct lys_import *imp, char *value)
 {
     int ret = 0;
 
@@ -123,18 +158,11 @@ yang_read_prefix(struct lys_module *module, void *save, char *value, enum yytoke
         free(value);
         return EXIT_FAILURE;
     }
-    switch (type){
-    case MODULE_KEYWORD:
+
+    if (imp) {
+        ret = yang_check_string(module, &imp->prefix, "prefix", "import", value);
+    } else {
         ret = yang_check_string(module, &module->prefix, "prefix", "module", value);
-        break;
-    case IMPORT_KEYWORD:
-        ((struct lys_import *)save)->prefix = lydict_insert_zc(module->ctx, value);
-        break;
-    default:
-        free(value);
-        LOGINT;
-        ret = EXIT_FAILURE;
-        break;
     }
 
     return ret;
@@ -146,6 +174,10 @@ yang_fill_import(struct lys_module *module, struct lys_import *imp, char *value)
     const char *exp;
     int rc;
 
+    if (!imp->prefix) {
+        LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "prefix", "import");
+        return EXIT_FAILURE;
+    }
     exp = lydict_insert_zc(module->ctx, value);
     rc = lyp_check_import(module, exp, imp);
     lydict_remove(module->ctx, exp);
@@ -168,6 +200,10 @@ yang_read_description(struct lys_module *module, void *node, char *value, char *
     } else {
         if (!strcmp("revision", where)) {
             ret = yang_check_string(module, &((struct lys_revision *)node)->dsc, dsc, where, value);
+        } else if (!strcmp("import", where)){
+            ret = yang_check_string(module, &((struct lys_import *)node)->dsc, dsc, where, value);
+        } else if (!strcmp("include", where)){
+            ret = yang_check_string(module, &((struct lys_include *)node)->dsc, dsc, where, value);
         } else {
             ret = yang_check_string(module, &((struct lys_node *)node)->dsc, dsc, where, value);
         }
@@ -186,6 +222,10 @@ yang_read_reference(struct lys_module *module, void *node, char *value, char *wh
     } else {
         if (!strcmp("revision", where)) {
             ret = yang_check_string(module, &((struct lys_revision *)node)->ref, ref, where, value);
+        } else if (!strcmp("import", where)){
+            ret = yang_check_string(module, &((struct lys_import *)node)->ref, ref, where, value);
+        } else if (!strcmp("include", where)){
+            ret = yang_check_string(module, &((struct lys_include *)node)->ref, ref, where, value);
         } else {
             ret = yang_check_string(module, &((struct lys_node *)node)->ref, ref, where, value);
         }
@@ -258,7 +298,16 @@ yang_read_if_feature(struct lys_module *module, void *ptr, char *value, struct u
     const char *exp;
     int ret;
     struct lys_feature *f;
+    struct lys_ident *i;
     struct lys_node *n;
+    struct lys_type_enum *e;
+    struct lys_type_bit *b;
+
+    if ((module->version != 2) && ((value[0] == '(') || strchr(value, ' '))) {
+        LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "if-feature");
+        free(value);
+        return EXIT_FAILURE;
+    }
 
     if (!(exp = transform_schema2json(module, value))) {
         free(value);
@@ -266,22 +315,36 @@ yang_read_if_feature(struct lys_module *module, void *ptr, char *value, struct u
     }
     free(value);
 
-    /* hack - store pointer to the parent node for later status check */
-    if (type == FEATURE_KEYWORD) {
+    switch (type) {
+    case FEATURE_KEYWORD:
         f = (struct lys_feature *) ptr;
-        f->features[f->features_size] = f;
-        ret = unres_schema_add_str(module, unres, &f->features[f->features_size], UNRES_IFFEAT, exp);
-        f->features_size++;
-    } else {
+        ret = resolve_iffeature_compile(&f->iffeature[f->iffeature_size], exp, (struct lys_node *)f, unres);
+        f->iffeature_size++;
+        break;
+    case IDENTITY_KEYWORD:
+        i = (struct lys_ident *) ptr;
+        ret = resolve_iffeature_compile(&i->iffeature[i->iffeature_size], exp, (struct lys_node *)i, unres);
+        i->iffeature_size++;
+        break;
+    case ENUM_KEYWORD:
+        e = &((struct yang_type *)ptr)->type->info.enums.enm[((struct yang_type *)ptr)->type->info.enums.count - 1];
+        ret = resolve_iffeature_compile(&e->iffeature[e->iffeature_size], exp, (struct lys_node *)((struct yang_type *)ptr)->type->parent, unres);
+        e->iffeature_size++;
+        break;
+    case BIT_KEYWORD:
+        b = &((struct yang_type *)ptr)->type->info.bits.bit[((struct yang_type *)ptr)->type->info.bits.count - 1];
+        ret = resolve_iffeature_compile(&b->iffeature[b->iffeature_size], exp, (struct lys_node *)((struct yang_type *)ptr)->type->parent, unres);
+        b->iffeature_size++;
+        break;
+    default:
         n = (struct lys_node *) ptr;
-        n->features[n->features_size] = (struct lys_feature *) n;
-        ret = unres_schema_add_str(module, unres, &n->features[n->features_size], UNRES_IFFEAT, exp);
-        n->features_size++;
+        ret = resolve_iffeature_compile(&n->iffeature[n->iffeature_size], exp, n, unres);
+        n->iffeature_size++;
+        break;
     }
-
     lydict_remove(module->ctx, exp);
-    if (ret == -1) {
 
+    if (ret) {
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
@@ -324,10 +387,6 @@ yang_read_base(struct lys_module *module, struct lys_ident *ident, char *value, 
 {
     const char *exp;
 
-    if (!value) {
-        /* base statement not found */
-        return EXIT_SUCCESS;
-    }
     exp = transform_schema2json(module, value);
     free(value);
     if (!exp) {
@@ -372,6 +431,12 @@ yang_read_must(struct lys_module *module, struct lys_node *node, char *value, en
         break;
     case DELETE_KEYWORD:
         retval = &((struct type_deviation *)node)->deviate->must[((struct type_deviation *)node)->deviate->must_size++];
+        break;
+    case NOTIFICATION_KEYWORD:
+        retval = &((struct lys_node_notif *)node)->must[((struct lys_node_notif *)node)->must_size++];
+        break;
+    case INPUT_KEYWORD:
+        retval = &((struct lys_node_inout *)node)->must[((struct lys_node_inout *)node)->must_size++];
         break;
     default:
         goto error;
@@ -536,6 +601,26 @@ yang_read_node(struct lys_module *module, struct lys_node *parent, char *value, 
     return node;
 }
 
+void *
+yang_read_action(struct lys_module *module, struct lys_node *parent, char *value)
+{
+    struct lys_node *node;
+
+    if (module->version != 2) {
+        LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, "action");
+        return NULL;
+    }
+
+    for (node = parent; node; node = lys_parent(node)) {
+        if (node->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF)
+                || ((node->nodetype == LYS_LIST) && !((struct lys_node_list *)node)->keys_size)) {
+            LOGVAL(LYE_INPAR, LY_VLOG_NONE, NULL, strnodetype(node->nodetype), "action");
+            return NULL;
+        }
+    }
+    return yang_read_node(module, parent, value, LYS_ACTION, sizeof(struct lys_node_rpc_action));
+}
+
 int
 yang_read_default(struct lys_module *module, void *node, char *value, enum yytokentype type)
 {
@@ -587,6 +672,7 @@ yang_read_key(struct lys_module *module, struct lys_node_list *list, struct unre
     char *exp, *value;
 
     exp = value = (char *) list->keys;
+    list->keys_size = 0;
     while ((value = strpbrk(value, " \t\n"))) {
         list->keys_size++;
         while (isspace(*value)) {
@@ -615,6 +701,7 @@ yang_fill_unique(struct lys_module *module, struct lys_node_list *list, struct l
 {
     int i, j;
     char *vaux;
+    struct unres_list_uniq *unique_info;
 
     /* count the number of unique leafs in the value */
     vaux = value;
@@ -651,11 +738,15 @@ yang_fill_unique(struct lys_module *module, struct lys_node_list *list, struct l
         }
         /* try to resolve leaf */
         if (unres) {
-            if (unres_schema_add_str(module, unres, (struct lys_node *) list, UNRES_LIST_UNIQ, unique->expr[i]) == -1) {
+            unique_info = malloc(sizeof *unique_info);
+            unique_info->list = (struct lys_node *)list;
+            unique_info->expr = unique->expr[i];
+            unique_info->trg_type = &unique->trg_type;
+            if (unres_schema_add_node(module, unres, unique_info, UNRES_LIST_UNIQ, NULL) == -1) {
                 goto error;
             }
         } else {
-            if (resolve_unique((struct lys_node *)list, unique->expr[i])) {
+            if (resolve_unique((struct lys_node *)list, unique->expr[i], &unique->trg_type)) {
                 goto error;
             }
         }
@@ -722,11 +813,16 @@ end:
 int
 yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_type *typ, int tpdftype, struct unres_schema *unres)
 {
-    int i, rc;
+    int i, j, rc;
     int ret = -1;
     const char *name, *value;
     LY_DATA_TYPE base;
     struct lys_node *siter;
+    struct lys_type *dertype;
+    struct lys_type_enum *enms_sc = NULL;
+    struct lys_type_bit *bits_sc = NULL;
+    struct lys_type_bit bit_tmp;
+
 
     base = typ->base;
     value = transform_schema2json(module, typ->name);
@@ -830,15 +926,51 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
             LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid restriction in type \"%s\".", typ->type->parent->name);
             goto error;
         }
-        if (!typ->type->der->type.der && !typ->type->info.bits.count) {
-            /* type is derived directly from buit-in enumeartion type and enum statement is required */
-            LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "enum", "type");
-            goto error;
-        }
-        if (typ->type->der->type.der && typ->type->info.enums.count) {
-            /* type is not directly derived from buit-in enumeration type and enum statement is prohibited */
-            LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, "enum");
-            goto error;
+        dertype = &typ->type->der->type;
+
+        if (!dertype->der) {
+            if (!typ->type->info.enums.count) {
+                /* type is derived directly from buit-in enumeartion type and enum statement is required */
+                LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "enum", "type");
+                goto error;
+            }
+        } else {
+            for (; !dertype->info.enums.count; dertype = &dertype->der->type);
+            if (module->version < 2 && typ->type->info.enums.count) {
+                /* type is not directly derived from built-in enumeration type and enum statement is prohibited
+                 * in YANG 1.0, since YANG 1.1 enum statements can be used to restrict the base enumeration type */
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, "enum");
+                goto error;
+            }
+
+            /* restricted enumeration type - the name MUST be used in the base type */
+            enms_sc = dertype->info.enums.enm;
+            for(i = 0; i < typ->type->info.enums.count; i++) {
+                for (j = 0; j < dertype->info.enums.count; j++) {
+                    if (ly_strequal(enms_sc[j].name, typ->type->info.enums.enm[i].name, 1)) {
+                        break;
+                    }
+                }
+                if (j == dertype->info.enums.count) {
+                    LOGVAL(LYE_ENUM_INNAME, LY_VLOG_NONE, NULL, typ->type->info.enums.enm[i].name);
+                    goto error;
+                }
+
+                if (typ->type->info.enums.enm[i].flags & LYS_AUTOASSIGNED) {
+                    /* automatically assign value from base type */
+                    typ->type->info.enums.enm[i].value = enms_sc[j].value;
+                } else {
+                    /* check that the assigned value corresponds to the original
+                     * value of the enum in the base type */
+                    if (typ->type->info.enums.enm[i].value != enms_sc[j].value) {
+                        /* typ->type->info.enums.enm[i].value - assigned value in restricted enum
+                         * enms_sc[j].value - value assigned to the corresponding enum (detected above) in base type */
+                        LOGVAL(LYE_ENUM_INVAL, LY_VLOG_NONE, NULL, typ->type->info.enums.enm[i].value,
+                               typ->type->info.enums.enm[i].name, enms_sc[j].value);
+                        goto error;
+                    }
+                }
+            }
         }
         break;
     case LY_TYPE_BITS:
@@ -846,15 +978,64 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
             LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid restriction in type \"%s\".", typ->type->parent->name);
             goto error;
         }
-        if (!typ->type->der->type.der && !typ->type->info.bits.count) {
-            /* type is derived directly from buit-in bits type and bit statement is required */
-            LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "bit", "type");
-            goto error;
+        dertype = &typ->type->der->type;
+
+        if (!dertype->der) {
+            if (!typ->type->info.bits.count) {
+                /* type is derived directly from buit-in bits type and bit statement is required */
+                LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "bit", "type");
+                goto error;
+            }
+        } else {
+            for (; !dertype->info.enums.count; dertype = &dertype->der->type);
+            if (module->version < 2 && typ->type->info.bits.count) {
+                /* type is not directly derived from buit-in bits type and bit statement is prohibited,
+                 * since YANG 1.1 the bit statements can be used to restrict the base bits type */
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, "bit");
+                goto error;
+            }
+
+            bits_sc = dertype->info.bits.bit;
+            for (i = 0; i < typ->type->info.bits.count; i++) {
+                for (j = 0; j < dertype->info.bits.count; j++) {
+                    if (ly_strequal(bits_sc[j].name, typ->type->info.bits.bit[i].name, 1)) {
+                        break;
+                    }
+                }
+                if (j == dertype->info.bits.count) {
+                    LOGVAL(LYE_BITS_INNAME, LY_VLOG_NONE, NULL, typ->type->info.bits.bit[i].name);
+                    goto error;
+                }
+
+                /* restricted bits type */
+                if (typ->type->info.bits.bit[i].flags & LYS_AUTOASSIGNED) {
+                    /* automatically assign position from base type */
+                    typ->type->info.bits.bit[i].pos = bits_sc[j].pos;
+                } else {
+                    /* check that the assigned position corresponds to the original
+                     * position of the bit in the base type */
+                    if (typ->type->info.bits.bit[i].pos != bits_sc[j].pos) {
+                        /* typ->type->info.bits.bit[i].pos - assigned position in restricted bits
+                         * bits_sc[j].pos - position assigned to the corresponding bit (detected above) in base type */
+                        LOGVAL(LYE_BITS_INVAL, LY_VLOG_NONE, NULL, typ->type->info.bits.bit[i].pos,
+                               typ->type->info.bits.bit[i].name, bits_sc[j].pos);
+                        goto error;
+                    }
+                }
+            }
         }
-        if (typ->type->der->type.der && typ->type->info.bits.count) {
-            /* type is not directly derived from buit-in bits type and bit statement is prohibited */
-            LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, "bit");
-            goto error;
+
+        for (i = typ->type->info.bits.count - 1; i > 0; i--) {
+            j = i;
+
+            /* keep them ordered by position */
+            while (j && typ->type->info.bits.bit[j - 1].pos > typ->type->info.bits.bit[j].pos) {
+                /* switch them */
+                memcpy(&bit_tmp, &typ->type->info.bits.bit[j], sizeof bit_tmp);
+                memcpy(&typ->type->info.bits.bit[j], &typ->type->info.bits.bit[j - 1], sizeof bit_tmp);
+                memcpy(&typ->type->info.bits.bit[j - 1], &bit_tmp, sizeof bit_tmp);
+                j--;
+            }
         }
         break;
     case LY_TYPE_LEAFREF:
@@ -935,7 +1116,7 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
         }
         for (i = 0; i < typ->type->info.uni.count; i++) {
             if (unres_schema_add_node(module, unres, &typ->type->info.uni.types[i],
-                                      tpdftype ? UNRES_TYPE_DER_TPDF : UNRES_TYPE_DER, parent)) {
+                                      tpdftype ? UNRES_TYPE_DER_TPDF : UNRES_TYPE_DER, parent) == -1) {
                 goto error;
             }
             if (typ->type->info.uni.types[i].base == LY_TYPE_EMPTY) {
@@ -1095,17 +1276,32 @@ error:
 
 }
 
-void *
-yang_read_pattern(struct lys_module *module, struct yang_type *typ, char *value)
+int
+yang_read_pattern(struct lys_module *module, struct lys_restr *pattern, char *value, char modifier)
 {
+    char *buf;
+    size_t len;
+
     if (lyp_check_pattern(value, NULL)) {
         free(value);
-        return NULL;
+        return EXIT_FAILURE;
     }
 
-    typ->type->info.str.patterns[typ->type->info.str.pat_count].expr = lydict_insert_zc(module->ctx, value);
-    typ->type->info.str.pat_count++;
-    return &typ->type->info.str.patterns[typ->type->info.str.pat_count-1];
+    len = strlen(value);
+    buf = malloc((len + 2) * sizeof *buf); /* modifier byte + value + terminating NULL byte */
+
+    if (!buf) {
+        LOGMEM;
+        free(value);
+        return EXIT_FAILURE;
+    }
+
+    buf[0] = modifier;
+    strcpy(&buf[1], value);
+    free(value);
+
+    pattern->expr = lydict_insert_zc(module->ctx, buf);
+    return EXIT_SUCCESS;
 }
 
 void *
@@ -1216,7 +1412,8 @@ yang_check_enum(struct yang_type *typ, struct lys_type_enum *enm, int64_t *value
     for (i = 0; i < j; i++) {
         if (typ->type->info.enums.enm[i].value == typ->type->info.enums.enm[j].value) {
             LOGVAL(LYE_ENUM_DUPVAL, LY_VLOG_NONE, NULL,
-                   typ->type->info.enums.enm[j].value, typ->type->info.enums.enm[j].name);
+                   typ->type->info.enums.enm[j].value, typ->type->info.enums.enm[j].name,
+                   typ->type->info.enums.enm[i].name);
             goto error;
         }
     }
@@ -1259,7 +1456,6 @@ int
 yang_check_bit(struct yang_type *typ, struct lys_type_bit *bit, int64_t *value, int assign)
 {
     int i,j;
-    struct lys_type_bit bit_tmp;
 
     if (!assign) {
         /* assign value automatically */
@@ -1276,18 +1472,9 @@ yang_check_bit(struct yang_type *typ, struct lys_type_bit *bit, int64_t *value, 
     /* check that the value is unique */
     for (i = 0; i < j; i++) {
         if (typ->type->info.bits.bit[i].pos == bit->pos) {
-            LOGVAL(LYE_BITS_DUPVAL, LY_VLOG_NONE, NULL, bit->pos, bit->name);
+            LOGVAL(LYE_BITS_DUPVAL, LY_VLOG_NONE, NULL, bit->pos, bit->name, typ->type->info.bits.bit[i].name);
             goto error;
         }
-    }
-
-    /* keep them ordered by position */
-    while (j && typ->type->info.bits.bit[j - 1].pos > typ->type->info.bits.bit[j].pos) {
-        /* switch them */
-        memcpy(&bit_tmp, &typ->type->info.bits.bit[j], sizeof bit_tmp);
-        memcpy(&typ->type->info.bits.bit[j], &typ->type->info.bits.bit[j - 1], sizeof bit_tmp);
-        memcpy(&typ->type->info.bits.bit[j - 1], &bit_tmp, sizeof bit_tmp);
-        j--;
     }
 
     return EXIT_SUCCESS;
@@ -1326,13 +1513,14 @@ yang_read_typedef(struct lys_module *module, struct lys_node *parent, char *valu
             ((struct lys_node_list *)parent)->tpdf_size++;
             break;
         case LYS_RPC:
-            ret = &((struct lys_node_rpc *)parent)->tpdf[((struct lys_node_rpc *)parent)->tpdf_size];
-            ((struct lys_node_rpc *)parent)->tpdf_size++;
+        case LYS_ACTION:
+            ret = &((struct lys_node_rpc_action *)parent)->tpdf[((struct lys_node_rpc_action *)parent)->tpdf_size];
+            ((struct lys_node_rpc_action *)parent)->tpdf_size++;
             break;
         case LYS_INPUT:
         case LYS_OUTPUT:
-            ret = &((struct lys_node_rpc_inout *)parent)->tpdf[((struct lys_node_rpc_inout *)parent)->tpdf_size];
-            ((struct lys_node_rpc_inout *)parent)->tpdf_size++;
+            ret = &((struct lys_node_inout *)parent)->tpdf[((struct lys_node_inout *)parent)->tpdf_size];
+            ((struct lys_node_inout *)parent)->tpdf_size++;
             break;
         case LYS_NOTIF:
             ret = &((struct lys_node_notif *)parent)->tpdf[((struct lys_node_notif *)parent)->tpdf_size];
@@ -1426,7 +1614,7 @@ yang_read_deviation(struct lys_module *module, char *value)
         goto error;
     }
 
-    lys_deviation_add_ext_imports(lys_node_module(dev_target), module);
+    lys_node_module(dev_target)->deviated = 1;
 
     /*save pointer to the deviation and deviated target*/
     deviation->deviation = dev;
@@ -1795,6 +1983,8 @@ error:
 int
 yang_read_deviate_mandatory(struct type_deviation *dev, uint8_t value)
 {
+    struct lys_node *parent;
+
     if (dev->deviate->flags & LYS_MAND_MASK) {
         LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, "mandatory", "deviate");
         goto error;
@@ -1840,6 +2030,22 @@ yang_read_deviate_mandatory(struct type_deviation *dev, uint8_t value)
 
     /* ... and replace it with the value specified in deviation */
     dev->target->flags |= dev->deviate->flags & LYS_MAND_MASK;
+
+    /* check for mandatory node in default case, first find the closest parent choice to the changed node */
+    for (parent = dev->target->parent;
+         parent && !(parent->nodetype & (LYS_CHOICE | LYS_GROUPING | LYS_ACTION));
+         parent = parent->parent) {
+        if (parent->nodetype == LYS_CONTAINER && ((struct lys_node_container *)parent)->presence) {
+            /* stop also on presence containers */
+            break;
+        }
+    }
+    /* and if it is a choice with the default case, check it for presence of a mandatory node in it */
+    if (parent && parent->nodetype == LYS_CHOICE && ((struct lys_node_choice *)parent)->dflt) {
+        if (lyp_check_mandatory_choice(parent)) {
+            goto error;
+        }
+    }
 
     return EXIT_SUCCESS;
 
@@ -2022,8 +2228,6 @@ yang_check_deviation(struct lys_module *module, struct type_deviation *dev, stru
                 if (dev->deviation->deviate[i].dflt || dev->deviation->deviate[i].type) {
                     rc = unres_schema_add_str(module, unres, &((struct lys_node_leaf *)dev->target)->type, UNRES_TYPE_DFLT, ((struct lys_node_leaf *)dev->target)->dflt);
                     if (rc == -1) {
-                      return EXIT_FAILURE;
-                    } else if (rc == EXIT_FAILURE) {
                         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Leaf \"%s\" default value no longer matches its type.", dev->deviation->target_name);
                         return EXIT_FAILURE;
                     }
@@ -2037,9 +2241,8 @@ yang_check_deviation(struct lys_module *module, struct type_deviation *dev, stru
 
 int
 yang_fill_include(struct lys_module *module, struct lys_submodule *submodule, char *value,
-                  char *rev, struct unres_schema *unres)
+                  struct lys_include *inc, struct unres_schema *unres)
 {
-    struct lys_include inc;
     struct lys_module *trg;
     const char *str;
     int rc;
@@ -2047,13 +2250,10 @@ yang_fill_include(struct lys_module *module, struct lys_submodule *submodule, ch
 
     str = lydict_insert_zc(module->ctx, value);
     trg = (submodule) ? (struct lys_module *)submodule : module;
-    inc.submodule = NULL;
-    inc.external = 0;
-    memcpy(inc.rev, rev, LY_REV_SIZE);
-    rc = lyp_check_include(module, submodule, str, &inc, unres);
+    rc = lyp_check_include(module, submodule, str, inc, unres);
     if (!rc) {
         /* success, copy the filled data into the final array */
-        memcpy(&trg->inc[trg->inc_size], &inc, sizeof inc);
+        memcpy(&trg->inc[trg->inc_size], inc, sizeof *inc);
         trg->inc_size++;
     } else if (rc == -1) {
         ret = -1;
@@ -2386,7 +2586,7 @@ read_indent(const char *input, int indent, int size, int in_index, int *out_inde
 }
 
 char *
-yang_read_string(const char *input, int size, int indent)
+yang_read_string(const char *input, int size, int indent, int version)
 {
     int space, count;
     int in_index, out_index;
@@ -2415,7 +2615,13 @@ yang_read_string(const char *input, int size, int indent)
                 value[out_index] = '"';
                 ++in_index;
             } else {
-                value[out_index] = input[in_index];
+                if (version < 2) {
+                    value[out_index] = input[in_index];
+                } else {
+                    /* YANG 1.1 backslash must not be followed by any other character */
+                    LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, input);
+                    goto error;
+                }
             }
         } else {
             value[out_index] = input[in_index];

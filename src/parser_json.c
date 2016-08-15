@@ -435,9 +435,9 @@ json_get_anyxml(struct lyd_node_anyxml *axml, const char *data)
 }
 
 static unsigned int
-json_get_value(struct lyd_node_leaf_list *leaf, const char *data, int options)
+json_get_value(struct lyd_node_leaf_list *leaf, struct lyd_node *first_sibling, const char *data, int options)
 {
-    struct lyd_node_leaf_list *new, *diter;
+    struct lyd_node_leaf_list *new;
     struct lys_type *stype;
     struct ly_ctx *ctx;
     unsigned int len = 0, r;
@@ -541,8 +541,7 @@ repeat:
             leaf->next = (struct lyd_node *)new;
 
             /* fix the "last" pointer */
-            for (diter = leaf; diter->prev != (struct lyd_node *)leaf; diter = (struct lyd_node_leaf_list *)diter->prev);
-            diter->prev = (struct lyd_node *)new;
+            first_sibling->prev = (struct lyd_node *)new;
 
             new->schema = leaf->schema;
 
@@ -748,7 +747,8 @@ error:
 
 static unsigned int
 json_parse_data(struct ly_ctx *ctx, const char *data, const struct lys_node *schema_parent, struct lyd_node **parent,
-                struct lyd_node *prev, struct attr_cont **attrs, int options, struct unres_data *unres)
+                struct lyd_node *first_sibling, struct lyd_node *prev, struct attr_cont **attrs, int options,
+                struct unres_data *unres)
 {
     unsigned int len = 0;
     unsigned int r;
@@ -757,7 +757,7 @@ json_parse_data(struct ly_ctx *ctx, const char *data, const struct lys_node *sch
     char *name, *prefix = NULL, *str = NULL;
     const struct lys_module *module = NULL;
     struct lys_node *schema = NULL;
-    struct lyd_node *result = NULL, *new, *list, *diter = NULL, *first_sibling;
+    struct lyd_node *result = NULL, *new, *list, *diter = NULL;
     struct lyd_attr *attr;
     struct attr_cont *attrs_aux;
 
@@ -831,7 +831,7 @@ json_parse_data(struct ly_ctx *ctx, const char *data, const struct lys_node *sch
         module = ly_ctx_get_module(ctx, prefix, NULL);
         if (module) {
             /* get the proper schema node */
-            LY_TREE_FOR(module->data, schema) {
+            while ((schema = (struct lys_node *)lys_getnext(schema, NULL, module, 0))) {
                 /* skip nodes in module's data which are not expected here according to options' data type */
                 if (options & LYD_OPT_RPC) {
                     if (schema->nodetype != LYS_RPC) {
@@ -843,10 +843,11 @@ json_parse_data(struct ly_ctx *ctx, const char *data, const struct lys_node *sch
                     }
                 } else if (!(options & LYD_OPT_RPCREPLY)) {
                     /* rest of the data types except RPCREPLY which cannot be here */
-                    if (schema->nodetype & (LYS_RPC | LYS_NOTIF)) {
+                    if (schema->nodetype & (LYS_INPUT | LYS_OUTPUT | LYS_NOTIF)) {
                         continue;
                     }
                 }
+
                 if (!strcmp(schema->name, name)) {
                     break;
                 }
@@ -985,13 +986,7 @@ attr_repeat:
         prev->next = result;
 
         /* fix the "last" pointer */
-        if (*parent) {
-            diter = (*parent)->child;
-        } else {
-            for (diter = prev; diter->prev != prev; diter = diter->prev);
-        }
-        diter->prev = result;
-        first_sibling = diter;
+        first_sibling->prev = result;
     } else {
         result->prev = result;
         first_sibling = result;
@@ -1005,7 +1000,7 @@ attr_repeat:
     /* type specific processing */
     if (schema->nodetype & (LYS_LEAF | LYS_LEAFLIST)) {
         /* type detection and assigning the value */
-        r = json_get_value((struct lyd_node_leaf_list *)result, &data[len], options);
+        r = json_get_value((struct lyd_node_leaf_list *)result, first_sibling, &data[len], options);
         if (!r) {
             goto error;
         }
@@ -1039,7 +1034,7 @@ attr_repeat:
                 len++;
                 len += skip_ws(&data[len]);
 
-                r = json_parse_data(ctx, &data[len], NULL, &result, diter, &attrs_aux, options, unres);
+                r = json_parse_data(ctx, &data[len], NULL, &result, result->child, diter, &attrs_aux, options, unres);
                 if (!r) {
                     goto error;
                 }
@@ -1093,7 +1088,7 @@ attr_repeat:
                 len++;
                 len += skip_ws(&data[len]);
 
-                r = json_parse_data(ctx, &data[len], NULL, &list, diter, &attrs_aux, options, unres);
+                r = json_parse_data(ctx, &data[len], NULL, &list, list->child, diter, &attrs_aux, options, unres);
                 if (!r) {
                     goto error;
                 }
@@ -1172,7 +1167,12 @@ attr_repeat:
     }
 
     /* validation successful */
-    result->validity = LYD_VAL_OK;
+    if (result->schema->nodetype & (LYS_LIST | LYS_LEAFLIST)) {
+        /* postpone checking when there will be all list/leaflist instances */
+        result->validity = LYD_VAL_UNIQUE;
+    } else {
+        result->validity = LYD_VAL_OK;
+    }
 
     if (!(*parent)) {
         *parent = result;
@@ -1210,7 +1210,9 @@ lyd_parse_json(struct ly_ctx *ctx, const struct lys_node *parent, const char *da
     struct lyd_node *result = NULL, *next = NULL, *iter = NULL;
     struct unres_data *unres = NULL;
     unsigned int len = 0, r;
+    int i;
     struct attr_cont *attrs = NULL;
+    struct ly_set *set;
 
     ly_errno = LY_SUCCESS;
 
@@ -1244,7 +1246,7 @@ lyd_parse_json(struct ly_ctx *ctx, const struct lys_node *parent, const char *da
         len++;
         len += skip_ws(&data[len]);
 
-        r = json_parse_data(ctx, &data[len], parent, &next, iter, &attrs, options, unres);
+        r = json_parse_data(ctx, &data[len], parent, &next, result, iter, &attrs, options, unres);
         if (!r) {
             goto error;
         }
@@ -1277,8 +1279,30 @@ lyd_parse_json(struct ly_ctx *ctx, const struct lys_node *parent, const char *da
         goto error;
     }
 
+    /* check for uniquness of top-level lists/leaflists because
+     * only the inner instances were tested in lyv_data_content() */
+    set = ly_set_new();
+    LY_TREE_FOR(result, iter) {
+        if (!(iter->schema->nodetype & (LYS_LIST | LYS_LEAFLIST)) || !(iter->validity & LYD_VAL_UNIQUE)) {
+            continue;
+        }
+
+        /* check each list/leaflist only once */
+        i = set->number;
+        if (ly_set_add(set, iter->schema, 0) != i) {
+            /* already checked */
+            continue;
+        }
+
+        if (lyv_data_unique(iter, result)) {
+            ly_set_free(set);
+            goto error;
+        }
+    }
+    ly_set_free(set);
+
     /* check for missing top level mandatory nodes */
-    if (lyd_check_topmandatory(result, ctx, options)) {
+    if (!(options & LYD_OPT_TRUSTED) && lyd_check_topmandatory(result, ctx, options)) {
         goto error;
     }
 
