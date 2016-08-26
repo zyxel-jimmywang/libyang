@@ -182,7 +182,8 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, struct lyd_node *pare
         havechildren = 0;
         break;
     case LYS_ANYXML:
-        *result = calloc(1, sizeof(struct lyd_node_anyxml));
+    case LYS_ANYDATA:
+        *result = calloc(1, sizeof(struct lyd_node_anydata));
         havechildren = 0;
         break;
     default:
@@ -210,7 +211,7 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, struct lyd_node *pare
     }
     (*result)->schema = schema;
     (*result)->validity = LYD_VAL_NOT;
-    if (resolve_applies_when(*result)) {
+    if (resolve_applies_when(schema, 0, NULL)) {
         (*result)->when_status = LYD_WHEN;
     }
 
@@ -315,7 +316,7 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, struct lyd_node *pare
         if (xml_get_value(*result, xml, options)) {
             goto error;
         }
-    } else if (schema->nodetype == LYS_ANYXML) {
+    } else if (schema->nodetype & LYS_ANYDATA) {
         /* store children values */
         if (xml->child) {
             child = xml->child;
@@ -326,11 +327,11 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, struct lyd_node *pare
                 lyxml_correct_elem_ns(ctx, next, 1, 1);
             }
 
-            ((struct lyd_node_anyxml *)*result)->xml_struct = 1;
-            ((struct lyd_node_anyxml *)*result)->value.xml = child;
+            ((struct lyd_node_anydata *)*result)->value_type = LYD_ANYDATA_XML;
+            ((struct lyd_node_anydata *)*result)->value.xml = child;
         } else {
-            ((struct lyd_node_anyxml *)*result)->xml_struct = 0;
-            ((struct lyd_node_anyxml *)*result)->value.str = lydict_insert(ctx, xml->content, 0);
+            ((struct lyd_node_anydata *)*result)->value_type = LYD_ANYDATA_CONSTSTRING;
+            ((struct lyd_node_anydata *)*result)->value.str = lydict_insert(ctx, xml->content, 0);
         }
     } else if (schema->nodetype == LYS_ACTION) {
         options &= ~LYS_ACTION;
@@ -527,7 +528,6 @@ lyd_parse_xml(struct ly_ctx *ctx, struct lyxml_elem **root, int options, ...)
             goto error;
         }
         reply_parent = _lyd_new(NULL, rpc_act);
-        result = reply_parent;
     }
 
     if (!(options & LYD_OPT_NOSIBLINGS)) {
@@ -574,6 +574,10 @@ lyd_parse_xml(struct ly_ctx *ctx, struct lyxml_elem **root, int options, ...)
         }
     }
 
+    if (reply_parent) {
+        result = reply_parent;
+    }
+
     /* check for uniquness of top-level lists/leaflists because
      * only the inner instances were tested in lyv_data_content() */
     set = ly_set_new();
@@ -596,17 +600,17 @@ lyd_parse_xml(struct ly_ctx *ctx, struct lyxml_elem **root, int options, ...)
     }
     ly_set_free(set);
 
-    /* check for missing top level mandatory nodes */
-    if (!(options & LYD_OPT_TRUSTED) && lyd_check_topmandatory(result, ctx, options)) {
-        goto error;
-    }
-
     /* add/validate default values, unres */
     if (action) {
         if (lyd_defaults_add_unres(&action, options, ctx, unres)) {
             goto error;
         }
     } else if (lyd_defaults_add_unres(&result, options, ctx, unres)) {
+        goto error;
+    }
+
+    /* check for missing mandatory nodes */
+    if (!(options & LYD_OPT_TRUSTED) && lyd_check_mandatory_tree(result, ctx, options)) {
         goto error;
     }
 

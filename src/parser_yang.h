@@ -83,11 +83,12 @@ struct type_node {
         struct lys_node_list *ptr_list;
         struct lys_node_leaf *ptr_leaf;
         struct lys_tpdf *ptr_tpdf;
+        struct lys_node_anydata *ptr_anydata;
         struct lys_node_augment *ptr_augment;
         struct lys_node_rpc_action *ptr_rpc;
         struct lys_node_inout *ptr_inout;
     };
-    uint8_t flag;
+    uint flag;
 };
 
 struct type_deviation {
@@ -153,7 +154,7 @@ int yang_read_presence(struct lys_module *module, struct lys_node_container *con
 
 int yang_read_config(void *node, int value, enum yytokentype type);
 
-void store_flags(struct lys_node *node, uint8_t flags, int config_inherit);
+int store_flags(struct lys_node *node, uint8_t flags, int config_inherit);
 
 void *yang_read_when(struct lys_module *module, struct lys_node *node, enum yytokentype type, char *value);
 

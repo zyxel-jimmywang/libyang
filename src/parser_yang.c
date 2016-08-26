@@ -410,8 +410,9 @@ yang_read_must(struct lys_module *module, struct lys_node *node, char *value, en
     case CONTAINER_KEYWORD:
         retval = &((struct lys_node_container *)node)->must[((struct lys_node_container *)node)->must_size++];
         break;
+    case ANYDATA_KEYWORD:
     case ANYXML_KEYWORD:
-        retval = &((struct lys_node_anyxml *)node)->must[((struct lys_node_anyxml *)node)->must_size++];
+        retval = &((struct lys_node_anydata *)node)->must[((struct lys_node_anydata *)node)->must_size++];
         break;
     case LEAF_KEYWORD:
         retval = &((struct lys_node_leaf *)node)->must[((struct lys_node_leaf *)node)->must_size++];
@@ -503,12 +504,13 @@ yang_read_when(struct lys_module *module, struct lys_node *node, enum yytokentyp
         }
         ((struct lys_node_container *)node)->when = retval;
         break;
+    case ANYDATA_KEYWORD:
     case ANYXML_KEYWORD:
-        if (((struct lys_node_anyxml *)node)->when) {
-            LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, node, "when", "anyxml");
+        if (((struct lys_node_anydata *)node)->when) {
+            LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, node, "when", (type == ANYXML_KEYWORD) ? "anyxml" : "anydata");
             goto error;
         }
-        ((struct lys_node_anyxml *)node)->when = retval;
+        ((struct lys_node_anydata *)node)->when = retval;
         break;
     case CHOICE_KEYWORD:
         if (((struct lys_node_choice *)node)->when) {
@@ -863,6 +865,22 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
         goto error;
     }
     lydict_remove(module->ctx, value);
+
+    if (typ->type->base == LY_TYPE_INGRP) {
+        /* resolved type in grouping, decrease the grouping's nacm number to indicate that one less
+         * unresolved item left inside the grouping */
+        for (siter = parent; siter && (siter->nodetype != LYS_GROUPING); siter = lys_parent(siter));
+        if (siter) {
+            if (!((struct lys_node_grp *)siter)->nacm) {
+                LOGINT;
+                goto error;
+            }
+            ((struct lys_node_grp *)siter)->nacm--;
+        } else {
+            LOGINT;
+            goto error;
+        }
+    }
     typ->type->base = typ->type->der->type.base;
     if (base == 0) {
         base = typ->type->der->type.base;
@@ -1770,8 +1788,9 @@ yang_read_deviate_must(struct type_deviation *dev, uint8_t c_must)
         dev->trg_must_size = &((struct lys_node_list *)dev->target)->must_size;
         break;
     case LYS_ANYXML:
-        dev->trg_must = &((struct lys_node_anyxml *)dev->target)->must;
-        dev->trg_must_size = &((struct lys_node_anyxml *)dev->target)->must_size;
+    case LYS_ANYDATA:
+        dev->trg_must = &((struct lys_node_anydata *)dev->target)->must;
+        dev->trg_must_size = &((struct lys_node_anydata *)dev->target)->must_size;
         break;
     default:
         LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, "must");
@@ -1991,7 +2010,7 @@ yang_read_deviate_mandatory(struct type_deviation *dev, uint8_t value)
     }
 
     /* check target node type */
-    if (!(dev->target->nodetype & (LYS_LEAF | LYS_CHOICE | LYS_ANYXML))) {
+    if (!(dev->target->nodetype & (LYS_LEAF | LYS_CHOICE | LYS_ANYDATA))) {
         LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, "mandatory");
         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Target node does not allow \"mandatory\" property.");
         goto error;
@@ -2056,21 +2075,15 @@ error:
 int
 yang_read_deviate_minmax(struct type_deviation *dev, uint32_t value, int type)
 {
-    uint32_t *ui32val;
+    uint32_t *ui32val, *min, *max;
 
     /* check target node type */
     if (dev->target->nodetype == LYS_LEAFLIST) {
-        if (type) {
-            ui32val = &((struct lys_node_leaflist *)dev->target)->max;
-        } else {
-            ui32val = &((struct lys_node_leaflist *)dev->target)->min;
-        }
+        max = &((struct lys_node_leaflist *)dev->target)->max;
+        min = &((struct lys_node_leaflist *)dev->target)->min;
     } else if (dev->target->nodetype == LYS_LIST) {
-        if (type) {
-            ui32val = &((struct lys_node_list *)dev->target)->max;
-        } else {
-            ui32val = &((struct lys_node_list *)dev->target)->min;
-        }
+        max = &((struct lys_node_list *)dev->target)->max;
+        min = &((struct lys_node_list *)dev->target)->min;
     } else {
         LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, (type) ? "max-elements" : "min-elements");
         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Target node does not allow \"%s\" property.", (type) ? "max-elements" : "min-elements");
@@ -2080,9 +2093,11 @@ yang_read_deviate_minmax(struct type_deviation *dev, uint32_t value, int type)
     if (type) {
         dev->deviate->max = value;
         dev->deviate->max_set = 1;
+        ui32val = max;
     } else {
         dev->deviate->min = value;
         dev->deviate->min_set = 1;
+        ui32val = min;
     }
 
     if (dev->deviate->mod == LY_DEVIATE_ADD) {
@@ -2100,6 +2115,18 @@ yang_read_deviate_minmax(struct type_deviation *dev, uint32_t value, int type)
     /* add (already checked) and replace */
     /* set new value specified in deviation */
     *ui32val = value;
+
+    /* check min-elements is smaller than max-elements */
+    if (*max && *min > *max) {
+        if (type) {
+            LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid value \"%d\" of \"max-elements\".", value);
+            LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "\"max-elements\" is smaller than \"min-elements\".");
+        } else {
+            LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid value \"%d\" of \"min-elements\".", value);
+            LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "\"min-elements\" is bigger than \"max-elements\".");
+        }
+        goto error;
+    }
 
     return EXIT_SUCCESS;
 
@@ -2327,6 +2354,7 @@ nacm_inherit(struct lys_module *module)
                     break;
                 case LYS_CHOICE:
                 case LYS_ANYXML:
+                case LYS_ANYDATA:
                 case LYS_USES:
                     if (elem->parent->nodetype != LYS_GROUPING) {
                         elem->nacm |= elem->parent->nacm;
@@ -2358,19 +2386,27 @@ nacm_inherit(struct lys_module *module)
     }
 }
 
-void
+int
 store_flags(struct lys_node *node, uint8_t flags, int config_inherit)
 {
     node->flags |= flags;
-    if (!(node->flags & LYS_CONFIG_MASK) && config_inherit) {
-        /* get config flag from parent */
-        if (node->parent) {
-            node->flags |= node->parent->flags & LYS_CONFIG_MASK;
-        } else {
-            /* default config is true */
-            node->flags |= LYS_CONFIG_W;
+    if (!(node->flags & LYS_CONFIG_MASK)) {
+        if (config_inherit) {
+            /* get config flag from parent */
+            if (node->parent) {
+                node->flags |= node->parent->flags & LYS_CONFIG_MASK;
+            } else {
+                /* default config is true */
+                node->flags |= LYS_CONFIG_W;
+            }
         }
+    } else if ((node->flags & LYS_CONFIG_W) && node->parent && (node->parent->flags & LYS_CONFIG_R)) {
+        LOGVAL(LYE_INARG, LY_VLOG_LYS, node, "true", "config");
+        LOGVAL(LYE_SPEC, LY_VLOG_LYS, node, "State nodes cannot have configuration nodes as children.");
+        return EXIT_FAILURE;
     }
+
+    return EXIT_SUCCESS;
 }
 
 static int
