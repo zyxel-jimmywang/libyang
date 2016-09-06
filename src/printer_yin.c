@@ -423,13 +423,15 @@ yin_print_type(struct lyout *out, int level, const struct lys_module *module, co
             }
             break;
         case LY_TYPE_IDENT:
-            if (type->info.ident.ref) {
-                mod = lys_main_module(type->info.ident.ref->module);
-                if (lys_main_module(module) == mod) {
-                    ly_print(out, "%*s<base name=\"%s\"/>\n", LEVEL, INDENT, type->info.ident.ref->name);
-                } else {
-                    ly_print(out, "%*s<base name=\"%s:%s\"/>\n", LEVEL, INDENT,
-                            transform_module_name2import_prefix(module, mod->name), type->info.ident.ref->name);
+            if (type->info.ident.count) {
+                for (i = 0; i < type->info.ident.count; ++i) {
+                    mod = lys_main_module(type->info.ident.ref[i]->module);
+                    if (lys_main_module(module) == mod) {
+                        ly_print(out, "%*s<base name=\"%s\"/>\n", LEVEL, INDENT, type->info.ident.ref[i]->name);
+                    } else {
+                        ly_print(out, "%*s<base name=\"%s:%s\"/>\n", LEVEL, INDENT,
+                                transform_module_name2import_prefix(module, mod->name), type->info.ident.ref[i]->name);
+                    }
                 }
             }
             break;
@@ -551,12 +553,11 @@ yin_print_refine(struct lyout *out, int level, const struct lys_module *module, 
     for (i = 0; i < refine->iffeature_size; i++) {
         yin_print_iffeature(out, level, module, &refine->iffeature[i]);
     }
+    for (i = 0; i < refine->dflt_size; ++i) {
+        yin_print_open(out, level, "default", "value", refine->dflt[i], 1);
+    }
 
-    if (refine->target_type & (LYS_LEAF | LYS_CHOICE)) {
-        if (refine->mod.dflt) {
-            yin_print_open(out, level, "default", "value", refine->mod.dflt, 1);
-        }
-    } else if (refine->target_type == LYS_CONTAINER) {
+    if (refine->target_type == LYS_CONTAINER) {
         if (refine->mod.presence) {
             yin_print_open(out, level, "presence", "value", refine->mod.presence, 1);
         }
@@ -622,8 +623,8 @@ yin_print_deviation(struct lyout *out, int level, const struct lys_module *modul
             yin_print_open(out, level, "mandatory", "value", "false", 1);
         }
 
-        if (deviation->deviate[i].dflt) {
-            yin_print_open(out, level, "default", "value", deviation->deviate[i].dflt, 1);
+        for (j = 0; j < deviation->deviate[i].dflt_size; j++) {
+            yin_print_open(out, level, "default", "value", deviation->deviate[i].dflt[j], 1);
         }
 
         if (deviation->deviate[i].min_set) {
@@ -952,6 +953,9 @@ yin_print_leaflist(struct lyout *out, int level, const struct lys_node *node)
     yin_print_type(out, level, node->module, &llist->type);
     if (llist->units) {
         yin_print_open(out, level, "units", "name", llist->units, 1);
+    }
+    for (i = 0; i < llist->dflt_size; i++) {
+        yin_print_open(out, level, "default", "value", llist->dflt[i], 1);
     }
     if (llist->min > 0) {
         yin_print_unsigned(out, level, "min-elements", "value", llist->min);

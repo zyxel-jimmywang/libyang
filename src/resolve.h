@@ -153,7 +153,7 @@ int resolve_unique(struct lys_node *parent, const char *uniq_str_path, uint8_t *
 int resolve_applies_when(const struct lys_node *schema, int mode, const struct lys_node *stop);
 int resolve_applies_must(const struct lys_node *schema);
 
-struct lys_ident *resolve_identref(struct lys_ident *base, const char *ident_name, struct lyd_node *node);
+struct lys_ident *resolve_identref(struct lys_type *type, const char *ident_name, struct lyd_node *node);
 
 int resolve_unres_schema(struct lys_module *mod, struct unres_schema *unres);
 
@@ -168,7 +168,11 @@ int unres_schema_add_node(struct lys_module *mod, struct unres_schema *unres, vo
 int unres_schema_dup(struct lys_module *mod, struct unres_schema *unres, void *item, enum UNRES_ITEM type,
                      void *new_item);
 
-int unres_schema_find(struct unres_schema *unres, void *item, enum UNRES_ITEM type);
+/* start_on_backwards - unres is searched from the end to beginning, so the search will start
+ *                      on start_on_backwards index in unres (unless -1) and skip indices
+ *                      larger than start_on_backards
+ */
+int unres_schema_find(struct unres_schema *unres, int start_on_backwards, void *item, enum UNRES_ITEM type);
 
 void unres_schema_free(struct lys_module *module, struct unres_schema **unres);
 

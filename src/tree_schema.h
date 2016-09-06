@@ -412,14 +412,15 @@ struct lys_type_info_enums {
  * @brief Container for information about identity types (#LY_TYPE_IDENT), used in ::lys_type_info.
  */
 struct lys_type_info_ident {
-    struct lys_ident *ref;   /**< pointer (reference) to the identity definition (mandatory) */
+    struct lys_ident **ref;   /**< array of pointers (reference) to the identity definition (mandatory) */
+    int count;                /**< number of base identity references */
 };
 
 /**
  * @brief Container for information about instance-identifier types (#LY_TYPE_INST), used in ::lys_type_info.
  */
 struct lys_type_info_inst {
-    int8_t req;              /**< require-identifier restriction, see
+    int8_t req;              /**< require-instance restriction, see
                                   [RFC 6020 sec. 9.13.2](http://tools.ietf.org/html/rfc6020#section-9.13.2):
                                   - -1 = false,
                                   - 0 not defined,
@@ -441,6 +442,10 @@ struct lys_type_info_lref {
     const char *path;        /**< path to the referred leaf or leaf-list node (mandatory), see
                                   [RFC 6020 sec. 9.9.2](http://tools.ietf.org/html/rfc6020#section-9.9.2) */
     struct lys_node_leaf* target; /**< target schema node according to path */
+    int8_t req;              /**< require-instance restriction:
+                                  - -1 = false,
+                                  - 0 not defined,
+                                  - 1 = true */
 };
 
 /**
@@ -818,7 +823,7 @@ struct lys_node_leaf {
     struct lys_restr *must;          /**< array of must constraints */
 
     /* to this point, struct lys_node_leaf is compatible with struct lys_node_leaflist */
-    const char *dflt;                /**< default value of the type */
+    const char *dflt;                /**< default value of the leaf */
 };
 
 /**
@@ -857,7 +862,8 @@ struct lys_node_leaflist {
     uint8_t iffeature_size;          /**< number of elements in the #iffeature array */
 
     /* specific leaf-list's data */
-    uint8_t padding[2];              /**< padding for 32b alignment */
+    uint8_t padding[1];              /**< padding for 32b alignment */
+    uint8_t dflt_size;               /**< number of elements in the #dflt array */
     uint8_t must_size;               /**< number of elements in the #must array */
 
     struct lys_when *when;           /**< when statement (optional) */
@@ -867,6 +873,7 @@ struct lys_node_leaflist {
     struct lys_restr *must;          /**< array of must constraints */
 
     /* to this point, struct lys_node_leaflist is compatible with struct lys_node_leaf */
+    const char **dflt;               /**< array of default value(s) of the leaflist */
     uint32_t min;                    /**< min-elements constraint (optional) */
     uint32_t max;                    /**< max-elements constraint, 0 means unbounded (optional) */
 };
@@ -1042,6 +1049,7 @@ struct lys_node_grp {
     uint8_t iffeature_size;          /**< number of elements in the #iffeature array */
 
     /* specific grouping's data */
+    uint8_t padding[2];              /**< padding for 32b alignment */
     uint8_t tpdf_size;               /**< number of elements in #tpdf array */
     struct lys_tpdf *tpdf;           /**< array of typedefs */
 };
@@ -1235,8 +1243,6 @@ struct lys_refine_mod_list {
  * @brief Union to hold target modification in ::lys_refine.
  */
 union lys_refine_mod {
-    const char *dflt;            /**< new default value. Applicable to #LYS_LEAF and #LYS_CHOICE target nodes. In case of
-                                      #LYS_CHOICE, it must be possible to resolve the value to the default branch node */
     const char *presence;        /**< presence description. Applicable to #LYS_CONTAINER target node */
     struct lys_refine_mod_list list;  /**< container for list's attributes,
                                       applicable to #LYS_LIST and #LYS_LEAFLIST target nodes */
@@ -1257,8 +1263,12 @@ struct lys_refine {
 
     uint8_t must_size;               /**< number of elements in the #must array */
     uint8_t iffeature_size;          /**< number of elements in the #iffeature array */
+    uint8_t dflt_size;               /**< number of elements in the #dflt array */
     struct lys_restr *must;          /**< array of additional must restrictions to be added to the target */
     struct lys_iffeature *iffeature; /**< array of if-feature expressions */
+    const char **dflt;               /**< array of new default values. Applicable to #LYS_LEAF, #LYS_LEAFLIST and
+                                          #LYS_CHOICE target nodes, but multiple defaults are valid only in case of
+                                          #LYS_LEAFLIST.*/
 
     union lys_refine_mod mod;        /**< mutually exclusive target modifications according to the possible target_type */
 };
@@ -1281,7 +1291,9 @@ struct lys_deviate {
     LYS_DEVIATE_TYPE mod;            /**< type of deviation modification */
 
     uint8_t flags;                   /**< Properties: config, mandatory */
-    const char *dflt;                /**< Properties: default (both type and choice represented as string value */
+    uint8_t dflt_size;               /**< Properties: default - number of elements in the #dflt array */
+    const char **dflt;               /**< Properties: default (both type and choice represented as string value;
+                                                      for deviating leaf-list we need it as an array */
     uint32_t min;                    /**< Properties: min-elements */
     uint32_t max;                    /**< Properties: max-elements */
     uint8_t min_set;                 /**< Since min can be 0, this flag says if it is default value or 0 was set */

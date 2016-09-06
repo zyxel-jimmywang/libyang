@@ -2440,6 +2440,7 @@ resolve_len_ran_interval(const char *str_restr, struct lys_type *type, struct le
 
     /* finally parse our restriction */
     seg_ptr = str_restr;
+    tmp_intv = NULL;
     while (1) {
         if (!tmp_local_intv) {
             assert(!local_intv);
@@ -2549,12 +2550,48 @@ resolve_len_ran_interval(const char *str_restr, struct lys_type *type, struct le
             goto error;
         }
 
+        /* check min and max in correct order*/
+        if (kind == 0) {
+            /* current segment */
+            if (tmp_local_intv->value.uval.min > tmp_local_intv->value.uval.max) {
+                goto error;
+            }
+            if (tmp_local_intv->value.uval.min < local_umin || tmp_local_intv->value.uval.max > local_umax) {
+                goto error;
+            }
+            /* segments sholud be ascending order */
+            if (tmp_intv && (tmp_intv->value.uval.max >= tmp_local_intv->value.uval.min)) {
+                goto error;
+            }
+        } else if (kind == 1) {
+            if (tmp_local_intv->value.sval.min > tmp_local_intv->value.sval.max) {
+                goto error;
+            }
+            if (tmp_local_intv->value.sval.min < local_smin || tmp_local_intv->value.sval.max > local_smax) {
+                goto error;
+            }
+            if (tmp_intv && (tmp_intv->value.sval.max >= tmp_local_intv->value.sval.min)) {
+                goto error;
+            }
+        } else if (kind == 2) {
+            if (tmp_local_intv->value.fval.min > tmp_local_intv->value.fval.max) {
+                goto error;
+            }
+            if (tmp_local_intv->value.fval.min < local_fmin || tmp_local_intv->value.fval.max > local_fmax) {
+                goto error;
+            }
+            if (tmp_intv && (tmp_intv->value.fval.max >= tmp_local_intv->value.fval.min)) {
+                goto error;
+            }
+        }
+
         /* next segment (next OR) */
         seg_ptr = strchr(seg_ptr, '|');
         if (!seg_ptr) {
             break;
         }
         seg_ptr++;
+        tmp_intv = tmp_local_intv;
     }
 
     /* check local restrictions against superior ones */
@@ -2858,6 +2895,10 @@ check_default(struct lys_type *type, const char *value, struct lys_module *modul
             LOGINT;
             return -1;
         }
+    } else if (type->base == LY_TYPE_EMPTY) {
+        LOGVAL(LYE_INCHILDSTMT, LY_VLOG_NONE, NULL, "default", type->parent->name);
+        LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "The \"empty\" data type cannot have a default value.");
+        return -1;
     }
 
     /* dummy leaf */
@@ -3369,42 +3410,22 @@ resolve_path_arg_data(struct lyd_node *node, const char *path, struct unres_data
         parsed += i;
 
         if (!ret->count) {
-            if (parent_times != -1) {
-                ret->count = 1;
-                ret->node = calloc(1, sizeof *ret->node);
-                if (!ret->node) {
-                    LOGMEM;
-                    rc = -1;
-                    goto error;
+            if (parent_times > 0) {
+                data = node;
+                for (i = 1; i < parent_times; ++i) {
+                    data = data->parent;
                 }
-            }
-            for (i = 0; i < parent_times; ++i) {
-                /* relative path */
-                if (!ret->count) {
-                    /* error, too many .. */
-                    LOGVAL(LYE_INVAL, LY_VLOG_LYD, node, path, node->schema->name);
-                    rc = -1;
-                    goto error;
-                } else if (!ret->node[0]) {
-                    /* first .. */
-                    data = ret->node[0] = node->parent;
-                } else if (!ret->node[0]->parent) {
-                    /* we are in root */
-                    ret->count = 0;
-                    free(ret->node);
-                    ret->node = NULL;
-                } else {
-                    /* multiple .. */
-                    data = ret->node[0] = ret->node[0]->parent;
-                }
+            } else if (!parent_times) {
+                data = node->child;
+            } else {
+                /* absolute path */
+                for (data = node; data->parent; data = data->parent);
             }
 
-            /* absolute path */
-            if (parent_times == -1) {
-                for (data = node; data->parent; data = data->parent);
-                /* we're still parsing it and the pointer is not correct yet */
-                if (data->prev) {
-                    for (; data->prev->next; data = data->prev);
+            /* we may still be parsing it and the pointer is not correct yet */
+            if (data->prev) {
+                while (data->prev->next) {
+                    data = data->prev;
                 }
             }
         }
@@ -3895,24 +3916,36 @@ error:
  * Does not log.
  *
  * @param[in] node Siblings and their children to have flags changed.
+ * @param[in] ignore Flag to ignore check if parent is LYS_NOTIF, LYS_INPUT, LYS_OUTPUT, LYS_RPC.
  * @param[in] flags Flags to assign to all the nodes.
+ *
+ * @return 0 on success, -1 on error.
  */
-static void
-inherit_config_flag(struct lys_node *node, int flags)
+static int
+inherit_config_flag(struct lys_node *node, int ignore, int flags)
 {
     assert(!(flags ^ (flags & LYS_CONFIG_MASK)));
     LY_TREE_FOR(node, node) {
-        if (node->flags & LYS_CONFIG_SET) {
+        if (!ignore && (node->flags & LYS_CONFIG_SET)) {
             /* skip nodes with an explicit config value */
+            if ((flags & LYS_CONFIG_R) && (node->flags & LYS_CONFIG_W)) {
+                LOGVAL(LYE_INARG, LY_VLOG_LYS, node, "true", "config");
+                LOGVAL(LYE_SPEC, LY_VLOG_LYS, node, "State nodes cannot have configuration nodes as children.");
+                return -1;
+            }
             continue;
         }
         if (!(node->nodetype & (LYS_USES | LYS_GROUPING))) {
             node->flags = (node->flags & ~LYS_CONFIG_MASK) | flags;
         }
         if (!(node->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA))) {
-            inherit_config_flag(node->child, flags);
+            if (inherit_config_flag(node->child, ignore, flags)) {
+                return -1;
+            }
         }
     }
+
+    return 0;
 }
 
 /**
@@ -3926,78 +3959,84 @@ inherit_config_flag(struct lys_node *node, int flags)
 static int
 resolve_augment(struct lys_node_augment *aug, struct lys_node *siblings)
 {
-    int rc;
+    int rc, ignore_config;
     struct lys_node *sub;
+    const struct lys_node *aug_target, *parent;
 
-    assert(aug);
+    assert(aug && !aug->target);
 
-    if (!aug->target) {
-        /* resolve target node */
-        rc = resolve_augment_schema_nodeid(aug->target_name, siblings, (siblings ? NULL : aug->module), (const struct lys_node **)&aug->target);
-        if (rc == -1) {
-            return -1;
-        }
-        if (rc > 0) {
-            LOGVAL(LYE_INCHAR, LY_VLOG_LYS, aug, aug->target_name[rc - 1], &aug->target_name[rc - 1]);
-            return -1;
-        }
-        if (!aug->target) {
-            LOGVAL(LYE_INRESOLV, LY_VLOG_LYS, aug, "augment", aug->target_name);
-            return EXIT_FAILURE;
-        }
+    /* resolve target node */
+    rc = resolve_augment_schema_nodeid(aug->target_name, siblings, (siblings ? NULL : aug->module), &aug_target);
+    if (rc == -1) {
+        return -1;
+    }
+    if (rc > 0) {
+        LOGVAL(LYE_INCHAR, LY_VLOG_LYS, aug, aug->target_name[rc - 1], &aug->target_name[rc - 1]);
+        return -1;
+    }
+    if (!aug_target) {
+        LOGVAL(LYE_INRESOLV, LY_VLOG_LYS, aug, "augment", aug->target_name);
+        return EXIT_FAILURE;
+    }
 
-        if (!aug->child) {
-            /* nothing to do */
-            LOGWRN("Augment \"%s\" without children.", aug->target_name);
-            return EXIT_SUCCESS;
-        }
+    if (!aug->child) {
+        /* nothing to do */
+        LOGWRN("Augment \"%s\" without children.", aug->target_name);
+        return EXIT_SUCCESS;
     }
 
     /* check for mandatory nodes - if the target node is in another module
      * the added nodes cannot be mandatory
      */
-    if (!aug->parent && (lys_node_module((struct lys_node *)aug) != lys_node_module(aug->target))
+    if (!aug->parent && (lys_node_module((struct lys_node *)aug) != lys_node_module(aug_target))
             && (rc = lyp_check_mandatory_augment(aug))) {
         return rc;
     }
 
     /* check augment target type and then augment nodes type */
-    if (aug->target->nodetype & (LYS_CONTAINER | LYS_LIST | LYS_CASE | LYS_INPUT | LYS_OUTPUT | LYS_NOTIF)) {
+    if (aug_target->nodetype & (LYS_CONTAINER | LYS_LIST | LYS_CASE | LYS_INPUT | LYS_OUTPUT | LYS_NOTIF)) {
         LY_TREE_FOR(aug->child, sub) {
             if (!(sub->nodetype & (LYS_ANYDATA | LYS_CONTAINER | LYS_LEAF | LYS_LIST | LYS_LEAFLIST | LYS_USES | LYS_CHOICE))) {
                 LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, aug, strnodetype(sub->nodetype), "augment");
                 LOGVAL(LYE_SPEC, LY_VLOG_LYS, aug, "Cannot augment \"%s\" with a \"%s\".",
-                       strnodetype(aug->target->nodetype), strnodetype(sub->nodetype));
+                       strnodetype(aug_target->nodetype), strnodetype(sub->nodetype));
                 return -1;
             }
         }
-    } else if (aug->target->nodetype == LYS_CHOICE) {
+    } else if (aug_target->nodetype == LYS_CHOICE) {
         LY_TREE_FOR(aug->child, sub) {
             if (!(sub->nodetype & (LYS_CASE | LYS_ANYDATA | LYS_CONTAINER | LYS_LEAF | LYS_LIST | LYS_LEAFLIST))) {
                 LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, aug, strnodetype(sub->nodetype), "augment");
                 LOGVAL(LYE_SPEC, LY_VLOG_LYS, aug, "Cannot augment \"%s\" with a \"%s\".",
-                       strnodetype(aug->target->nodetype), strnodetype(sub->nodetype));
+                       strnodetype(aug_target->nodetype), strnodetype(sub->nodetype));
                 return -1;
             }
         }
     } else {
         LOGVAL(LYE_INARG, LY_VLOG_LYS, aug, aug->target_name, "target-node");
-        LOGVAL(LYE_SPEC, LY_VLOG_LYS, aug, "Invalid augment target node type \"%s\".", strnodetype(aug->target->nodetype));
+        LOGVAL(LYE_SPEC, LY_VLOG_LYS, aug, "Invalid augment target node type \"%s\".", strnodetype(aug_target->nodetype));
         return -1;
     }
 
     /* inherit config information from actual parent */
+    for(parent = aug_target; parent && !(parent->nodetype & (LYS_NOTIF | LYS_INPUT | LYS_OUTPUT | LYS_RPC)); parent = parent->parent);
+    ignore_config = (parent) ? 1 : 0;
     LY_TREE_FOR(aug->child, sub) {
-        inherit_config_flag(sub, aug->target->flags & LYS_CONFIG_MASK);
+        if (inherit_config_flag(sub, ignore_config, aug_target->flags & LYS_CONFIG_MASK)) {
+            return -1;
+        }
     }
 
     /* check identifier uniqueness as in lys_node_addchild() */
     LY_TREE_FOR(aug->child, sub) {
-        if (lys_check_id(sub, aug->target, NULL)) {
+        if (lys_check_id(sub, (struct lys_node *)aug_target, NULL)) {
             return -1;
         }
     }
-    /* reconnect augmenting data into the target - add them to the target child list */
+
+    /* finally reconnect augmenting data into the target - add them to the target child list,
+     * by setting aug->target we know the augment is fully resolved now */
+    aug->target = (struct lys_node *)aug_target;
     if (aug->target->child) {
         sub = aug->target->child->prev; /* remember current target's last node */
         sub->next = aug->child;         /* connect augmenting data after target's last node */
@@ -4008,6 +4047,36 @@ resolve_augment(struct lys_node_augment *aug, struct lys_node *siblings)
     }
 
     return EXIT_SUCCESS;
+}
+
+/**
+ * @brief Resolve (find) choice default case. Does not log.
+ *
+ * @param[in] choic Choice to use.
+ * @param[in] dflt Name of the default case.
+ *
+ * @return Pointer to the default node or NULL.
+ */
+static struct lys_node *
+resolve_choice_dflt(struct lys_node_choice *choic, const char *dflt)
+{
+    struct lys_node *child, *ret;
+
+    LY_TREE_FOR(choic->child, child) {
+        if (child->nodetype == LYS_USES) {
+            ret = resolve_choice_dflt((struct lys_node_choice *)child, dflt);
+            if (ret) {
+                return ret;
+            }
+        }
+
+        if (ly_strequal(child->name, dflt, 1) && (child->nodetype & (LYS_ANYDATA | LYS_CASE
+                | LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST))) {
+            return child;
+        }
+    }
+
+    return NULL;
 }
 
 /**
@@ -4022,12 +4091,14 @@ static int
 resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
 {
     struct ly_ctx *ctx;
-    struct lys_node *node = NULL, *next, *iter;
+    struct lys_node *node = NULL, *next, *iter, **refine_nodes = NULL;
     struct lys_node *node_aux, *parent, *tmp;
+    struct lys_node_leaflist *llist;
+    struct lys_node_leaf *leaf;
     struct lys_refine *rfn;
     struct lys_restr *must, **old_must;
     struct lys_iffeature *iff, **old_iff;
-    int i, j, rc, parent_flags;
+    int i, j, k, rc, parent_config, ignore_config;
     uint8_t size, *old_size;
     unsigned int usize, usize1, usize2;
 
@@ -4043,10 +4114,10 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
     /* get proper parent (config) flags */
     for (node_aux = lys_parent((struct lys_node *)uses); node_aux && (node_aux->nodetype == LYS_USES); node_aux = lys_parent(node_aux));
     if (node_aux) {
-        parent_flags = node_aux->flags & LYS_CONFIG_MASK;
+        parent_config = node_aux->flags & LYS_CONFIG_MASK;
     } else {
         /* default */
-        parent_flags = LYS_CONFIG_W;
+        parent_config = LYS_CONFIG_W;
     }
 
     /* copy the data nodes from grouping into the uses context */
@@ -4055,23 +4126,35 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
         if (!node) {
             LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, uses->grp->name, "uses");
             LOGVAL(LYE_SPEC, LY_VLOG_LYS, uses, "Copying data from grouping failed.");
-            return -1;
+            goto fail;
         }
         /* test the name of siblings */
         LY_TREE_FOR((uses->parent) ? uses->parent->child : lys_main_module(uses->module)->data, tmp) {
             if (!(tmp->nodetype & (LYS_USES | LYS_GROUPING | LYS_CASE)) && ly_strequal(tmp->name, node_aux->name, 1)) {
-                return -1;
+                goto fail;
             }
         }
     }
     ctx = uses->module->ctx;
+    for(parent = node; parent && !(parent->nodetype & (LYS_NOTIF | LYS_INPUT | LYS_OUTPUT | LYS_RPC)); parent = parent->parent);
+    ignore_config = (parent) ? 1 : 0;
 
-    if (parent_flags) {
+    if (parent_config) {
         assert(uses->child);
-        inherit_config_flag(uses->child, parent_flags);
+        if (inherit_config_flag(uses->child, ignore_config, parent_config)) {
+            goto fail;
+        }
     }
 
     /* we managed to copy the grouping, the rest must be possible to resolve */
+
+    if (uses->refine_size) {
+        refine_nodes = malloc(uses->refine_size * sizeof *refine_nodes);
+        if (!refine_nodes) {
+            LOGMEM;
+            goto fail;
+        }
+    }
 
     /* apply refines */
     for (i = 0; i < uses->refine_size; i++) {
@@ -4080,14 +4163,15 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
                                               1, 0, (const struct lys_node **)&node);
         if (rc || !node) {
             LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, rfn->target_name, "refine");
-            return -1;
+            goto fail;
         }
 
         if (rfn->target_type && !(node->nodetype & rfn->target_type)) {
             LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, rfn->target_name, "refine");
             LOGVAL(LYE_SPEC, LY_VLOG_LYS, uses, "Refine substatements not applicable to the target-node.");
-            return -1;
+            goto fail;
         }
+        refine_nodes[i] = node;
 
         /* description on any nodetype */
         if (rfn->dsc) {
@@ -4102,87 +4186,46 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
         }
 
         /* config on any nodetype */
-        if (rfn->flags & LYS_CONFIG_MASK) {
-            for (parent = lys_parent(node); parent && parent->nodetype == LYS_USES; parent = lys_parent(parent));
-            if (parent && parent->nodetype != LYS_GROUPING &&
-                    ((parent->flags & LYS_CONFIG_MASK) != (rfn->flags & LYS_CONFIG_MASK)) &&
-                    (rfn->flags & LYS_CONFIG_W)) {
-                /* setting config true under config false is prohibited */
-                LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, "config", "refine");
-                LOGVAL(LYE_SPEC, LY_VLOG_LYS, uses,
-                       "changing config from 'false' to 'true' is prohibited while "
-                       "the target's parent is still config 'false'.");
-                return -1;
-            }
-
+        if ((rfn->flags & LYS_CONFIG_MASK) && !ignore_config) {
             node->flags &= ~LYS_CONFIG_MASK;
             node->flags |= (rfn->flags & LYS_CONFIG_MASK);
-
-            /* inherit config change to the target children */
-            LY_TREE_DFS_BEGIN(node->child, next, iter) {
-                if (rfn->flags & LYS_CONFIG_W) {
-                    if (iter->flags & LYS_CONFIG_SET) {
-                        /* config is set explicitely, go to next sibling */
-                        next = NULL;
-                        goto nextsibling;
-                    }
-                } else { /* LYS_CONFIG_R */
-                    if ((iter->flags & LYS_CONFIG_SET) && (iter->flags & LYS_CONFIG_W)) {
-                        /* error - we would have config data under status data */
-                        LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, "config", "refine");
-                        LOGVAL(LYE_SPEC, LY_VLOG_LYS, uses,
-                               "changing config from 'true' to 'false' is prohibited while the target "
-                               "has still a children with explicit config 'true'.");
-                        return -1;
-                    }
-                }
-                /* change config */
-                iter->flags &= ~LYS_CONFIG_MASK;
-                iter->flags |= (rfn->flags & LYS_CONFIG_MASK);
-
-                /* select next iter - modified LY_TREE_DFS_END */
-                if (iter->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA)) {
-                    next = NULL;
-                } else {
-                    next = iter->child;
-                }
-nextsibling:
-                if (!next) {
-                    /* no children */
-                    if (iter == node->child) {
-                        /* we are done, (START) has no children */
-                        break;
-                    }
-                    /* try siblings */
-                    next = iter->next;
-                }
-                while (!next) {
-                    /* parent is already processed, go to its sibling */
-                    iter = lys_parent(iter);
-
-                    /* no siblings, go back through parents */
-                    if (iter == node) {
-                        /* we are done, no next element to process */
-                        break;
-                    }
-                    next = iter->next;
-                }
-            }
         }
 
         /* default value ... */
-        if (rfn->mod.dflt) {
+        if (rfn->dflt_size) {
             if (node->nodetype == LYS_LEAF) {
                 /* leaf */
-                lydict_remove(ctx, ((struct lys_node_leaf *)node)->dflt);
-                ((struct lys_node_leaf *)node)->dflt = lydict_insert(ctx, rfn->mod.dflt, 0);
-            } else if (node->nodetype == LYS_CHOICE) {
-                /* choice */
-                rc = resolve_choice_default_schema_nodeid(rfn->mod.dflt, node->child,
-                                                          (const struct lys_node **)&((struct lys_node_choice *)node)->dflt);
-                if (rc || !((struct lys_node_choice *)node)->dflt) {
-                    LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, rfn->mod.dflt, "default");
-                    return -1;
+                leaf = (struct lys_node_leaf *)node;
+
+                lydict_remove(ctx, leaf->dflt);
+                leaf->dflt = lydict_insert(ctx, rfn->dflt[0], 0);
+
+                /* check the default value */
+                if (unres_schema_add_str(leaf->module, unres, &leaf->type, UNRES_TYPE_DFLT, leaf->dflt) == -1) {
+                    goto fail;
+                }
+            } else if (node->nodetype == LYS_LEAFLIST) {
+                /* leaf-list */
+                llist = (struct lys_node_leaflist *)node;
+
+                /* remove complete set of defaults in target */
+                for (i = 0; i < llist->dflt_size; i++) {
+                    lydict_remove(ctx, llist->dflt[i]);
+                }
+                free(llist->dflt);
+
+                /* copy the default set from refine */
+                llist->dflt_size = rfn->dflt_size;
+                llist->dflt = malloc(llist->dflt_size * sizeof *llist->dflt);
+                for (i = 0; i < llist->dflt_size; i++) {
+                    llist->dflt[i] = lydict_insert(ctx, rfn->dflt[i], 0);
+                }
+
+                /* check default value */
+                for (i = 0; i < llist->dflt_size; i++) {
+                    if (unres_schema_add_str(llist->module, unres, &llist->type, UNRES_TYPE_DFLT, llist->dflt[i]) == -1) {
+                        goto fail;
+                    }
                 }
             }
         }
@@ -4195,6 +4238,17 @@ nextsibling:
 
                 /* set new value */
                 node->flags |= (rfn->flags & LYS_MAND_MASK);
+            }
+            if (rfn->flags & LYS_MAND_TRUE) {
+                /* check if node has default value */
+                if ((node->nodetype & LYS_LEAF) && ((struct lys_node_leaf *)node)->dflt) {
+                    LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "The \"mandatory\" statement is forbidden on leaf with \"default\".");
+                    goto fail;
+                }
+                if ((node->nodetype & LYS_CHOICE) && ((struct lys_node_choice *)node)->dflt) {
+                    LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "The \"mandatory\" statement is forbidden on choices with \"default\".");
+                    goto fail;
+                }
             }
         }
 
@@ -4247,21 +4301,21 @@ nextsibling:
                 break;
             default:
                 LOGINT;
-                return -1;
+                goto fail;
             }
 
             size = *old_size + rfn->must_size;
             must = realloc(*old_must, size * sizeof *rfn->must);
             if (!must) {
                 LOGMEM;
-                return -1;
+                goto fail;
             }
-            for (i = 0, j = *old_size; i < rfn->must_size; i++, j++) {
-                must[j].expr = lydict_insert(ctx, rfn->must[i].expr, 0);
-                must[j].dsc = lydict_insert(ctx, rfn->must[i].dsc, 0);
-                must[j].ref = lydict_insert(ctx, rfn->must[i].ref, 0);
-                must[j].eapptag = lydict_insert(ctx, rfn->must[i].eapptag, 0);
-                must[j].emsg = lydict_insert(ctx, rfn->must[i].emsg, 0);
+            for (k = 0, j = *old_size; k < rfn->must_size; k++, j++) {
+                must[j].expr = lydict_insert(ctx, rfn->must[k].expr, 0);
+                must[j].dsc = lydict_insert(ctx, rfn->must[k].dsc, 0);
+                must[j].ref = lydict_insert(ctx, rfn->must[k].ref, 0);
+                must[j].eapptag = lydict_insert(ctx, rfn->must[k].eapptag, 0);
+                must[j].emsg = lydict_insert(ctx, rfn->must[k].emsg, 0);
             }
 
             *old_must = must;
@@ -4277,20 +4331,20 @@ nextsibling:
             iff = realloc(*old_iff, size * sizeof *rfn->iffeature);
             if (!iff) {
                 LOGMEM;
-                return -1;
+                goto fail;
             }
-            for (i = 0, j = *old_size; i < rfn->iffeature_size; i++, j++) {
-                resolve_iffeature_getsizes(&rfn->iffeature[i], &usize1, &usize2);
+            for (k = 0, j = *old_size; k < rfn->iffeature_size; k++, j++) {
+                resolve_iffeature_getsizes(&rfn->iffeature[k], &usize1, &usize2);
                 if (usize1) {
                     /* there is something to duplicate */
                     /* duplicate compiled expression */
                     usize = (usize1 / 4) + (usize1 % 4) ? 1 : 0;
                     iff[j].expr = malloc(usize * sizeof *iff[j].expr);
-                    memcpy(iff[j].expr, rfn->iffeature[i].expr, usize * sizeof *iff[j].expr);
+                    memcpy(iff[j].expr, rfn->iffeature[k].expr, usize * sizeof *iff[j].expr);
 
                     /* duplicate list of feature pointers */
-                    iff[j].features = malloc(usize2 * sizeof *iff[i].features);
-                    memcpy(iff[j].features, rfn->iffeature[i].features, usize2 * sizeof *iff[j].features);
+                    iff[j].features = malloc(usize2 * sizeof *iff[k].features);
+                    memcpy(iff[j].features, rfn->iffeature[k].features, usize2 * sizeof *iff[j].features);
                 }
             }
 
@@ -4303,11 +4357,144 @@ nextsibling:
     for (i = 0; i < uses->augment_size; i++) {
         rc = resolve_augment(&uses->augment[i], uses->child);
         if (rc) {
-            return -1;
+            goto fail;
         }
     }
 
+    /* check refines */
+    for (i = 0; i < uses->refine_size; i++) {
+        node = refine_nodes[i];
+        rfn = &uses->refine[i];
+
+        /* config on any nodetype */
+        if ((rfn->flags & LYS_CONFIG_MASK) && !ignore_config) {
+            for (parent = lys_parent(node); parent && parent->nodetype == LYS_USES; parent = lys_parent(parent));
+            if (parent && parent->nodetype != LYS_GROUPING &&
+                    ((parent->flags & LYS_CONFIG_MASK) != (rfn->flags & LYS_CONFIG_MASK)) &&
+                    (rfn->flags & LYS_CONFIG_W)) {
+                /* setting config true under config false is prohibited */
+                LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, "config", "refine");
+                LOGVAL(LYE_SPEC, LY_VLOG_LYS, uses,
+                       "changing config from 'false' to 'true' is prohibited while "
+                       "the target's parent is still config 'false'.");
+                goto fail;
+            }
+
+            /* inherit config change to the target children */
+            LY_TREE_DFS_BEGIN(node->child, next, iter) {
+                if (rfn->flags & LYS_CONFIG_W) {
+                    if (iter->flags & LYS_CONFIG_SET) {
+                        /* config is set explicitely, go to next sibling */
+                        next = NULL;
+                        goto nextsibling;
+                    }
+                } else { /* LYS_CONFIG_R */
+                    if ((iter->flags & LYS_CONFIG_SET) && (iter->flags & LYS_CONFIG_W)) {
+                        /* error - we would have config data under status data */
+                        LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, "config", "refine");
+                        LOGVAL(LYE_SPEC, LY_VLOG_LYS, uses,
+                               "changing config from 'true' to 'false' is prohibited while the target "
+                               "has still a children with explicit config 'true'.");
+                        goto fail;
+                    }
+                }
+                /* change config */
+                iter->flags &= ~LYS_CONFIG_MASK;
+                iter->flags |= (rfn->flags & LYS_CONFIG_MASK);
+
+                /* select next iter - modified LY_TREE_DFS_END */
+                if (iter->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA)) {
+                    next = NULL;
+                } else {
+                    next = iter->child;
+                }
+nextsibling:
+                if (!next) {
+                    /* try siblings */
+                    next = iter->next;
+                }
+                while (!next) {
+                    /* parent is already processed, go to its sibling */
+                    iter = lys_parent(iter);
+
+                    /* no siblings, go back through parents */
+                    if (iter == node) {
+                        /* we are done, no next element to process */
+                        break;
+                    }
+                    next = iter->next;
+                }
+            }
+        }
+
+        /* default value */
+        if (rfn->dflt_size && node->nodetype == LYS_CHOICE) {
+            /* choice */
+
+            ((struct lys_node_choice *)node)->dflt = resolve_choice_dflt((struct lys_node_choice *)node,
+                                                                         rfn->dflt[0]);
+            if (!((struct lys_node_choice *)node)->dflt) {
+                LOGVAL(LYE_INARG, LY_VLOG_LYS, uses, rfn->dflt[0], "default");
+                goto fail;
+            }
+            if (lyp_check_mandatory_choice(node)) {
+                goto fail;
+            }
+        }
+
+        /* min/max-elements on list or leaf-list */
+        if (node->nodetype == LYS_LIST) {
+            if (((struct lys_node_list *)node)->min > ((struct lys_node_list *)node)->max) {
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid value \"%d\" of \"%s\".", rfn->mod.list.min, "min-elements");
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "\"min-elements\" is bigger than \"max-elements\".");
+                goto fail;
+            }
+        } else if (node->nodetype == LYS_LEAFLIST) {
+            if (((struct lys_node_leaflist *)node)->min > ((struct lys_node_leaflist *)node)->max) {
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid value \"%d\" of \"%s\".", rfn->mod.list.min, "min-elements");
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "\"min-elements\" is bigger than \"max-elements\".");
+                goto fail;
+            }
+        }
+
+        /* additional checks */
+        if (node->nodetype == LYS_LEAFLIST) {
+            llist = (struct lys_node_leaflist *)node;
+            if (llist->dflt_size && llist->min) {
+                LOGVAL(LYE_INCHILDSTMT, LY_VLOG_NONE, NULL, rfn->dflt_size ? "default" : "min-elements", "refine");
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL,
+                       "The \"min-elements\" statement with non-zero value is forbidden on leaf-lists with the \"default\" statement.");
+                goto fail;
+            }
+        }
+        if ((rfn->flags & LYS_MAND_TRUE) || rfn->mod.list.min) {
+        /* check for mandatory node in default case, first find the closest parent choice to the changed node */
+            for (parent = node->parent;
+                 parent && !(parent->nodetype & (LYS_CHOICE | LYS_GROUPING | LYS_ACTION | LYS_USES));
+                 parent = parent->parent) {
+                if (parent->nodetype == LYS_CONTAINER && ((struct lys_node_container *)parent)->presence) {
+                    /* stop also on presence containers */
+                    break;
+                }
+            }
+            /* and if it is a choice with the default case, check it for presence of a mandatory node in it */
+            if (parent && parent->nodetype == LYS_CHOICE && ((struct lys_node_choice *)parent)->dflt) {
+                if (lyp_check_mandatory_choice(parent)) {
+                    goto fail;
+                }
+            }
+        }
+    }
+    free(refine_nodes);
+
     return EXIT_SUCCESS;
+
+fail:
+    LY_TREE_FOR_SAFE(uses->child, next, iter) {
+        lys_node_free(iter, NULL, 0);
+    }
+    free(refine_nodes);
+    return -1;
 }
 
 static int
@@ -4430,7 +4617,7 @@ matchfound:
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on forward reference, -1 on error.
  */
 static int
-resolve_base_ident(const struct lys_module *module, struct lys_ident *ident, const char *basename, const char* parent,
+resolve_base_ident(const struct lys_module *module, struct lys_ident *ident, const char *basename, const char *parent,
                    struct lys_type *type, struct unres_schema *unres)
 {
     const char *name;
@@ -4448,7 +4635,14 @@ resolve_base_ident(const struct lys_module *module, struct lys_ident *ident, con
         mod = ident->module;
     } else {
         /* have type to fill */
-        ret = &type->info.ident.ref;
+        ++type->info.ident.count;
+        type->info.ident.ref = ly_realloc(type->info.ident.ref, type->info.ident.count * sizeof *type->info.ident.ref);
+        if (!type->info.ident.ref) {
+            LOGMEM;
+            return -1;
+        }
+
+        ret = &type->info.ident.ref[type->info.ident.count - 1];
         flags = type->parent->flags;
         mod = type->parent->module;
     }
@@ -4489,6 +4683,9 @@ resolve_base_ident(const struct lys_module *module, struct lys_ident *ident, con
         }
     } else if (rc == EXIT_FAILURE) {
         LOGVAL(LYE_INRESOLV, LY_VLOG_NONE, NULL, parent, basename);
+        if (type) {
+            --type->info.ident.count;
+        }
     }
 
     return rc;
@@ -4497,21 +4694,20 @@ resolve_base_ident(const struct lys_module *module, struct lys_ident *ident, con
 /**
  * @brief Resolve JSON data format identityref. Logs directly.
  *
- * @param[in] base Base identity.
+ * @param[in] type Identityref type.
  * @param[in] ident_name Identityref name.
  * @param[in] node Node where the identityref is being resolved
  *
  * @return Pointer to the identity resolvent, NULL on error.
  */
 struct lys_ident *
-resolve_identref(struct lys_ident *base, const char *ident_name, struct lyd_node *node)
+resolve_identref(struct lys_type *type, const char *ident_name, struct lyd_node *node)
 {
     const char *mod_name, *name;
-    int mod_name_len, rc;
-    int i;
-    struct lys_ident *der;
+    int mod_name_len, rc, i, j;
+    struct lys_ident *der, *cur;
 
-    if (!base || !ident_name) {
+    if (!type || (!type->info.ident.count && !type->der) || !ident_name) {
         return NULL;
     }
 
@@ -4524,65 +4720,41 @@ resolve_identref(struct lys_ident *base, const char *ident_name, struct lyd_node
         return NULL;
     }
 
-    if (!strcmp(base->name, name) && (!mod_name
-            || (!strncmp(base->module->name, mod_name, mod_name_len) && !base->module->name[mod_name_len]))) {
-        der = base;
-        goto match;
-    }
+    /* go through all the bases in all the derived types */
+    while (type->der) {
+        for (i = 0; i < type->info.ident.count; ++i) {
+            cur = type->info.ident.ref[i];
+            if (!strcmp(cur->name, name) && (!mod_name
+                    || (!strncmp(cur->module->name, mod_name, mod_name_len) && !cur->module->name[mod_name_len]))) {
+                goto match;
+            }
 
-    for (i = 0; i < base->der_size; i++) {
-        der = base->der[i]; /* shortcut */
-        if (!strcmp(der->name, name) &&
-                (!mod_name || (!strncmp(der->module->name, mod_name, mod_name_len) && !der->module->name[mod_name_len]))) {
-            /* we have match */
-            goto match;
+            for (j = 0; j < cur->der_size; j++) {
+                der = cur->der[j]; /* shortcut */
+                if (!strcmp(der->name, name) &&
+                        (!mod_name || (!strncmp(der->module->name, mod_name, mod_name_len) && !der->module->name[mod_name_len]))) {
+                    /* we have match */
+                    cur = der;
+                    goto match;
+                }
+            }
         }
-
+        type = &type->der->type;
     }
 
     LOGVAL(LYE_INRESOLV, LY_VLOG_LYD, node, "identityref", ident_name);
     return NULL;
 
 match:
-    for (i = 0; i < der->iffeature_size; i++) {
-        if (!resolve_iffeature(&der->iffeature[i])) {
-            LOGVAL(LYE_INVAL, LY_VLOG_LYD, node, der->name, node->schema->name);
+    for (i = 0; i < cur->iffeature_size; i++) {
+        if (!resolve_iffeature(&cur->iffeature[i])) {
+            LOGVAL(LYE_INVAL, LY_VLOG_LYD, node, cur->name, node->schema->name);
             LOGVAL(LYE_SPEC, LY_VLOG_LYD, node, "Identity \"%s\" is disabled by its if-feature condition.",
-                   der->name);
+                   cur->name);
             return NULL;
         }
     }
-    return der;
-}
-
-/**
- * @brief Resolve (find) choice default case. Does not log.
- *
- * @param[in] choic Choice to use.
- * @param[in] dflt Name of the default case.
- *
- * @return Pointer to the default node or NULL.
- */
-static struct lys_node *
-resolve_choice_dflt(struct lys_node_choice *choic, const char *dflt)
-{
-    struct lys_node *child, *ret;
-
-    LY_TREE_FOR(choic->child, child) {
-        if (child->nodetype == LYS_USES) {
-            ret = resolve_choice_dflt((struct lys_node_choice *)child, dflt);
-            if (ret) {
-                return ret;
-            }
-        }
-
-        if (ly_strequal(child->name, dflt, 1) && (child->nodetype & (LYS_ANYDATA | LYS_CASE
-                | LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST))) {
-            return child;
-        }
-    }
-
-    return NULL;
+    return cur;
 }
 
 /**
@@ -5091,9 +5263,7 @@ resolve_when(struct lyd_node *node, int *result)
         /* set boolean result of the condition */
         lyxp_set_cast(&set, LYXP_SET_BOOLEAN, node, LYXP_WHEN);
         if (!set.val.bool) {
-            ly_vlog_hide(0);
             LOGVAL(LYE_NOWHEN, LY_VLOG_LYD, node, ((struct lys_node_container *)node->schema)->when->cond);
-            ly_vlog_hide(1);
             node->when_status |= LYD_WHEN_FALSE;
             goto cleanup;
         }
@@ -5142,9 +5312,7 @@ resolve_when(struct lyd_node *node, int *result)
 
             lyxp_set_cast(&set, LYXP_SET_BOOLEAN, ctx_node, LYXP_WHEN);
             if (!set.val.bool) {
-                ly_vlog_hide(0);
                 LOGVAL(LYE_NOWHEN, LY_VLOG_LYD, node, ((struct lys_node_uses *)sparent)->when->cond);
-                ly_vlog_hide(1);
                 node->when_status |= LYD_WHEN_FALSE;
                 goto cleanup;
             }
@@ -5192,9 +5360,7 @@ check_augment:
             lyxp_set_cast(&set, LYXP_SET_BOOLEAN, ctx_node, LYXP_WHEN);
 
             if (!set.val.bool) {
-                ly_vlog_hide(0);
                 LOGVAL(LYE_NOWHEN, LY_VLOG_LYD, node, ((struct lys_node_augment *)sparent->parent)->when->cond);
-                ly_vlog_hide(1);
                 node->when_status |= LYD_WHEN_FALSE;
                goto cleanup;
             }
@@ -5308,15 +5474,8 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
             rc = yang_check_type(mod, node, yang, tpdf_flag, unres);
 
             if (rc) {
-                if (rc == -1) {
-                    yang->type->base = yang->base;
-                    lydict_remove(mod->ctx, yang->name);
-                    free(yang);
-                    stype->der = NULL;
-                } else {
-                    /* may try again later */
-                    stype->der = (struct lys_tpdf *)yang;
-                }
+                /* may try again later */
+                stype->der = (struct lys_tpdf *)yang;
             } else {
                 /* we need to always be able to free this, it's safe only in this case */
                 lydict_remove(mod->ctx, yang->name);
@@ -5377,7 +5536,7 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
                 for (i = 0; i < ref->iffeature_size; i++) {
                     resolve_iffeature_getsizes(&ref->iffeature[i], NULL, &j);
                     for (; j > 0 ; j--) {
-                        if (unres_schema_find(unres, &ref->iffeature[i].features[j - 1], UNRES_IFFEAT) == -1) {
+                        if (unres_schema_find(unres, -1, &ref->iffeature[i].features[j - 1], UNRES_IFFEAT) == -1) {
                             if (ref->iffeature[i].features[j - 1] == feat) {
                                 LOGVAL(LYE_CIRC_FEATURES, LY_VLOG_NONE, NULL, feat->name);
                                 goto featurecheckdone;
@@ -5770,7 +5929,7 @@ unres_schema_dup(struct lys_module *mod, struct unres_schema *unres, void *item,
         aux_uniq.expr = ((struct unres_list_uniq *)new_item)->expr;
         item = &aux_uniq;
     }
-    i = unres_schema_find(unres, item, type);
+    i = unres_schema_find(unres, -1, item, type);
 
     if (i == -1) {
         if (type == UNRES_LIST_UNIQ) {
@@ -5797,31 +5956,34 @@ unres_schema_dup(struct lys_module *mod, struct unres_schema *unres, void *item,
 
 /* does not log */
 int
-unres_schema_find(struct unres_schema *unres, void *item, enum UNRES_ITEM type)
+unres_schema_find(struct unres_schema *unres, int start_on_backwards, void *item, enum UNRES_ITEM type)
 {
-    uint32_t ret = -1, i;
+    int i;
     struct unres_list_uniq *aux_uniq1, *aux_uniq2;
 
-    for (i = unres->count; i > 0; i--) {
-        if (unres->type[i - 1] != type) {
+    if (start_on_backwards > 0) {
+        i = start_on_backwards;
+    } else {
+        i = unres->count - 1;
+    }
+    for (; i > -1; i--) {
+        if (unres->type[i] != type) {
             continue;
         }
         if (type != UNRES_LIST_UNIQ) {
-            if (unres->item[i - 1] == item) {
-                ret = i - 1;
+            if (unres->item[i] == item) {
                 break;
             }
         } else {
             aux_uniq1 = (struct unres_list_uniq *)unres->item[i - 1];
             aux_uniq2 = (struct unres_list_uniq *)item;
             if ((aux_uniq1->list == aux_uniq2->list) && ly_strequal(aux_uniq1->expr, aux_uniq2->expr, 0)) {
-                ret = i - 1;
                 break;
             }
         }
     }
 
-    return ret;
+    return i;
 }
 
 static void
@@ -5936,8 +6098,12 @@ resolve_unres_data_item(struct lyd_node *node, enum UNRES_ITEM type)
 
         if (!leaf->value.leafref) {
             /* reference not found */
-            LOGVAL(LYE_NOLEAFREF, LY_VLOG_LYD, leaf, sleaf->type.info.lref.path, leaf->value_str);
-            return EXIT_FAILURE;
+            if (sleaf->type.info.lref.req > -1) {
+                LOGVAL(LYE_NOLEAFREF, LY_VLOG_LYD, leaf, sleaf->type.info.lref.path, leaf->value_str);
+                return EXIT_FAILURE;
+            } else {
+                LOGVRB("There is no leafref with the value \"%s\", but it is not required.", leaf->value_str);
+            }
         }
         break;
 
@@ -5952,7 +6118,7 @@ resolve_unres_data_item(struct lyd_node *node, enum UNRES_ITEM type)
                 LOGVAL(LYE_NOREQINS, LY_VLOG_LYD, leaf, leaf->value_str);
                 return EXIT_FAILURE;
             } else {
-                LOGVRB("There is no instance of \"%s\", but it is not required.", leaf->value_str);
+                LOGVRB("There is no instance identifier \"%s\", but it is not required.", leaf->value_str);
             }
         }
         break;

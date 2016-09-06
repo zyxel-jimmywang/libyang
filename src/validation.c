@@ -89,7 +89,8 @@ lyv_data_context(const struct lyd_node *node, int options, struct unres_data *un
     }
 
     /* check all relevant when conditions */
-    if ((!(options & LYD_OPT_TYPEMASK) || (options & LYD_OPT_CONFIG)) && (node->when_status & LYD_WHEN)) {
+    if ((node->when_status & LYD_WHEN) &&
+            (!(options & LYD_OPT_TYPEMASK) || (options & (LYD_OPT_CONFIG | LYD_OPT_RPC | LYD_OPT_RPCREPLY | LYD_OPT_NOTIF)))) {
         if (unres_data_add(unres, (struct lyd_node *)node, UNRES_WHEN)) {
             return EXIT_FAILURE;
         }
@@ -275,13 +276,14 @@ lyv_data_unique(struct lyd_node *node, struct lyd_node *start)
             /* and the same loop for unique (n is !0 only in case of list) - get the hash for the instances */
             for (j = 0; j < n; j++) {
                 slist = (struct lys_node_list *)node->schema;
+                id = NULL;
                 for (i = hash = 0; i < slist->unique[j].expr_size; i++) {
                     diter = resolve_data_descendant_schema_nodeid(slist->unique[j].expr[i], set->set.d[u]->child);
                     if (diter) {
                         id = ((struct lyd_node_leaf_list *)diter)->value_str;
                     } else {
                         /* use default value */
-                        id = lyd_get_default(slist->unique[j].expr[i], set->set.d[u]);
+                        id = lyd_get_unique_default(slist->unique[j].expr[i], set->set.d[u]);
                         if (ly_errno) {
                             ret = EXIT_FAILURE;
                             goto unique_cleanup;

@@ -1052,12 +1052,21 @@ type_dup(struct lys_module *mod, struct lys_node *parent, struct lys_type *new, 
             break;
 
         case LY_TYPE_IDENT:
-            if (old->info.ident.ref) {
-                new->info.ident.ref = old->info.ident.ref;
-            } else {
-                i = unres_schema_find(unres, old, UNRES_TYPE_IDENTREF);
-                if (i > -1 && (unres_schema_add_str(mod, unres, new, UNRES_TYPE_IDENTREF, unres->str_snode[i]) == -1)) {
+            if (old->info.ident.count) {
+                new->info.ident.ref = malloc(old->info.ident.count * sizeof *new->info.ident.ref);
+                if (!new->info.ident.ref) {
+                    LOGMEM;
                     return -1;
+                }
+                memcpy(new->info.ident.ref, old->info.ident.ref, old->info.ident.count * sizeof *new->info.ident.ref);
+            } else {
+                /* there can be several unresolved base identities, duplicate them all */
+                i = -1;
+                while ((i = unres_schema_find(unres, i, old, UNRES_TYPE_IDENTREF)) != -1) {
+                    if (unres_schema_add_str(mod, unres, new, UNRES_TYPE_IDENTREF, unres->str_snode[i]) == -1) {
+                        return -1;
+                    }
+                    --i;
                 }
             }
             break;
@@ -1162,7 +1171,7 @@ lys_type_dup(struct lys_module *mod, struct lys_node *parent, struct lys_type *n
     new->der = old->der;
     new->parent = (struct lys_tpdf *)parent;
 
-    i = unres_schema_find(unres, old, tpdftype ? UNRES_TYPE_DER_TPDF : UNRES_TYPE_DER);
+    i = unres_schema_find(unres, -1, old, tpdftype ? UNRES_TYPE_DER_TPDF : UNRES_TYPE_DER);
     if (i != -1) {
         /* HACK (serious one) for unres */
         /* nothing else we can do but duplicate it immediately */
@@ -1256,8 +1265,12 @@ lys_type_free(struct ly_ctx *ctx, struct lys_type *type)
         free(type->info.uni.types);
         break;
 
+    case LY_TYPE_IDENT:
+        free(type->info.ident.ref);
+        break;
+
     default:
-        /* nothing to do for LY_TYPE_IDENT, LY_TYPE_INST, LY_TYPE_BOOL, LY_TYPE_EMPTY */
+        /* nothing to do for LY_TYPE_INST, LY_TYPE_BOOL, LY_TYPE_EMPTY */
         break;
     }
 }
@@ -1438,6 +1451,28 @@ lys_augment_dup(struct lys_module *module, struct lys_node *parent, struct lys_n
     return new;
 }
 
+static const char **
+lys_dflt_dup(struct ly_ctx *ctx, const char **old, int size)
+{
+    int i;
+    const char **result;
+
+    if (!size) {
+        return NULL;
+    }
+
+    result = calloc(size, sizeof *result);
+    if (!result) {
+        LOGMEM;
+        return NULL;
+    }
+
+    for (i = 0; i < size; i++) {
+        result[i] = lydict_insert(ctx, old[i], 0);
+    }
+    return result;
+}
+
 static struct lys_refine *
 lys_refine_dup(struct lys_module *mod, struct lys_refine *old, int size)
 {
@@ -1463,9 +1498,10 @@ lys_refine_dup(struct lys_module *mod, struct lys_refine *old, int size)
         result[i].must_size = old[i].must_size;
         result[i].must = lys_restr_dup(mod->ctx, old[i].must, old[i].must_size);
 
-        if (result[i].target_type & (LYS_LEAF | LYS_CHOICE)) {
-            result[i].mod.dflt = lydict_insert(mod->ctx, old[i].mod.dflt, 0);
-        } else if (result[i].target_type == LYS_CONTAINER) {
+        result[i].dflt_size = old[i].dflt_size;
+        result[i].dflt = lys_dflt_dup(mod->ctx, old[i].dflt, old[i].dflt_size);
+
+        if (result[i].target_type == LYS_CONTAINER) {
             result[i].mod.presence = lydict_insert(mod->ctx, old[i].mod.presence, 0);
         } else if (result[i].target_type & (LYS_LIST | LYS_LEAFLIST)) {
             result[i].mod.list = old[i].mod.list;
@@ -1586,6 +1622,11 @@ lys_leaflist_free(struct ly_ctx *ctx, struct lys_node_leaflist *llist)
     }
     free(llist->must);
 
+    for (i = 0; i < llist->dflt_size; i++) {
+        lydict_remove(ctx, llist->dflt[i]);
+    }
+    free(llist->dflt);
+
     lys_when_free(ctx, llist->when);
 
     lys_type_free(ctx, &llist->type);
@@ -1684,7 +1725,11 @@ lys_deviation_free(struct lys_module *module, struct lys_deviation *dev)
     }
 
     for (i = 0; i < dev->deviate_size; i++) {
-        lydict_remove(ctx, dev->deviate[i].dflt);
+        for (j = 0; j < dev->deviate[i].dflt_size; j++) {
+            lydict_remove(ctx, dev->deviate[i].dflt[j]);
+        }
+        free(dev->deviate[i].dflt);
+
         lydict_remove(ctx, dev->deviate[i].units);
 
         if (dev->deviate[i].mod == LY_DEVIATE_DEL) {
@@ -1720,9 +1765,12 @@ lys_uses_free(struct ly_ctx *ctx, struct lys_node_uses *uses, void (*private_des
         }
         free(uses->refine[i].must);
 
-        if (uses->refine[i].target_type & (LYS_LEAF | LYS_CHOICE)) {
-            lydict_remove(ctx, uses->refine[i].mod.dflt);
-        } else if (uses->refine[i].target_type & LYS_CONTAINER) {
+        for (j = 0; j < uses->refine[i].dflt_size; j++) {
+            lydict_remove(ctx, uses->refine[i].dflt[j]);
+        }
+        free(uses->refine[i].dflt);
+
+        if (uses->refine[i].target_type & LYS_CONTAINER) {
             lydict_remove(ctx, uses->refine[i].mod.presence);
         }
     }
@@ -2729,6 +2777,13 @@ lys_leaf_add_leafref_target(struct lys_node_leaf *leafref_target, struct lys_nod
         return -1;
     }
 
+    /* check for config flag */
+    if ((leafref->flags & LYS_CONFIG_W) && (leafref_target->flags & LYS_CONFIG_R)) {
+        LOGVAL(LYE_SPEC, LY_VLOG_LYS, leafref,
+               "The %s is config but refers to a non-config %s.",
+               strnodetype(leafref->nodetype), strnodetype(leafref_target->nodetype));
+        return -1;
+    }
     /* check for cycles */
     while (iter && iter->type.base == LY_TYPE_LEAFREF) {
         if ((void *)iter == (void *)leafref) {
