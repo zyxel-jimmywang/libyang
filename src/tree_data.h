@@ -388,8 +388,6 @@ char *lyd_path(struct lyd_node *node);
  * - when parser evaluates when-stmt condition to false, the constrained subtree is automatically removed. If the
  * #LYD_OPT_NOAUTODEL is used, error is raised instead of silent auto delete. The option (and also this default
  * behavior) takes effect only in case of #LYD_OPT_DATA or #LYD_OPT_CONFIG type of data.
- * - whenever the parser see empty non-presence container, it is automatically removed to minimize memory usage. This
- * behavior can be changed by #LYD_OPT_KEEPEMPTYCONT.
  * @{
  */
 
@@ -436,7 +434,6 @@ char *lyd_path(struct lyd_node *node);
                                        applicable only in combination with LYD_OPT_DATA and LYD_OPT_CONFIG flags.
                                        If used, libyang generates validation error instead of silently removing the
                                        constrained subtree. */
-#define LYD_OPT_KEEPEMPTYCONT 0x4000 /**< Do not automatically delete empty non-presence containers. */
 
 /**@} parseroptions */
 
@@ -726,8 +723,9 @@ int lyd_merge(struct lyd_node *target, const struct lyd_node *source, int option
  * \p parent.
  *
  * If the node is part of some other tree, it is automatically unlinked.
- * If the node is the first node of a node list (with no parent), all
- * the subsequent nodes are also inserted.
+ * If the node is the first node of a node list (with no parent), all the subsequent nodes are also inserted.
+ * If the key of a list is being inserted, it is placed into a correct position instead of being placed as the last
+ * element.
  *
  * @param[in] parent Parent node for the \p node being inserted.
  * @param[in] node The node being inserted.
@@ -758,6 +756,19 @@ int lyd_insert_before(struct lyd_node *sibling, struct lyd_node *node);
  * in the data tree.
  */
 int lyd_insert_after(struct lyd_node *sibling, struct lyd_node *node);
+
+/**
+ * @brief Insert the \p new element instead of the \p old element.
+ *
+ * If the \p new is the first node of a node list (with no parent), all the subsequent nodes are also inserted.
+ * If the \p new is NULL and \p destroy is true, it works like lyd_free(old).
+ *
+ * @param[in] old The specific node supposed to be replaced.
+ * @param[in] new The new (list of) node(s) to be inserted instead of \p old
+ * @param[in] destroy Flag for freeing the \p old.
+ * @return 0 on success, nonzero in case of error.
+ */
+int lyd_replace(struct lyd_node *old, struct lyd_node *new, int destroy);
 
 /**
  * @brief Order siblings according to the schema node ordering.

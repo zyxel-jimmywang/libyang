@@ -469,7 +469,7 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, struct lyd_node *pare
     }
 
     /* if we have empty non-presence container, we can remove it */
-    if (!(options & LYD_OPT_KEEPEMPTYCONT) && schema->nodetype == LYS_CONTAINER && !(*result)->child &&
+    if (schema->nodetype == LYS_CONTAINER && !(*result)->child &&
             !(*result)->attr && !((struct lys_node_container *)schema)->presence) {
         goto clear;
     }
@@ -478,7 +478,7 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, struct lyd_node *pare
     ly_errno = 0;
     if (!(options & LYD_OPT_TRUSTED) &&
             (lyv_data_content(*result, options, unres) ||
-             lyv_multicases(*result, NULL, first_sibling == *result ? NULL : first_sibling, 0, NULL))) {
+             lyv_multicases(*result, NULL, first_sibling == *result ? NULL : &first_sibling, 0, NULL))) {
         if (ly_errno) {
             goto error;
         } else {
