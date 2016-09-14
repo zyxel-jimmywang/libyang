@@ -2929,7 +2929,7 @@ lyd_insert_common(struct lyd_node *parent, struct lyd_node **sibling, struct lyd
             /* auto delete nodes from other cases, if any;
              * this is done only if node->parent != parent */
             iter = parent->child;
-            if (lyv_multicases(node, NULL, &iter, 1, NULL)) {
+            if (lyv_multicases(ins, NULL, &iter, 1, NULL)) {
                 goto error;
             }
         }
@@ -4200,8 +4200,9 @@ lyd_get_unique_default(const char* unique_expr, struct lyd_node *list)
 
     assert(unique_expr);
 
-    if (resolve_descendant_schema_nodeid(unique_expr, list->schema->child, LYS_LEAF, 1, 1, &parent)) {
-        /* error, but unique expression was checked when the schema was parsed */
+    if (resolve_descendant_schema_nodeid(unique_expr, list->schema->child, LYS_LEAF, 1, 1, &parent) || !parent) {
+        /* error, but unique expression was checked when the schema was parsed so this should not happened */
+        LOGINT;
         return NULL;
     }
 
@@ -4468,6 +4469,8 @@ uniquecheck:
                     path2 = malloc(LY_BUF_SIZE);
                     if (!path1 || !path2) {
                         LOGMEM;
+                        free(path1);
+                        free(path2);
                         return -1;
                     }
                     idx1 = idx2 = LY_BUF_SIZE - 1;
@@ -5557,7 +5560,7 @@ lyd_defaults_add_unres(struct lyd_node **root, int options, struct ly_ctx *ctx, 
                 msg_sibling->prev = msg_sibling;
                 msg_sibling->parent = NULL;
             } else {
-                assert(data_tree_sibling->prev = msg_sibling);
+                assert(data_tree_sibling->prev == msg_sibling);
                 data_tree_sibling->prev = msg_sibling->prev;
                 data_tree_sibling->prev->next = NULL;
                 msg_sibling->prev = msg_sibling;
