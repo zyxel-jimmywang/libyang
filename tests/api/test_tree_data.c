@@ -7,17 +7,11 @@
  *
  * Author: Mislav Novakovic <mislav.novakovic@sartura.hr>
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
+ * This source code is licensed under BSD 3-Clause License (the "License").
+ * You may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *	http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ *     https://opensource.org/licenses/BSD-3-Clause
  */
 
 #include <stdarg.h>
@@ -663,6 +657,24 @@ test_lyd_insert(void **state)
 
     result = (struct lyd_node_leaf_list *) root->child->prev;
     assert_string_equal("100", result->value_str);
+
+    /* test inserting an empty container that is already present */
+    node = NULL;
+    assert_int_equal(lyd_validate(&node, LYD_OPT_CONFIG, ctx), 0);
+    assert_ptr_not_equal(node, NULL);
+    assert_string_equal(node->schema->name, "top");
+    assert_ptr_not_equal(node->child, NULL);
+    assert_string_equal(node->child->schema->name, "bar-sub2");
+    assert_int_equal(node->child->dflt, 1);
+
+    new = lyd_new_path(NULL, ctx, "/a:top/bar-sub2", NULL, 0, 0);
+    assert_ptr_not_equal(new, NULL);
+    assert_string_equal(new->schema->name, "top");
+    assert_int_equal(lyd_insert(node, new->child), 0);
+    assert_int_not_equal(node->child->dflt, 1);
+
+    lyd_free_withsiblings(node);
+    lyd_free_withsiblings(new);
 }
 
 static void
@@ -736,6 +748,58 @@ test_lyd_insert_after(void **state)
 }
 
 static void
+test_lyd_replace(void **state)
+{
+    (void) state; /* unused */
+    struct lyd_node *data1, *data2, *after;
+    const char *yang = "module test {"
+                    "  namespace \"urn:test\";"
+                    "  prefix t;"
+                    "  leaf-list ll { type string; }}";
+    const char *xml = "<ll xmlns=\"urn:test\">a</ll>"
+                    "<ll xmlns=\"urn:test\">b</ll>";
+
+    assert_ptr_not_equal(lys_parse_mem(ctx, yang, LYS_IN_YANG), NULL);
+
+    /* we have "a, b" */
+    data1 = lyd_parse_mem(ctx, xml, LYD_XML, LYD_OPT_CONFIG);
+    assert_ptr_not_equal(data1, NULL);
+    assert_ptr_not_equal(data1->next, NULL);
+    /* remember what is after b (some default node) */
+    after = data1->next->next;
+
+    data2 = lyd_new_path(NULL, ctx, "/test:ll[.=\"x\"]", NULL, 0, 0);
+    assert_ptr_not_equal(data2, NULL);
+
+    assert_int_equal(lyd_replace(data1, data2, 1), 0);
+    data1 = data2;
+
+    /* now it should be "x, b" */
+    assert_string_equal(((struct lyd_node_leaf_list *)data1)->value_str, "x");
+    assert_ptr_not_equal(data1->next, NULL);
+    assert_string_equal(((struct lyd_node_leaf_list *)data1->next)->value_str, "b");
+    assert_ptr_equal(data1->next->next, after);
+
+    data2 = lyd_new_path(NULL, ctx, "/test:ll[.=\"y\"]", NULL, 0, 0);
+    assert_ptr_not_equal(data2, NULL);
+    assert_int_equal(lyd_insert_after(data2, lyd_new_path(NULL, ctx, "/test:ll[.=\"z\"]", NULL, 0, 0)), 0);
+    assert_ptr_not_equal(data2->next, NULL);
+    assert_string_equal(((struct lyd_node_leaf_list *)data2->next)->value_str, "z");
+
+    /* so now replacing "x" by "y,z" and we should get "y,z,b" */
+    assert_int_equal(lyd_replace(data1, data2, 1), 0);
+    data1 = data2;
+    assert_string_equal(((struct lyd_node_leaf_list *)data1)->value_str, "y");
+    assert_ptr_not_equal(data1->next, NULL);
+    assert_string_equal(((struct lyd_node_leaf_list *)data1->next)->value_str, "z");
+    assert_ptr_not_equal(data1->next->next, NULL);
+    assert_string_equal(((struct lyd_node_leaf_list *)data1->next->next)->value_str, "b");
+    assert_ptr_equal(data1->next->next->next, after);
+
+    lyd_free_withsiblings(data1);
+}
+
+static void
 test_lyd_schema_sort(void **state)
 {
     (void) state; /* unused */
@@ -802,13 +866,13 @@ test_lyd_schema_sort(void **state)
 }
 
 static void
-test_lyd_get_node(void **state)
+test_lyd_find_xpath(void **state)
 {
     (void) state; /* unused */
     struct ly_set *set = NULL;
     struct lyd_node_leaf_list *result;
 
-    set = lyd_get_node(root->child, "/a:x/bubba");
+    set = lyd_find_xpath(root->child, "/a:x/bubba");
 
     struct lyd_node *node = *set->set.d;
     result = (struct lyd_node_leaf_list *) node;
@@ -818,13 +882,13 @@ test_lyd_get_node(void **state)
 }
 
 static void
-test_lyd_get_node_2(void **state)
+test_lyd_find_instance(void **state)
 {
     (void) state; /* unused */
     struct ly_set *set = NULL;
     struct lyd_node_leaf_list *result;
 
-    set = lyd_get_node2(root->child, root->child->schema);
+    set = lyd_find_instance(root->child, root->child->schema);
     if (!set) {
         fail();
     }
@@ -875,7 +939,7 @@ test_lyd_validate(void **state)
     struct lyd_node *node = root;
     int rc;
 
-    rc = lyd_validate(&root, LYD_OPT_CONFIG);
+    rc = lyd_validate(&root, LYD_OPT_CONFIG, NULL);
     if (rc) {
         fail();
     }
@@ -894,7 +958,7 @@ test_lyd_validate(void **state)
         fail();
     }
 
-    rc = lyd_validate(&root, LYD_OPT_CONFIG);
+    rc = lyd_validate(&root, LYD_OPT_CONFIG, NULL);
     if (rc) {
         fail();
     }
@@ -1479,9 +1543,10 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_lyd_insert, setup_f, teardown_f),
         cmocka_unit_test_setup_teardown(test_lyd_insert_before, setup_f, teardown_f),
         cmocka_unit_test_setup_teardown(test_lyd_insert_after, setup_f, teardown_f),
+        cmocka_unit_test_setup_teardown(test_lyd_replace, setup_f, teardown_f),
         cmocka_unit_test_setup_teardown(test_lyd_schema_sort, setup_f, teardown_f),
-        cmocka_unit_test_setup_teardown(test_lyd_get_node, setup_f, teardown_f),
-        cmocka_unit_test_setup_teardown(test_lyd_get_node_2, setup_f, teardown_f),
+        cmocka_unit_test_setup_teardown(test_lyd_find_xpath, setup_f, teardown_f),
+        cmocka_unit_test_setup_teardown(test_lyd_find_instance, setup_f, teardown_f),
         cmocka_unit_test_setup_teardown(test_lyd_validate_leafref, setup_leafrefs, teardown_f),
         cmocka_unit_test_setup_teardown(test_lyd_validate, setup_f, teardown_f),
         cmocka_unit_test_setup_teardown(test_lyd_unlink, setup_f, teardown_f),

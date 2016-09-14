@@ -381,7 +381,10 @@ struct lys_type_info_bits {
 struct lys_type_info_dec64 {
     struct lys_restr *range; /**< range restriction (optional), see
                                   [RFC 6020 sec. 9.2.4](http://tools.ietf.org/html/rfc6020#section-9.2.4) */
-    uint8_t dig;             /**< fraction-digits restriction (mandatory) */
+    uint8_t dig;             /**< fraction-digits restriction (mandatory). Note that in case of types not directly
+                                  derived from built-in decimal64, dig is present even it cannot be specified in schema.
+                                  That's because the value is inherited for simpler access to the value and easier
+                                  manipulation with the decimal64 data */
     uint64_t div;            /**< auxiliary value for moving decimal point (dividing the stored value to get the real value) */
 };
 
@@ -423,7 +426,7 @@ struct lys_type_info_inst {
     int8_t req;              /**< require-instance restriction, see
                                   [RFC 6020 sec. 9.13.2](http://tools.ietf.org/html/rfc6020#section-9.13.2):
                                   - -1 = false,
-                                  - 0 not defined,
+                                  - 0 not defined (true),
                                   - 1 = true */
 };
 
@@ -444,7 +447,7 @@ struct lys_type_info_lref {
     struct lys_node_leaf* target; /**< target schema node according to path */
     int8_t req;              /**< require-instance restriction:
                                   - -1 = false,
-                                  - 0 not defined,
+                                  - 0 not defined (true),
                                   - 1 = true */
 };
 
@@ -1099,7 +1102,7 @@ struct lys_node_case {
  * ::lys_node#dsc, ::lys_node#ref, ::lys_node#flags and ::lys_node#nacm were replaced by empty bytes in fill arrays.
  * The reason to keep these useless bytes in the structure is to keep the #nodetype, #parent, #child, #next and #prev
  * members accessible when functions are using the object via a generic ::lyd_node structure. But note that the
- * ::lys_node#features_size is replaced by the #tpdf_size member and ::lys_node#features is replaced by the #tpdf
+ * ::lys_node#iffeature_size is replaced by the #tpdf_size member and ::lys_node#iffeature is replaced by the #tpdf
  * member.
  *
  */
@@ -1567,16 +1570,27 @@ const struct lys_node *lys_getnext(const struct lys_node *last, const struct lys
 #define LYS_GETNEXT_INTONPCONT   0x40 /**< lys_getnext() option to look into non-presence container, instead of returning container itself */
 
 /**
- * @brief Types of context nodes, roots other than #LYXP_NODE_ROOT_ALL used only in when conditions.
+ * @brief Search for schema nodes matching the provided XPath expression.
+ *
+ * @param[in] node Context schema node if \p expr is relative, otherwise any node.
+ * @param[in] expr XPath expression filtering the matching nodes.
+ * @param[in] options Bitmask of LYS_FIND_* options.
+ * @return Set of found schema nodes. If no nodes are matching \p expr or the result
+ * would be a number, a string, or a boolean, the returned set is empty. In case of an error, NULL is returned.
+ */
+struct ly_set *lys_find_xpath(const struct lys_node *node, const char *expr, int options);
+
+#define LYS_FIND_OUTPUT 0x01 /**< lys_find_xpath() option to search RPC output nodes instead input ones */
+
+/**
+ * @brief Types of context nodes, #LYXP_NODE_ROOT_CONFIG used only in when or must conditions.
  */
 enum lyxp_node_type {
-    LYXP_NODE_ROOT_ALL,         /* access to all the data (node value first top-level node) */
-    LYXP_NODE_ROOT_CONFIG,      /* <running> data context (node value first top-level node) */
-    LYXP_NODE_ROOT_STATE,       /* <running> + state data context (node value first top-level node) */
-    LYXP_NODE_ROOT_NOTIF,       /* notification context (node value LYS_NOTIF) */
-    LYXP_NODE_ROOT_RPC,         /* RPC (input) context (node value LYS_RPC) */
-    LYXP_NODE_ROOT_OUTPUT,      /* RPC output-only context (node value LYS_RPC) */
+    /* XML document roots */
+    LYXP_NODE_ROOT,             /* access to all the data (node value first top-level node) */
+    LYXP_NODE_ROOT_CONFIG,      /* <running> data context, no state data (node value first top-level node) */
 
+    /* XML elements */
     LYXP_NODE_ELEM,             /* XML element (most common) */
     LYXP_NODE_TEXT,             /* XML text element (extremely specific use, unlikely to be ever needed) */
     LYXP_NODE_ATTR              /* XML attribute (in YANG cannot happen, do not use for the context node) */
@@ -1586,7 +1600,7 @@ enum lyxp_node_type {
  * @brief Get all the partial XPath nodes (atoms) that are required for \p expr to be evaluated.
  *
  * @param[in] cur_snode Current (context) schema node. Fake roots are distinguished using \p cur_snode_type
- * and must be first in the sibling list.
+ * and then this node can be any node from the module (so, for example, do not put node added by an augment from another module).
  * @param[in] cur_snode_type Current (context) schema node type. Most commonly is #LYXP_NODE_ELEM, but if
  * your context node is supposed to be the root, you can specify what kind of root it is.
  * @param[in] expr XPath expression to be evaluated. Must be in JSON data format (prefixes are model names).
@@ -1645,6 +1659,25 @@ struct lys_module *lys_node_module(const struct lys_node *node);
  * @return pointer to the main module (schema structure).
  */
 struct lys_module *lys_main_module(const struct lys_module *module);
+
+/**
+ * @brief Mark imported module as "implemented".
+ *
+ * All the modules explicitly loaded are marked as "implemented", but in case of loading module
+ * automatically as an import of another module, it is marked as imported and in that case it
+ * is not allowed to load data of this module. On the other hand, the mandatory data nodes of
+ * such a module are not required nor the (top-level) default nodes defined in this module are
+ * created in the data trees.
+ *
+ * When a module is marked as "implemented" it is not allowed to set it back to "imported".
+ *
+ * Note that it is not possible to mark "implemented" multiple revisions of a same module within
+ * a single context. In such a case the function fails.
+ *
+ * @param[in] module The module to be set implemented.
+ * @return EXIT_SUCCESS or EXIT_FAILURE
+ */
+int lys_set_implemented(const struct lys_module *module);
 
 /**
  * @brief Set a schema private pointer to a user pointer.

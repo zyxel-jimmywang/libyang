@@ -449,9 +449,24 @@ char *lyd_path(struct lyd_node *node);
  * @param[in] data Serialized data in the specified format.
  * @param[in] format Format of the input data to be parsed.
  * @param[in] options Parser options, see @ref parseroptions.
- * @param[in] ... Additional argument must be supplied when #LYD_OPT_RPCREPLY value is specified in \p options. The
- *            argument is supposed to provide pointer to the RPC schema node for the reply's request
- *            (const struct ::lys_node* rpc).
+ * @param[in] ... Variable arguments depend on \p options. If they include:
+ *                - #LYD_OPT_DATA:
+ *                - #LYD_OPT_CONFIG:
+ *                - #LYD_OPT_GET:
+ *                - #LYD_OPT_GETCONFIG:
+ *                - #LYD_OPT_EDIT:
+ *                  - no variable arguments expected.
+ *                - #LYD_OPT_RPC:
+ *                - #LYD_OPT_NOTIF:
+ *                  - struct lyd_node *data_tree - additional data tree that will be used
+ *                    when checking any "when" or "must" conditions in the parsed tree that require
+ *                    some nodes outside their subtree. It must be a list of top-level elements!
+ *                - #LYD_OPT_RPCREPLY:
+ *                  - const struct ::lys_node *rpc_act - pointer to the RPC or action schema node
+ *                    operation of the reply.
+ *                  - struct lyd_node *data_tree - additional data tree that will be used
+ *                    when checking any "when" or "must" conditions in the parsed tree that require
+ *                    some nodes outside their subtree. It must be a list of top-level elements!
  * @return Pointer to the built data tree or NULL in case of empty \p data. To free the returned structure,
  *         use lyd_free(). In these cases, the function sets #ly_errno to LY_SUCCESS. In case of error,
  *         #ly_errno contains appropriate error code (see #LY_ERR).
@@ -472,9 +487,24 @@ struct lyd_node *lyd_parse_mem(struct ly_ctx *ctx, const char *data, LYD_FORMAT 
  * @param[in] fd The standard file descriptor of the file containing the data tree in the specified format.
  * @param[in] format Format of the input data to be parsed.
  * @param[in] options Parser options, see @ref parseroptions.
- * @param[in] ... Additional argument must be supplied when #LYD_OPT_RPCREPLY value is specified in \p options. The
- *            argument is supposed to provide pointer to the RPC schema node for the reply's request
- *            (const struct ::lys_node* rpc).
+ * @param[in] ... Variable arguments depend on \p options. If they include:
+ *                - #LYD_OPT_DATA:
+ *                - #LYD_OPT_CONFIG:
+ *                - #LYD_OPT_GET:
+ *                - #LYD_OPT_GETCONFIG:
+ *                - #LYD_OPT_EDIT:
+ *                  - no variable arguments expected.
+ *                - #LYD_OPT_RPC:
+ *                - #LYD_OPT_NOTIF:
+ *                  - struct lyd_node *data_tree - additional data tree that will be used
+ *                    when checking any "when" or "must" conditions in the parsed tree that require
+ *                    some nodes outside their subtree. It must be a list of top-level elements!
+ *                - #LYD_OPT_RPCREPLY:
+ *                  - const struct ::lys_node *rpc_act - pointer to the RPC or action schema node
+ *                    operation of the reply.
+ *                  - struct lyd_node *data_tree - additional data tree that will be used
+ *                    when checking any "when" or "must" conditions in the parsed tree that require
+ *                    some nodes outside their subtree. It must be a list of top-level elements!
  * @return Pointer to the built data tree or NULL in case of empty file. To free the returned structure,
  *         use lyd_free(). In these cases, the function sets #ly_errno to LY_SUCCESS. In case of error,
  *         #ly_errno contains appropriate error code (see #LY_ERR).
@@ -493,9 +523,24 @@ struct lyd_node *lyd_parse_fd(struct ly_ctx *ctx, int fd, LYD_FORMAT format, int
  * @param[in] path Path to the file containing the data tree in the specified format.
  * @param[in] format Format of the input data to be parsed.
  * @param[in] options Parser options, see @ref parseroptions.
- * @param[in] ... Additional argument must be supplied when #LYD_OPT_RPCREPLY value is specified in \p options. The
- *            argument is supposed to provide pointer to the RPC schema node for the reply's request
- *            (const struct ::lys_node* rpc).
+ * @param[in] ... Variable arguments depend on \p options. If they include:
+ *                - #LYD_OPT_DATA:
+ *                - #LYD_OPT_CONFIG:
+ *                - #LYD_OPT_GET:
+ *                - #LYD_OPT_GETCONFIG:
+ *                - #LYD_OPT_EDIT:
+ *                  - no variable arguments expected.
+ *                - #LYD_OPT_RPC:
+ *                - #LYD_OPT_NOTIF:
+ *                  - struct lyd_node *data_tree - additional data tree that will be used
+ *                    when checking any "when" or "must" conditions in the parsed tree that require
+ *                    some nodes outside their subtree. It must be a list of top-level elements!
+ *                - #LYD_OPT_RPCREPLY:
+ *                  - const struct ::lys_node *rpc_act - pointer to the RPC or action schema node
+ *                    operation of the reply.
+ *                  - struct lyd_node *data_tree - additional data tree that will be used
+ *                    when checking any "when" or "must" conditions in the parsed tree that require
+ *                    some nodes outside their subtree. It must be a list of top-level elements!
  * @return Pointer to the built data tree or NULL in case of empty file. To free the returned structure,
  *         use lyd_free(). In these cases, the function sets #ly_errno to LY_SUCCESS. In case of error,
  *         #ly_errno contains appropriate error code (see #LY_ERR).
@@ -524,9 +569,24 @@ struct lyd_node *lyd_parse_path(struct ly_ctx *ctx, const char *path, LYD_FORMAT
  * @param[in,out] root XML tree to parse (convert) to data tree. By default, parser do not change the XML tree. However,
  *            when #LYD_OPT_DESTRUCT is specified in \p options, parser frees all successfully parsed data.
  * @param[in] options Parser options, see @ref parseroptions.
- * @param[in] ... Additional argument must be supplied when #LYD_OPT_RPCREPLY value is specified in \p options. The
- *            argument is supposed to provide pointer to the RPC schema node for the reply's request
- *            (const struct ::lys_node* rpc).
+ * @param[in] ... Variable arguments depend on \p options. If they include:
+ *                - #LYD_OPT_DATA:
+ *                - #LYD_OPT_CONFIG:
+ *                - #LYD_OPT_GET:
+ *                - #LYD_OPT_GETCONFIG:
+ *                - #LYD_OPT_EDIT:
+ *                  - no variable arguments expected.
+ *                - #LYD_OPT_RPC:
+ *                - #LYD_OPT_NOTIF:
+ *                  - struct lyd_node *data_tree - additional data tree that will be used
+ *                    when checking any "when" or "must" conditions in the parsed tree that require
+ *                    some nodes outside their subtree. It must be a list of top-level elements!
+ *                - #LYD_OPT_RPCREPLY:
+ *                  - const struct ::lys_node *rpc_act - pointer to the RPC or action schema node
+ *                    operation of the reply.
+ *                  - struct lyd_node *data_tree - additional data tree that will be used
+ *                    when checking any "when" or "must" conditions in the parsed tree that require
+ *                    some nodes outside their subtree. It must be a list of top-level elements!
  * @return Pointer to the built data tree or NULL in case of empty \p root. To free the returned structure,
  *         use lyd_free(). In these cases, the function sets #ly_errno to LY_SUCCESS. In case of error,
  *         #ly_errno contains appropriate error code (see #LY_ERR).
@@ -711,21 +771,36 @@ struct lyd_node *lyd_dup(const struct lyd_node *node, int recursive);
  * @param[in] target Top-level (or an RPC output child) data tree to merge to. Must be valid.
  * @param[in] source Data tree to merge \p target with. Must be valid (at least as a subtree).
  * @param[in] options Bitmask of 2 option flags:
- * LYD_OPT_DESTRUCT - spend \p source in the function, otherwise \p source is left untouched,
- * LYD_OPT_NOSIBLINGS - merge only the \p source subtree (ignore siblings), otherwise merge
- * \p source and all its succeeding siblings (preceeding ones are still ignored!).
+ * - #LYD_OPT_DESTRUCT - spend \p source in the function, otherwise \p source is left untouched,
+ * - #LYD_OPT_NOSIBLINGS - merge only the \p source subtree (ignore siblings), otherwise merge
+ * \p source and all its succeeding siblings (preceeding ones are still ignored!),
+ * - #LYD_OPT_EXPLICIT - when merging an explicitly set node and a default node, always put
+ * the explicit node into \p target, otherwise the node which is in \p source is used.
  * @return 0 on success, nonzero in case of an error.
  */
 int lyd_merge(struct lyd_node *target, const struct lyd_node *source, int options);
+
+#define LYD_OPT_EXPLICIT 0x0100
 
 /**
  * @brief Insert the \p node element as child to the \p parent element. The \p node is inserted as a last child of the
  * \p parent.
  *
- * If the node is part of some other tree, it is automatically unlinked.
- * If the node is the first node of a node list (with no parent), all the subsequent nodes are also inserted.
- * If the key of a list is being inserted, it is placed into a correct position instead of being placed as the last
+ * - if the node is part of some other tree, it is automatically unlinked.
+ * - if the node is the first node of a node list (with no parent), all the subsequent nodes are also inserted.
+ * - if the key of a list is being inserted, it is placed into a correct position instead of being placed as the last
  * element.
+ * - if the target tree includes the default instance of the node being inserted, the default node is silently replaced
+ * by the new node. Also, if a default node is being inserted and the target tree already contains
+ * non-default instance, the existing instance is silently replaced. If it contains the exact same default node,
+ * it is replaced as well.
+ * - if a non-default node is being inserted and there is already its non-default instance in the target tree, the new
+ * node is inserted and it is up to the caller to solve the presence of multiple instances afterwards.
+ *
+ * Note that this function differs from lyd_insert_before() and lyd_insert_after() because the position of the
+ * node being inserted is determined automatically according to the rules described above. In contrast to
+ * lyd_insert_parent(), lyd_insert() can not be used for top-level elements since the \p parent parameter must not be
+ * NULL.
  *
  * @param[in] parent Parent node for the \p node being inserted.
  * @param[in] node The node being inserted.
@@ -735,8 +810,41 @@ int lyd_merge(struct lyd_node *target, const struct lyd_node *source, int option
 int lyd_insert(struct lyd_node *parent, struct lyd_node *node);
 
 /**
+ * @brief Insert the \p node element as a last sibling of the specified \p sibling element.
+ *
+ * - if the node is part of some other tree, it is automatically unlinked.
+ * - if the node is the first node of a node list (with no parent), all the subsequent nodes are also inserted.
+ * - if the key of a list is being inserted, it is placed into a correct position instead of being placed as the last
+ * element.
+ * - if the target tree includes the default instance of the node being inserted, the default node is silently replaced
+ * by the new node. Also, if a default node is being inserted and the target tree already contains
+ * non-default instance, the existing instance is silently replaced. If it contains the exact same default node,
+ * it is replaced as well.
+ * - if a non-default node is being inserted and there is already its non-default instance in the target tree, the new
+ * node is inserted and it is up to the caller to solve the presence of multiple instances afterwards.
+ *
+ * Note that this function differs from lyd_insert_before() and lyd_insert_after() because the position of the
+ * node being inserted is determined automatically as in the case of lyd_insert(). In contrast to lyd_insert(),
+ * lyd_insert_sibling() can be used to insert top-level elements.
+ *
+ * @param[in,out] sibling Sibling node as a reference where to insert the \p node. When function succeeds, the sibling
+ * is always set to point to the first sibling node. Note that in some cases described above, the provided sibling
+ * node could be removed from the tree.
+ * @param[in] node The node being inserted.
+ * @return 0 on success, nonzero in case of error, e.g. when the node is being inserted to an inappropriate place
+ * in the data tree.
+ */
+int lyd_insert_sibling(struct lyd_node **sibling, struct lyd_node *node);
+
+/**
  * @brief Insert the \p node element after the \p sibling element. If \p node and \p siblings are already
  * siblings (just moving \p node position), skip validation.
+ *
+ * - if the target tree includes the default instance of the node being inserted, the default node is silently removed.
+ * Also, if a default node is being inserted and the target tree already contains
+ * non-default instance, the existing instance is removed. If it contains the exact same default node, it is removed as well.
+ * - if a non-default node is being inserted and there is already its non-default instance in the target tree, the new
+ * node is inserted and it is up to the caller to solve the presence of multiple instances afterwards.
  *
  * @param[in] sibling The data tree node before which the \p node will be inserted.
  * @param[in] node The data tree node to be inserted. If the node is connected somewhere, it is unlinked first.
@@ -748,6 +856,12 @@ int lyd_insert_before(struct lyd_node *sibling, struct lyd_node *node);
 /**
  * @brief Insert the \p node element after the \p sibling element. If \p node and \p siblings are already
  * siblings (just moving \p node position), skip validation.
+ *
+ * - if the target tree includes the default instance of the node being inserted, the default node is silently removed.
+ * Also, if a default node is being inserted and the target tree already contains
+ * non-default instance, the existing instance is removed. If it contains the exact same default node, it is removed as well.
+ * - if a non-default node is being inserted and there is already its non-default instance in the target tree, the new
+ * node is inserted and it is up to the caller to solve the presence of multiple instances afterwards.
  *
  * @param[in] sibling The data tree node before which the \p node will be inserted. If \p node and \p siblings
  * are already siblings (just moving \p node position), skip validation.
@@ -785,20 +899,19 @@ int lyd_schema_sort(struct lyd_node *sibling, int recursive);
 /**
  * @brief Search in the given data for instances of nodes matching the provided XPath expression.
  *
- * The \p data is used to find the data root and function then searches in the whole tree and all sibling trees.
  * The XPath expression is evaluated on data -> skip all non-data nodes (input, output, choice, case).
  *
  * Expr examples:
  *      "/ietf-yang-library:modules-state/module[name = 'ietf-yang-library']/namespace"
  *      "/ietf-netconf:get-config/source"
  *
- * @param[in] data Node in the data tree considered the context node. If the node is a configuration one,
- * any state nodes in its tree are not accessible!
+ * @param[in] data Node in the data tree considered the context node if \p expr is relative,
+ * otherwise any node.
  * @param[in] expr XPath expression filtering the matching nodes.
- * @return Set of found data nodes (use dset member of ::ly_set). If no nodes are matching \p expr or the result
+ * @return Set of found data nodes. If no nodes are matching \p expr or the result
  * would be a number, a string, or a boolean, the returned set is empty. In case of an error, NULL is returned.
  */
-struct ly_set *lyd_get_node(const struct lyd_node *data, const char *expr);
+struct ly_set *lyd_find_xpath(const struct lyd_node *data, const char *expr);
 
 /**
  * @brief Search in the given data for instances of the provided schema node.
@@ -807,10 +920,10 @@ struct ly_set *lyd_get_node(const struct lyd_node *data, const char *expr);
  *
  * @param[in] data A node in the data tree to search.
  * @param[in] schema Schema node of the data nodes caller want to find.
- * @return Set of found data nodes (use dset member of ::ly_set). If no data node is found, the returned set is empty.
+ * @return Set of found data nodes. If no data node is found, the returned set is empty.
  * In case of error, NULL is returned.
  */
-struct ly_set *lyd_get_node2(const struct lyd_node *data, const struct lys_node *schema);
+struct ly_set *lyd_find_instance(const struct lyd_node *data, const struct lys_node *schema);
 
 /**
  * @brief Get the first sibling of the given node.
@@ -837,12 +950,26 @@ int lyd_validate_leafref(struct lyd_node_leaf_list *leafref);
  * @brief Validate \p node data subtree.
  *
  * @param[in,out] node Data tree to be validated. In case the \p options does not includes #LYD_OPT_NOAUTODEL, libyang
- *                 can modify the provided tree including the root \p node.
+ *                     can modify the provided tree including the root \p node.
  * @param[in] options Options for the inserting data to the target data tree options, see @ref parseroptions.
- * @param[in] ... libyang context for the data (used only in case the \p node is NULL, so in case of checking empty data tree).
+ * @param[in] var_arg Variable argument depends on \p options. If they include:
+ *                - #LYD_OPT_DATA:
+ *                - #LYD_OPT_CONFIG:
+ *                - #LYD_OPT_GET:
+ *                - #LYD_OPT_GETCONFIG:
+ *                - #LYD_OPT_EDIT:
+ *                  - struct ly_ctx *ctx - context to use when \p node is NULL (for checking an empty tree),
+ *                                         otherwise can be NULL.
+ *                - #LYD_OPT_RPC:
+ *                - #LYD_OPT_RPCREPLY:
+ *                - #LYD_OPT_NOTIF:
+ *                  - struct ::lyd_node *data_tree - additional data tree that will be used when checking
+ *                                                   any "when" or "must" conditions in the \p node tree
+ *                                                   that require some nodes outside their subtree. If set,
+ *                                                   it must be a list of top-level elements!
  * @return 0 on success, nonzero in case of an error.
  */
-int lyd_validate(struct lyd_node **node, int options, ...);
+int lyd_validate(struct lyd_node **node, int options, void *var_arg);
 
 /**
  * @brief Get know if the node contain (despite implicit or explicit) default value.
@@ -866,14 +993,15 @@ int lyd_wd_default(struct lyd_node_leaf_list *node);
 int lyd_unlink(struct lyd_node *node);
 
 /**
- * @brief Free (and unlink) the specified data (sub)tree.
+ * @brief Free (and unlink) the specified data subtree. Use carefully, since libyang silently creates default nodes,
+ * it is always better to use lyd_free_withsiblings() to free the complete data tree.
  *
  * @param[in] node Root of the (sub)tree to be freed.
  */
 void lyd_free(struct lyd_node *node);
 
 /**
- * @brief Free (and unlink) the specified data (sub)tree and all its siblings (preceding as well as following).
+ * @brief Free (and unlink) the specified data tree and all its siblings (preceding as well as following).
  *
  * @param[in] node One of the siblings root element of the (sub)trees to be freed.
  */

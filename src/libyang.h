@@ -367,18 +367,11 @@ extern "C" {
  * All data nodes in data trees are connected with their schema node - libyang is not able to represent data of an
  * unknown schema.
  *
- * By default, the represented data are supposed to represent a full YANG datastore content. So if a schema declares
- * some mandatory nodes, despite configuration or status, the data are supposed to be present in the data tree being
- * loaded or validated. However, it is possible to specify other kinds of data (see @ref parseroptions) allowing some
- * exceptions to the validation process.
- *
- * Data validation is performed implicitly to the input data processed by the parser (\b lyd_parse_*() functions) and
- * on demand via the lyd_validate() function. The lyd_validate() is supposed to be used when a (complex or simple)
- * change is done on the data tree (via a combination of \b lyd_change_*(), \b lyd_insert*(), \b lyd_new*(),
- * lyd_unlink() and lyd_free() functions).
+ * Please, continue reading a specific subsection or go through all the subsections if you are a new user of libyang.
  *
  * - @subpage howtodataparsers
  * - @subpage howtodatamanipulators
+ * - @subpage howtodatavalidation
  * - @subpage howtodatawd
  * - @subpage howtodataprinters
  *
@@ -386,8 +379,8 @@ extern "C" {
  *
  * Functions List (not assigned to above subsections)
  * --------------------------------------------------
- * - lyd_get_node()
- * - lyd_get_node2()
+ * - lyd_find_instance()
+ * - lyd_find_xpath()
  */
 
 /**
@@ -436,7 +429,7 @@ extern "C" {
  * can cause failure of various libyang functions later.
  *
  * Creating data is generally possible in two ways, they can be combined. You can add nodes one-by-one based on
- * the node name and/or its parent (lyd_new(), lyd_new_anyxml_*(), lyd_new_leaf(), and their output variants) or
+ * the node name and/or its parent (lyd_new(), \b lyd_new_anydata_*(), lyd_new_leaf(), and their output variants) or
  * address the nodes using a simple XPath addressing (lyd_new_path()). The latter enables to create a whole path
  * of nodes, requires less information about the modified data, and is generally simpler to use. The path format
  * specifics can be found [here](@ref howtoxpath).
@@ -461,19 +454,74 @@ extern "C" {
  * - lyd_insert_attr()
  * - lyd_merge()
  * - lyd_new()
- * - lyd_new_anyxml_str()
- * - lyd_new_anyxml_xml()
+ * - lyd_new_anydata()
  * - lyd_new_leaf()
  * - lyd_new_path()
  * - lyd_new_output()
- * - lyd_new_output_anyxml_str()
- * - lyd_new_output_anyxml_xml()
+ * - lyd_new_output_anydata()
  * - lyd_new_output_leaf()
  * - lyd_schema_sort()
  * - lyd_unlink()
  * - lyd_free()
  * - lyd_free_attr()
  * - lyd_free_withsiblings()
+ */
+
+/**
+ * @page howtodatavalidation Validating Data
+ *
+ * By default, the represented data are supposed to represent a full YANG datastore content. So if a schema declares
+ * some mandatory nodes, despite configuration or status, the data are supposed to be present in the data tree being
+ * loaded or validated. However, it is possible to specify other kinds of data (see @ref parseroptions) allowing some
+ * exceptions to the validation process.
+ *
+ * Data validation is performed implicitly to the input data processed by the parser (\b lyd_parse_*() functions) and
+ * on demand via the lyd_validate() function. The lyd_validate() is supposed to be used when a (complex or simple)
+ * change is done on the data tree (via a combination of \b lyd_change_*(), \b lyd_insert*(), \b lyd_new*(),
+ * lyd_unlink() and lyd_free() functions).
+ *
+ * Must And When Conditions Accessible Tree
+ * ----------------------------------------
+ *
+ * In YANG 1.1, there can be \b must and/or \b when expressions in RPC/action input or output, or in notifications that
+ * require access to the configuration datastore and/or state data. Normally, when working with any of the aforementioned
+ * data trees, they must contain only the RPC/action/notification itself, without any additional configuration or state
+ * data. So how can then these conditions be verified during validation?
+ *
+ * There is an option to pass this additional data tree to all the functions that perform \b must and \b when condition
+ * checking (\b lyd_parse_*() and lyd_validate()). Also, there is a flag #LYS_XPATH_DEP of \b struct lys_node that
+ * marks schema nodes that include conditions that require foreign nodes (outside their subtree) for their evaluation.
+ * The subtree root is always the particular operation data node (for RPC it is the RPC data node and all
+ * the input or output nodes as its children and similarly for action and notification). Note that for action and
+ * not-top-level notification this means that all their parents are not considered as belonging to their subtree even though
+ * they are included in their data tree and must be present for the operation validation to pass. The reason for this is that if
+ * there are any lists in those parents, we cannot know if there are not some other instances of them in the standard
+ * data tree in addition to the one used in the action/notification invocation.
+ *
+ * There were 2 ways of using this mechanism envisioned (explained below), but you can combine or modify them.
+ *
+ * ### Fine-grained Data Retrieval ###
+ *
+ * This approach is recommended when you do not maintain a full configuration data tree with state data at all times.
+ *
+ * Firstly, you should somehow learn that the operation data tree you are currently working with includes some schema
+ * node instances that have conditions that require foreign data. You can either know this about every operation beforehand
+ * or you go through all the schema nodes looking for the flag #LYS_XPATH_DEP. Then you should use lys_node_xpath_atomize()
+ * to retrieve all XPath condition dependencies (in the form of schema nodes) outside the operation subtree. You will likely
+ * want to use the flag #LYXP_NO_LOCAL to get rid of all the nodes from inside the subtree (you should already have those).
+ * The last thing to do is to build a data tree that includes at least all the instances of the nodes obtained from lys_node_xpath_atomize()
+ * (it will be expected). Then you pass this tree to the validation and it should now have access to all the nodes that
+ * can potentially affect the XPath evaluation and no other.
+ *
+ * ### Maintaining Configuration And State Data Tree ###
+ *
+ * If you have a full data tree with state data available for the validation process then it is quite simple (compared
+ * to the first approach). You can simply always pass it to validation of these operations and in cases it is not required
+ * (no nodes with conditions traversing foreign nodes) only a negligible amount of redundant work is performed and you can
+ * skip the process of learning whether it is required or not.
+ *
+ * Functions List
+ * --------------
  * - lyd_validate()
  */
 
@@ -568,9 +616,9 @@ extern "C" {
  * @page howtoxpath XPath Addressing
  *
  * Internally, XPath evaluation is performed on \b when and \b must conditions in the schema. For that almost
- * a full XPath 1.0 evaluator was implemented. This XPath implementation is available on data trees by calling
- * lyd_get_node() except that only node sets are returned. This XPath conforms to the YANG specification
- * (RFC 6020 section 6.4). Some useful examples:
+ * a full XPath 1.0 evaluator was implemented except that only node sets are returned. This XPath implementation
+ * is available on data trees by calling lyd_find_xpath() and on schema trees by calling lys_find_xpath().
+ * This XPath conforms to the YANG specification (RFC 6020 section 6.4). Some useful examples:
  *
  * - get all top-level nodes of the __module-name__
  *
@@ -614,7 +662,7 @@ extern "C" {
  *     /ietf-yang-library:modules-state/module[name='ietf-yang-library'][revision]/submodules
  *
  * Also, `choice`, `case`, `input`, and `output` nodes need to be specified and cannot be skipped in schema XPaths. Use
- * ly_ctx_get_node2() if you want to search based on a data XPath, the same format as what lyd_new_path() uses.
+ * lys_find_xpath() if you want to search based on a data XPath.
  *
  * Also note, that in all cases the node's prefix is specified as the name of the appropriate YANG schema. Any node
  * can be prefixed by the module name. However, if the prefix is omitted, the module name is inherited from the previous
@@ -622,10 +670,10 @@ extern "C" {
  *
  * Functions List
  * --------------
- * - lyd_get_node()
+ * - lyd_find_xpath()
+ * - lys_find_xpath()
  * - lyd_new_path()
  * - ly_ctx_get_node()
- * - ly_ctx_get_node2()
  */
 
 /**
@@ -924,30 +972,6 @@ const struct lys_submodule *ly_ctx_get_submodule2(const struct lys_module *main_
  * @return Resolved schema node or NULL.
  */
 const struct lys_node *ly_ctx_get_node(struct ly_ctx *ctx, const struct lys_node *start, const char *nodeid);
-
-/**
- * @brief Get schema node according to the given data node identifier in JSON format.
- *
- * The functionality is almost the same as ly_ctx_get_node(), but this function accepts
- * the data node identifier format (skipped choices, cases, inputs, and outputs). Examples:
- *
- * /ietf-netconf-monitoring:get-schema/identifier
- * /ietf-interfaces:interfaces/interface/ietf-ip:ipv4/address/ip
- *
- * Since input and output is skipped, there could arise ambiguities if one RPC input
- * contains a parameter with the same name as is in output, hence the flag.
- *
- * Predicates on lists are accepted (ignored) in the form of "<key>(=<value>)"
- * and on leaves/leaf-lists ".(=<value>)".
- *
- * @param[in] ctx Context to work in.
- * @param[in] start Starting node for a relative schema node identifier, in which
- * case it is mandatory.
- * @param[in] nodeid JSON schema node identifier.
- * @param[in] rpc_output Whether to search in RPC output parameters instead input ones.
- * @return Resolved schema node or NULL.
- */
-const struct lys_node *ly_ctx_get_node2(struct ly_ctx *ctx, const struct lys_node *start, const char *nodeid, int rpc_output);
 
 /**
  * @brief Free all internal structures of the specified context.

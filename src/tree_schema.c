@@ -46,6 +46,10 @@ lys_is_disabled(const struct lys_node *node, int recursive)
 {
     int i;
 
+    if (!node) {
+        return NULL;
+    }
+
 check:
     if (node->nodetype != LYS_INPUT && node->nodetype != LYS_OUTPUT) {
         /* input/output does not have if-feature, so skip them */
@@ -1871,6 +1875,34 @@ lys_node_free(struct lys_node *node, void (*private_destructor)(const struct lys
 }
 
 const struct lys_module *
+lys_get_implemented_module(const struct lys_module *mod)
+{
+    struct ly_ctx *ctx;
+    int i;
+
+    if (!mod || mod->implemented) {
+        /* invalid argument or the module itself is implemented */
+        return mod;
+    }
+
+    ctx = mod->ctx;
+    for (i = 0; i < ctx->models.used; i++) {
+        if (!ctx->models.list[i]->implemented) {
+            continue;
+        }
+
+        if (ly_strequal(mod->name, ctx->models.list[i]->name, 1)) {
+            /* we have some revision of the module implemented */
+            return ctx->models.list[i];
+        }
+    }
+
+    /* we have no revision of the module implemented, return the module itself,
+     * it is up to the caller to set the module implemented when needed */
+    return mod;
+}
+
+const struct lys_module *
 lys_get_import_module(const struct lys_module *module, const char *prefix, int pref_len, const char *name, int name_len)
 {
     const struct lys_module *main_module;
@@ -2865,14 +2897,73 @@ lys_data_path_reverse(const struct lys_node *node, char * const buf, uint32_t bu
 #endif
 
 API struct ly_set *
+lys_find_xpath(const struct lys_node *node, const char *expr, int options)
+{
+    struct lyxp_set set;
+    struct ly_set *ret_set;
+    uint32_t i;
+    int opts;
+
+    if (!node || !expr) {
+        ly_errno = LY_EINVAL;
+        return NULL;
+    }
+
+    memset(&set, 0, sizeof set);
+
+    opts = LYXP_SNODE;
+    if (options & LYS_FIND_OUTPUT) {
+        opts |= LYXP_SNODE_OUTPUT;
+    }
+
+    /* node and nodetype won't matter at all since it is absolute */
+    if (lyxp_atomize(expr, node, LYXP_NODE_ELEM, &set, opts)) {
+        free(set.val.snodes);
+        return NULL;
+    }
+
+    ret_set = ly_set_new();
+
+    for (i = 0; i < set.used; ++i) {
+        if (!set.val.snodes[i].in_ctx) {
+            continue;
+        }
+        assert(set.val.snodes[i].in_ctx == 1);
+
+        switch (set.val.snodes[i].type) {
+        case LYXP_NODE_ELEM:
+            if (ly_set_add(ret_set, set.val.snodes[i].snode, LY_SET_OPT_USEASLIST) == -1) {
+                ly_set_free(ret_set);
+                free(set.val.snodes);
+                return NULL;
+            }
+            break;
+        default:
+            /* ignore roots, text and attr should not ever appear */
+            break;
+        }
+    }
+
+    free(set.val.snodes);
+    return ret_set;
+}
+
+API struct ly_set *
 lys_xpath_atomize(const struct lys_node *cur_snode, enum lyxp_node_type cur_snode_type, const char *expr, int options)
 {
     struct lyxp_set set;
     struct ly_set *ret_set;
     uint32_t i;
 
-    if (!cur_snode || cur_snode->prev->next || !expr) {
+    if (!cur_snode || !expr) {
         return NULL;
+    }
+
+    /* adjust the root */
+    if ((cur_snode_type == LYXP_NODE_ROOT) || (cur_snode_type == LYXP_NODE_ROOT_CONFIG)) {
+        do {
+            cur_snode = lys_getnext(NULL, NULL, lys_node_module(cur_snode), 0);
+        } while ((cur_snode_type == LYXP_NODE_ROOT_CONFIG) && (cur_snode->flags & LYS_CONFIG_R));
     }
 
     memset(&set, 0, sizeof set);
@@ -3121,6 +3212,7 @@ lys_sub_module_remove_devs_augs(struct lys_module *module)
         } else {
             target_mod = (struct lys_module *)lys_get_import_module(module, NULL, 0, module->deviation[i].target_name + 1,
                                                                     strcspn(module->deviation[i].target_name, ":") - 1);
+            target_mod = (struct lys_module *)lys_get_implemented_module(target_mod);
         }
         lys_switch_deviation(&module->deviation[i], module);
         assert(target_mod->deviated == 1);
@@ -3192,12 +3284,78 @@ lys_sub_module_remove_devs_augs(struct lys_module *module)
     }
 }
 
-int
-lys_module_set_implement(struct lys_module *module)
+static int
+lys_set_implemented_recursion(struct lys_module *module, struct unres_schema *unres)
+{
+    struct lys_node *root, *next, *node;
+    uint8_t i;
+
+    for (i = 0; i < module->augment_size; i++) {
+        /* apply augment */
+        if (unres_schema_add_node(module, unres, &module->augment[i], UNRES_AUGMENT, NULL) == -1) {
+            return -1;
+        }
+    }
+    LY_TREE_FOR(module->data, root) {
+        /* handle leafrefs and recursively change the implemented flags in the leafref targets */
+        LY_TREE_DFS_BEGIN(root, next, node) {
+            if (node->nodetype == LYS_GROUPING) {
+                goto nextsibling;
+            }
+            if (node->nodetype & (LYS_LEAF | LYS_LEAFLIST)) {
+                if (((struct lys_node_leaf *)node)->type.base == LY_TYPE_LEAFREF) {
+                    if (unres_schema_add_node(module, unres, &((struct lys_node_leaf *)node)->type,
+                                              UNRES_TYPE_LEAFREF, node) == -1) {
+                        return EXIT_FAILURE;
+                    }
+                }
+            }
+
+            /* modified LY_TREE_DFS_END */
+            next = node->child;
+            /* child exception for leafs, leaflists and anyxml without children */
+            if (node->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA)) {
+                next = NULL;
+            }
+            if (!next) {
+nextsibling:
+                /* no children */
+                if (node == root) {
+                    /* we are done, root has no children */
+                    break;
+                }
+                /* try siblings */
+                next = node->next;
+            }
+            while (!next) {
+                /* parent is already processed, go to its sibling */
+                node = lys_parent(node);
+                /* no siblings, go back through parents */
+                if (lys_parent(node) == lys_parent(root)) {
+                    /* we are done, no next element to process */
+                    break;
+                }
+                next = node->next;
+            }
+        }
+    }
+
+    return EXIT_SUCCESS;
+}
+
+API int
+lys_set_implemented(const struct lys_module *module)
 {
     struct ly_ctx *ctx;
-    int i;
+    struct unres_schema *unres;
+    int i, j;
 
+    if (!module) {
+        ly_errno = LY_EINVAL;
+        return EXIT_FAILURE;
+    }
+
+    module = lys_main_module(module);
     if (module->implemented) {
         return EXIT_SUCCESS;
     }
@@ -3215,33 +3373,41 @@ lys_module_set_implement(struct lys_module *module)
         }
     }
 
-    module->implemented = 1;
-    return EXIT_SUCCESS;
-}
-
-int
-lys_sub_module_set_dev_aug_target_implement(struct lys_module *module)
-{
-    int i;
-    struct lys_module *trg_mod;
-
-    for (i = 0; i < module->deviation_size; ++i) {
-        assert(module->deviation[i].orig_node);
-        trg_mod = lys_node_module(module->deviation[i].orig_node);
-        if (lys_module_set_implement(trg_mod)) {
-            return EXIT_FAILURE;
+    unres = calloc(1, sizeof *unres);
+    if (!unres) {
+        LOGMEM;
+        return EXIT_FAILURE;
+    }
+    /* recursively make the module implemented */
+    ((struct lys_module *)module)->implemented = 1;
+    if (lys_set_implemented_recursion((struct lys_module *)module, unres)) {
+        goto error;
+    }
+    /* process augments in submodules */
+    for (i = 0; i < module->inc_size; ++i) {
+        if (!module->inc[i].submodule) {
+            continue;
+        }
+        for (j = 0; j < module->inc[i].submodule->augment_size; j++) {
+            /* apply augment */
+            if (unres_schema_add_node((struct lys_module *)module->inc[i].submodule, unres,
+                                      &module->inc[i].submodule->augment[i], UNRES_AUGMENT, NULL) == -1) {
+                goto error;
+            }
         }
     }
-
-    for (i = 0; i < module->augment_size; ++i) {
-        assert(module->augment[i].target);
-        trg_mod = lys_node_module(module->augment[i].target);
-        if (lys_module_set_implement(trg_mod)) {
-            return EXIT_FAILURE;
-        }
+    /* resolve rest of unres items */
+    if (unres->count && resolve_unres_schema((struct lys_module *)module, unres)) {
+        goto error;
     }
+    unres_schema_free((struct lys_module *)module, &unres);
 
     return EXIT_SUCCESS;
+
+error:
+    ((struct lys_module *)module)->implemented = 0;
+    unres_schema_free((struct lys_module *)module, &unres);
+    return EXIT_FAILURE;
 }
 
 void

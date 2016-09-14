@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required(VERSION 2.8.9)
 project(libyang C)
 
 set(LIBYANG_DESCRIPTION "libyang is YANG data modelling language parser and toolkit written (and providing API) in C.")
@@ -6,7 +6,7 @@ set(LIBYANG_DESCRIPTION "libyang is YANG data modelling language parser and tool
 # set version
 set(LIBYANG_MAJOR_VERSION 0)
 set(LIBYANG_MINOR_VERSION 10)
-set(LIBYANG_MICRO_VERSION 108)
+set(LIBYANG_MICRO_VERSION 136)
 set(LIBYANG_VERSION ${LIBYANG_MAJOR_VERSION}.${LIBYANG_MINOR_VERSION}.${LIBYANG_MICRO_VERSION})
 set(LIBYANG_SOVERSION ${LIBYANG_MAJOR_VERSION}.${LIBYANG_MINOR_VERSION})
 
@@ -108,7 +108,9 @@ set(headers
 	src/xml.h
 	src/dict.h)
 
-add_library(yang SHARED ${libsrc})
+set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
+add_library(yangobj OBJECT ${libsrc})
+add_library(yang SHARED $<TARGET_OBJECTS:yangobj>)
 set_target_properties(yang PROPERTIES VERSION ${LIBYANG_VERSION} SOVERSION ${LIBYANG_SOVERSION})
 
 # link math

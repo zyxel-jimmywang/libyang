@@ -976,6 +976,12 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
                 LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, "fraction-digits");
                 goto error;
             }
+
+            /* copy fraction-digits specification from parent type for easier internal use */
+            if (typ->type->der->type.der) {
+                typ->type->info.dec64.dig = typ->type->der->type.info.dec64.dig;
+                typ->type->info.dec64.div = typ->type->der->type.info.dec64.div;
+            }
         } else if (typ->type->base >= LY_TYPE_INT8 && typ->type->base <=LY_TYPE_UINT64) {
             if (typ->type->info.dec64.dig) {
                 LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Numerical type could not include fraction statement.");
@@ -1684,9 +1690,10 @@ yang_read_augment(struct lys_module *module, struct lys_node *parent, char *valu
 void *
 yang_read_deviation(struct lys_module *module, char *value)
 {
-    struct lys_node *dev_target = NULL;
+    struct lys_node *dev_target = NULL, *parent;
     struct lys_deviation *dev;
     struct type_deviation *deviation = NULL;
+    struct lys_module *mod;
     int rc;
 
     dev = &module->deviation[module->deviation_size];
@@ -1714,7 +1721,14 @@ yang_read_deviation(struct lys_module *module, char *value)
         goto error;
     }
 
-    lys_node_module(dev_target)->deviated = 1;
+    /* mark all the affected modules as deviated and implemented */
+    for(parent = dev_target; parent; parent = lys_parent(parent)) {
+        mod = lys_node_module(parent);
+        if (module != mod) {
+            mod->deviated = 1;
+            lys_set_implemented(mod);
+        }
+    }
 
     /*save pointer to the deviation and deviated target*/
     deviation->deviation = dev;
@@ -2644,7 +2658,6 @@ yang_read_module(struct ly_ctx *ctx, const char* data, unsigned int size, const 
 
     struct lys_module *tmp_module, *module = NULL;
     struct unres_schema *unres = NULL;
-    int i;
 
     unres = calloc(1, sizeof *unres);
     if (!unres) {
@@ -2689,24 +2702,12 @@ yang_read_module(struct ly_ctx *ctx, const char* data, unsigned int size, const 
         nacm_inherit(module);
     }
 
-    if (module->augment_size || module->deviation_size) {
-        if (!module->implemented) {
-            LOGVRB("Module \"%s\" includes augments or deviations, changing conformance to \"implement\".", module->name);
-        }
-        if (lys_module_set_implement(module)) {
+    if (module->deviation_size && !module->implemented) {
+        LOGVRB("Module \"%s\" includes deviations, changing its conformance to \"implement\".", module->name);
+        /* deviations always causes target to be made implemented,
+         * but augents and leafrefs not, so we have to apply them now */
+        if (lys_set_implemented(module)) {
             goto error;
-        }
-
-        if (lys_sub_module_set_dev_aug_target_implement(module)) {
-            goto error;
-        }
-        for (i = 0; i < module->inc_size; ++i) {
-            if (!module->inc[i].submodule) {
-                continue;
-            }
-            if (lys_sub_module_set_dev_aug_target_implement((struct lys_module *)module->inc[i].submodule)) {
-                goto error;
-            }
         }
     }
 

@@ -147,6 +147,10 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, struct lyd_node *pare
     if (!parent) {
         /* starting in root */
         for (i = 0; i < ctx->models.used; i++) {
+            /* skip just imported modules, data can be coupled only with the implemented modules */
+            if (!ctx->models.list[i]->implemented) {
+                continue;
+            }
             /* match data model based on namespace */
             if (ly_strequal(ctx->models.list[i]->ns, xml->ns->value, 1)) {
                 /* get the proper schema node */
@@ -187,6 +191,13 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, struct lyd_node *pare
     }
     if (!schema) {
         if ((options & LYD_OPT_STRICT) || ly_ctx_get_module_by_ns(ctx, xml->ns->value, NULL)) {
+            LOGVAL(LYE_INELEM, LY_VLOG_LYD, parent, xml->name);
+            return -1;
+        } else {
+            return 0;
+        }
+    } else if (!lys_node_module(schema)->implemented) {
+        if (options & LYD_OPT_STRICT) {
             LOGVAL(LYE_INELEM, LY_VLOG_LYD, parent, xml->name);
             return -1;
         } else {
@@ -442,6 +453,7 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, struct lyd_node *pare
 
     if ((*result)->schema->nodetype == LYS_ACTION) {
         if (!(options & LYD_OPT_ACTION) || *action) {
+            LOGVAL(LYE_INACT, LY_VLOG_LYD, (*result), "action", (*result)->schema->name);
             LOGVAL(LYE_SPEC, LY_VLOG_LYD, (*result), "Unexpected action node \"%s\".", (*result)->schema->name);
             goto error;
         }
@@ -519,8 +531,8 @@ lyd_parse_xml(struct ly_ctx *ctx, struct lyxml_elem **root, int options, ...)
     va_list ap;
     int r, i;
     struct unres_data *unres = NULL;
-    struct lys_node *rpc_act = NULL;
-    struct lyd_node *result = NULL, *iter, *last, *reply_parent = NULL, *action = NULL;
+    const struct lys_node *rpc_act = NULL;
+    struct lyd_node *result = NULL, *iter, *last, *reply_parent = NULL, *action = NULL, *data_tree = NULL;
     struct lyxml_elem *xmlstart, *xmlelem, *xmlaux;
     struct ly_set *set;
 
@@ -550,12 +562,32 @@ lyd_parse_xml(struct ly_ctx *ctx, struct lyxml_elem **root, int options, ...)
 
     va_start(ap, options);
     if (options & LYD_OPT_RPCREPLY) {
-        rpc_act = va_arg(ap,  struct lys_node *);
+        rpc_act = va_arg(ap, const struct lys_node *);
         if (!rpc_act || !(rpc_act->nodetype & (LYS_RPC | LYS_ACTION))) {
-            LOGERR(LY_EINVAL, "%s: Invalid parameter.", __func__);
+            LOGERR(LY_EINVAL, "%s: invalid variable parameter (const struct lys_node *rpc_act).", __func__);
             goto error;
         }
         reply_parent = _lyd_new(NULL, rpc_act, 0);
+
+        data_tree = va_arg(ap, struct lyd_node *);
+        if (data_tree) {
+            LY_TREE_FOR(data_tree, iter) {
+                if (iter->parent) {
+                    /* a sibling is not top-level */
+                    LOGERR(LY_EINVAL, "%s: invalid variable parameter (const struct lyd_node *data_tree).", __func__);
+                    goto error;
+                }
+            }
+
+            /* move it to the beginning */
+            for (; data_tree->prev->next; data_tree = data_tree->prev);
+
+            /* LYD_OPT_NOSIBLINGS cannot be set in this case */
+            if (options & LYD_OPT_NOSIBLINGS) {
+                LOGERR(LY_EINVAL, "%s: invalid parameter (variable arg const struct lyd_node *data_tree with LYD_OPT_NOSIBLINGS).", __func__);
+                goto error;
+            }
+        }
     }
 
     if (!(options & LYD_OPT_NOSIBLINGS)) {
@@ -609,6 +641,16 @@ lyd_parse_xml(struct ly_ctx *ctx, struct lyxml_elem **root, int options, ...)
         result = reply_parent;
     }
 
+    if (options & LYD_OPT_ACTION) {
+        if (!action) {
+            ly_vecode = LYVE_INACT;
+            LOGVAL(LYE_SPEC, LY_VLOG_LYD, result, "Missing action node.");
+            goto error;
+        }
+        options &= ~LYD_OPT_ACTION;
+        options |= LYD_OPT_RPC;
+    }
+
     /* check for uniquness of top-level lists/leaflists because
      * only the inner instances were tested in lyv_data_content() */
     set = ly_set_new();
@@ -631,18 +673,14 @@ lyd_parse_xml(struct ly_ctx *ctx, struct lyxml_elem **root, int options, ...)
     }
     ly_set_free(set);
 
-    /* add/validate default values, unres */
-    if (action) {
-        if (lyd_defaults_add_unres(&action, options, ctx, unres)) {
-            goto error;
-        }
-    } else if (lyd_defaults_add_unres(&result, options, ctx, unres)) {
+    /* add default values, resolve unres and check for mandatory nodes in final tree */
+    if (lyd_defaults_add_unres(&result, options, ctx, data_tree, action, unres)) {
         goto error;
     }
-
-    /* check for missing mandatory nodes */
-    if (!(options & LYD_OPT_TRUSTED) && lyd_check_mandatory_tree(result, ctx, options)) {
-        goto error;
+    if (!(options & LYD_OPT_TRUSTED)) {
+        if (lyd_check_mandatory_tree((action ? action : result), ctx, options)) {
+            goto error;
+        }
     }
 
     free(unres->node);

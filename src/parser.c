@@ -937,6 +937,8 @@ switchtype:
                             LOGVAL(LYE_INVAL, LY_VLOG_LYD, node, node->value_str, node->schema->name);
                             LOGVAL(LYE_SPEC, LY_VLOG_LYD, node, "Bit \"%s\" is disabled by its if-feature condition.",
                                    type->info.bits.bit[i].name);
+                            free(node->value.bit);
+                            node->value.bit = NULL;
                             return EXIT_FAILURE;
                         }
                     }
@@ -954,6 +956,8 @@ switchtype:
             if (!found) {
                 /* referenced bit value does not exists */
                 LOGVAL(LYE_INVAL, LY_VLOG_LYD, node, node->value_str, node->schema->name);
+                free(node->value.bit);
+                node->value.bit = NULL;
                 return EXIT_FAILURE;
             }
 
@@ -1235,8 +1239,9 @@ lyp_parse_value(struct lyd_node_leaf_list *leaf, struct lyxml_elem *xml, int res
         /* turn logging off, we are going to try to validate the value with all the types in order */
         ly_vlog_hide(1);
 
-        type = lyp_get_next_union_type(stype, NULL, &found);
-        while (type) {
+        type = NULL;
+        while ((type = lyp_get_next_union_type(stype, type, &found))) {
+            found = 0;
             leaf->value_type = type->base;
             memset(&leaf->value, 0, sizeof leaf->value);
 
@@ -1248,8 +1253,8 @@ lyp_parse_value(struct lyd_node_leaf_list *leaf, struct lyxml_elem *xml, int res
                     leaf->value_str = xml->content;
                     xml->content = NULL;
 
-                    found = 0;
                     type = lyp_get_next_union_type(stype, type, &found);
+                    found = 0;
                     continue;
                 }
             }
@@ -1267,8 +1272,6 @@ lyp_parse_value(struct lyd_node_leaf_list *leaf, struct lyxml_elem *xml, int res
                 xml->content = NULL;
             }
 
-            found = 0;
-            type = lyp_get_next_union_type(stype, type, &found);
         }
 
         ly_vlog_hide(0);
@@ -1295,11 +1298,16 @@ lyp_get_next_union_type(struct lys_type *type, struct lys_type *prev_type, int *
     int i;
     struct lys_type *ret = NULL;
 
+    while (!type->info.uni.count) {
+        assert(type->der); /* at least the direct union type has to have type specified */
+        type = &type->der->type;
+    }
+
     for (i = 0; i < type->info.uni.count; ++i) {
         if (type->info.uni.types[i].base == LY_TYPE_UNION) {
             ret = lyp_get_next_union_type(&type->info.uni.types[i], prev_type, found);
             if (ret) {
-                break;;
+                break;
             }
             continue;
         }
@@ -1312,10 +1320,6 @@ lyp_get_next_union_type(struct lys_type *type, struct lys_type *prev_type, int *
         if (&type->info.uni.types[i] == prev_type) {
             *found = 1;
         }
-    }
-
-    if (!ret && type->der) {
-        ret = lyp_get_next_union_type(&type->der->type, prev_type, found);
     }
 
     return ret;
@@ -1982,6 +1986,7 @@ lyp_ctx_add_module(struct lys_module **module)
     struct lys_module **newlist = NULL;
     struct lys_module *mod;
     int i, match_i = -1, to_implement;
+    int ret = EXIT_SUCCESS;
 
     assert(module);
     mod = (*module);
@@ -2046,7 +2051,9 @@ lyp_ctx_add_module(struct lys_module **module)
 
     if (to_implement) {
         i = match_i;
-        ctx->models.list[i]->implemented = 1;
+        if (lys_set_implemented(ctx->models.list[i])) {
+            ret = EXIT_FAILURE;
+        }
         goto already_in_context;
     }
     ctx->models.list[i] = mod;
@@ -2058,7 +2065,7 @@ already_in_context:
     lys_sub_module_remove_devs_augs(mod);
     lys_free(mod, NULL, 1);
     (*module) = ctx->models.list[i];
-    return EXIT_SUCCESS;
+    return ret;
 }
 
 /**
