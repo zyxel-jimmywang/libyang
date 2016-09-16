@@ -1015,7 +1015,7 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 if (!tpdftype && unres_schema_add_node(module, unres, type, UNRES_TYPE_LEAFREF, parent) == -1) {
                     goto error;
                 }
-            } else if (!strcmp(node->name, "require-instance")) {
+            } else if (module->version >= 2 && !strcmp(node->name, "require-instance")) {
                 if (type->info.lref.req) {
                     LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, yin->name);
                     goto error;
@@ -2475,6 +2475,8 @@ fill_yin_augment(struct lys_module *module, struct lys_node *parent, struct lyxm
             node = read_yin_anydata(module, (struct lys_node *)aug, child, LYS_ANYDATA, 0, unres);
         } else if (!strcmp(child->name, "action")) {
             node = read_yin_rpc_action(module, (struct lys_node *)aug, child, 0, unres);
+        } else if (!strcmp(child->name, "notification")) {
+            node = read_yin_notif(module, (struct lys_node *)aug, child, 0, unres);
         } else {
             LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
             goto error;
@@ -3626,10 +3628,8 @@ read_yin_leaf(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             /* HACK for unres */
             leaf->type.der = (struct lys_tpdf *)sub;
             leaf->type.parent = (struct lys_tpdf *)leaf;
-            if (unres_schema_add_node(module, unres, &leaf->type, UNRES_TYPE_DER, retval) == -1) {
-                leaf->type.der = NULL;
-                goto error;
-            }
+            /* postpone type resolution when if-feature parsing is done since we need
+             * if-feature for check_leafref_features() */
             has_type = 1;
         } else if (!strcmp(sub->name, "default")) {
             if (leaf->dflt) {
@@ -3702,12 +3702,6 @@ read_yin_leaf(struct lys_module *module, struct lys_node *parent, struct lyxml_e
         goto error;
     }
 
-    /* check default value (if not defined, there still could be some restrictions
-     * that need to be checked against a default value from a derived type) */
-    if (unres_schema_add_str(module, unres, &leaf->type, UNRES_TYPE_DFLT, leaf->dflt) == -1) {
-        goto error;
-    }
-
     /* middle part - process nodes with cardinality of 0..n */
     if (c_must) {
         leaf->must = calloc(c_must, sizeof *leaf->must);
@@ -3738,6 +3732,18 @@ read_yin_leaf(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 goto error;
             }
         }
+    }
+
+    /* finalize type parsing */
+    if (unres_schema_add_node(module, unres, &leaf->type, UNRES_TYPE_DER, retval) == -1) {
+        leaf->type.der = NULL;
+        goto error;
+    }
+
+    /* check default value (if not defined, there still could be some restrictions
+     * that need to be checked against a default value from a derived type) */
+    if (unres_schema_add_str(module, unres, &leaf->type, UNRES_TYPE_DFLT, leaf->dflt) == -1) {
+        goto error;
     }
 
     /* check XPath dependencies */
@@ -3805,10 +3811,8 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
             /* HACK for unres */
             llist->type.der = (struct lys_tpdf *)sub;
             llist->type.parent = (struct lys_tpdf *)llist;
-            if (unres_schema_add_node(module, unres, &llist->type, UNRES_TYPE_DER, retval) == -1) {
-                llist->type.der = NULL;
-                goto error;
-            }
+            /* postpone type resolution when if-feature parsing is done since we need
+             * if-feature for check_leafref_features() */
             has_type = 1;
         } else if (!strcmp(sub->name, "units")) {
             if (llist->units) {
@@ -3972,16 +3976,25 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
         } else if (!strcmp(sub->name, "default")) {
             GETVAL(value, sub, "value");
 
-            /* check for duplicity */
-            for (r = 0; r < llist->dflt_size; r++) {
-                if (ly_strequal(llist->dflt[r], value, 1)) {
-                    LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "default");
-                    LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Duplicated default value \"%s\".", value);
-                    goto error;
+            /* check for duplicity in case of configuration data,
+             * in case of status data duplicities are allowed */
+            if (llist->flags & LYS_CONFIG_W) {
+                for (r = 0; r < llist->dflt_size; r++) {
+                    if (ly_strequal(llist->dflt[r], value, 1)) {
+                        LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "default");
+                        LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Duplicated default value \"%s\".", value);
+                        goto error;
+                    }
                 }
             }
             llist->dflt[llist->dflt_size++] = lydict_insert(module->ctx, value, strlen(value));
         }
+    }
+
+    /* finalize type parsing */
+    if (unres_schema_add_node(module, unres, &llist->type, UNRES_TYPE_DER, retval) == -1) {
+        llist->type.der = NULL;
+        goto error;
     }
 
     if (llist->dflt_size && llist->min) {
@@ -4583,7 +4596,8 @@ read_yin_grouping(struct lys_module *module, struct lys_node *parent, struct lyx
                 !strcmp(sub->name, "uses") ||
                 !strcmp(sub->name, "grouping") ||
                 !strcmp(sub->name, "anyxml") ||
-                !strcmp(sub->name, "action")) {
+                !strcmp(sub->name, "action") ||
+                !strcmp(sub->name, "notification")) {
             lyxml_unlink_elem(module->ctx, sub, 2);
             lyxml_add_child(module->ctx, &root, sub);
 
@@ -4637,6 +4651,8 @@ read_yin_grouping(struct lys_module *module, struct lys_node *parent, struct lyx
             node = read_yin_anydata(module, retval, sub, LYS_ANYDATA, resolve, unres);
         } else if (!strcmp(sub->name, "action")) {
             node = read_yin_rpc_action(module, retval, sub, resolve, unres);
+        } else if (!strcmp(sub->name, "notification")) {
+            node = read_yin_notif(module, retval, sub, resolve, unres);
         }
         if (!node) {
             goto error;

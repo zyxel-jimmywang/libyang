@@ -48,12 +48,6 @@ parse_identifier(const char *id)
 
     assert(id);
 
-    if (((id[0] == 'x') || (id[0] == 'X'))
-            && (id[0] && ((id[1] == 'm') || (id[0] == 'M')))
-            && (id[1] && ((id[2] == 'l') || (id[2] == 'L')))) {
-        return -parsed;
-    }
-
     if (!isalpha(id[0]) && (id[0] != '_')) {
         return -parsed;
     }
@@ -1188,6 +1182,12 @@ iff_getop(uint8_t *list, int pos)
 #define LYS_IFF_LP 0x04 /* ( */
 #define LYS_IFF_RP 0x08 /* ) */
 
+/* internal structure for passing data for UNRES_IFFEAT */
+struct unres_iffeat_data {
+    struct lys_node *node;
+    const char *fname;
+};
+
 void
 resolve_iffeature_getsizes(struct lys_iffeature *iffeat, unsigned int *expr_size, unsigned int *feat_size)
 {
@@ -1244,6 +1244,7 @@ resolve_iffeature_compile(struct lys_iffeature *iffeat_expr, const char *value, 
     unsigned int f_size = 0, expr_size = 0, f_exp = 1;
     uint8_t op;
     struct iff_stack stack = {0, 0, NULL};
+    struct unres_iffeat_data *iff_data;
 
     assert(c);
 
@@ -1318,7 +1319,7 @@ resolve_iffeature_compile(struct lys_iffeature *iffeat_expr, const char *value, 
 
     /* allocate the memory */
     iffeat_expr->expr = calloc((j = (expr_size / 4) + ((expr_size % 4) ? 1 : 0)), sizeof *iffeat_expr->expr);
-    iffeat_expr->features = malloc(f_size * sizeof *iffeat_expr->features);
+    iffeat_expr->features = calloc(f_size, sizeof *iffeat_expr->features);
     stack.size = expr_size;
     stack.stack = malloc(expr_size * sizeof *stack.stack);
     if (!stack.stack || !iffeat_expr->expr || !iffeat_expr->features) {
@@ -1379,10 +1380,13 @@ resolve_iffeature_compile(struct lys_iffeature *iffeat_expr, const char *value, 
             iff_setop(iffeat_expr->expr, LYS_IFF_F, expr_size--);
 
             /* now get the link to the feature definition. Since it can be
-             * forward referenced, we have hack for unres - until resolved,
-             * the feature name is stored instead of link to the lys_feature */
-            iffeat_expr->features[f_size] = (void*)strndup(&c[i], j - i);
-            r = unres_schema_add_node(node->module, unres, &iffeat_expr->features[f_size], UNRES_IFFEAT, node);
+             * forward referenced, we have to keep the feature name in auxiliary
+             * structure passed into unres */
+            iff_data = malloc(sizeof *iff_data);
+            iff_data->node = node;
+            iff_data->fname = lydict_insert(node->module->ctx, &c[i], j - i);
+            r = unres_schema_add_node(node->module, unres, &iffeat_expr->features[f_size], UNRES_IFFEAT,
+                                      (struct lys_node *)iff_data);
             f_size--;
 
             if (r == -1) {
@@ -3020,7 +3024,7 @@ check_key(struct lys_node_list *list, int index, const char *name, int len)
     }
 
     /* type of the leaf is not built-in empty */
-    if (key->type.base == LY_TYPE_EMPTY) {
+    if (key->type.base == LY_TYPE_EMPTY && key->module->version < 2) {
         LOGVAL(LYE_KEY_TYPE, LY_VLOG_LYS, list, key->name);
         return -1;
     }
@@ -3527,7 +3531,7 @@ resolve_path_predicate_schema(const char *path, const struct lys_node *context_n
             sour_pref = context_node->module->name;
         }
         rc = lys_get_sibling(context_node->child, sour_pref, sour_pref_len, source, sour_len,
-                             LYS_LEAF | LYS_AUGMENT, &src_node);
+                             LYS_LEAF | LYS_LEAFLIST | LYS_AUGMENT, &src_node);
         if (rc) {
             LOGVAL(LYE_NORESOLV, parent ? LY_VLOG_LYS : LY_VLOG_NONE, parent, "leafref predicate", path-parsed);
             return 0;
@@ -3577,10 +3581,10 @@ resolve_path_predicate_schema(const char *path, const struct lys_node *context_n
         }
 
         /* check source - dest match */
-        if (dst_node->nodetype != LYS_LEAF) {
+        if (dst_node->nodetype != src_node->nodetype) {
             LOGVAL(LYE_NORESOLV, parent ? LY_VLOG_LYS : LY_VLOG_NONE, parent, "leafref predicate", path-parsed);
-            LOGVAL(LYE_SPEC, parent ? LY_VLOG_LYS : LY_VLOG_NONE, parent,
-                   "Destination node is not a leaf, but %s.", strnodetype(dst_node->nodetype));
+            LOGVAL(LYE_SPEC, parent ? LY_VLOG_LYS : LY_VLOG_NONE, parent, "Destination node is not a %s, but a %s.",
+                   strnodetype(src_node->nodetype), strnodetype(dst_node->nodetype));
             return -parsed;
         }
     } while (has_predicate);
@@ -4967,44 +4971,69 @@ resolve_list_keys(struct lys_node_list *list, const char *keys_str)
  * Logs directly.
  *
  * @param[in] node Data node with optional must statements.
+ * @param[in] inout_parent If set, must in input or output parent of node->schema will be resolved.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on fail, -1 on error.
  */
 static int
-resolve_must(struct lyd_node *node)
+resolve_must(struct lyd_node *node, int inout_parent)
 {
     uint8_t i, must_size;
+    struct lys_node *schema;
     struct lys_restr *must;
     struct lyxp_set set;
 
     assert(node);
     memset(&set, 0, sizeof set);
 
-    switch (node->schema->nodetype) {
-    case LYS_CONTAINER:
-        must_size = ((struct lys_node_container *)node->schema)->must_size;
-        must = ((struct lys_node_container *)node->schema)->must;
-        break;
-    case LYS_LEAF:
-        must_size = ((struct lys_node_leaf *)node->schema)->must_size;
-        must = ((struct lys_node_leaf *)node->schema)->must;
-        break;
-    case LYS_LEAFLIST:
-        must_size = ((struct lys_node_leaflist *)node->schema)->must_size;
-        must = ((struct lys_node_leaflist *)node->schema)->must;
-        break;
-    case LYS_LIST:
-        must_size = ((struct lys_node_list *)node->schema)->must_size;
-        must = ((struct lys_node_list *)node->schema)->must;
-        break;
-    case LYS_ANYXML:
-    case LYS_ANYDATA:
-        must_size = ((struct lys_node_anydata *)node->schema)->must_size;
-        must = ((struct lys_node_anydata *)node->schema)->must;
-        break;
-    default:
-        must_size = 0;
-        break;
+    if (inout_parent) {
+        for (schema = lys_parent(node->schema);
+             schema && (schema->nodetype & (LYS_CHOICE | LYS_CASE | LYS_USES));
+             schema = lys_parent(schema));
+        if (!schema || !(schema->nodetype & (LYS_INPUT | LYS_OUTPUT))) {
+            LOGINT;
+            return -1;
+        }
+        must_size = ((struct lys_node_inout *)schema)->must_size;
+        must = ((struct lys_node_inout *)schema)->must;
+
+        /* context node is the RPC/action */
+        node = node->parent;
+        if (!(node->schema->nodetype & (LYS_RPC | LYS_ACTION))) {
+            LOGINT;
+            return -1;
+        }
+    } else {
+        switch (node->schema->nodetype) {
+        case LYS_CONTAINER:
+            must_size = ((struct lys_node_container *)node->schema)->must_size;
+            must = ((struct lys_node_container *)node->schema)->must;
+            break;
+        case LYS_LEAF:
+            must_size = ((struct lys_node_leaf *)node->schema)->must_size;
+            must = ((struct lys_node_leaf *)node->schema)->must;
+            break;
+        case LYS_LEAFLIST:
+            must_size = ((struct lys_node_leaflist *)node->schema)->must_size;
+            must = ((struct lys_node_leaflist *)node->schema)->must;
+            break;
+        case LYS_LIST:
+            must_size = ((struct lys_node_list *)node->schema)->must_size;
+            must = ((struct lys_node_list *)node->schema)->must;
+            break;
+        case LYS_ANYXML:
+        case LYS_ANYDATA:
+            must_size = ((struct lys_node_anydata *)node->schema)->must_size;
+            must = ((struct lys_node_anydata *)node->schema)->must;
+            break;
+        case LYS_NOTIF:
+            must_size = ((struct lys_node_notif *)node->schema)->must_size;
+            must = ((struct lys_node_notif *)node->schema)->must;
+            break;
+        default:
+            must_size = 0;
+            break;
+        }
     }
 
     for (i = 0; i < must_size; ++i) {
@@ -5254,25 +5283,55 @@ resolve_when_relink_nodes(struct lyd_node *node, struct lyd_node *unlinked_nodes
 }
 
 int
-resolve_applies_must(const struct lys_node *schema)
+resolve_applies_must(const struct lyd_node *node)
 {
-    assert(schema);
+    int ret = 0;
+    uint8_t must_size;
+    struct lys_node *schema, *iter;
 
+    assert(node);
+
+    schema = node->schema;
+
+    /* their own must */
     switch (schema->nodetype) {
     case LYS_CONTAINER:
-        return ((struct lys_node_container *)schema)->must_size;
+        must_size = ((struct lys_node_container *)schema)->must_size;
+        break;
     case LYS_LEAF:
-        return ((struct lys_node_leaf *)schema)->must_size;
+        must_size = ((struct lys_node_leaf *)schema)->must_size;
+        break;
     case LYS_LEAFLIST:
-        return ((struct lys_node_leaflist *)schema)->must_size;
+        must_size = ((struct lys_node_leaflist *)schema)->must_size;
+        break;
     case LYS_LIST:
-        return ((struct lys_node_list *)schema)->must_size;
+        must_size = ((struct lys_node_list *)schema)->must_size;
+        break;
     case LYS_ANYXML:
     case LYS_ANYDATA:
-        return ((struct lys_node_anydata *)schema)->must_size;
+        must_size = ((struct lys_node_anydata *)schema)->must_size;
+        break;
+    case LYS_NOTIF:
+        must_size = ((struct lys_node_notif *)schema)->must_size;
+        break;
     default:
-        return 0;
+        must_size = 0;
+        break;
     }
+
+    if (must_size) {
+        ++ret;
+    }
+
+    /* schema may be a direct data child of input/output with must (but it must be first, it needs to be evaluated only once) */
+    if (!node->prev->next) {
+        for (iter = lys_parent(schema); iter && (iter->nodetype & (LYS_CHOICE | LYS_CASE | LYS_USES)); iter = lys_parent(iter));
+        if (iter && (iter->nodetype & (LYS_INPUT | LYS_OUTPUT))) {
+            ret += 0x2;
+        }
+    }
+
+    return ret;
 }
 
 int
@@ -5483,6 +5542,91 @@ cleanup:
     return rc;
 }
 
+static int
+check_leafref_features(struct lys_type *type)
+{
+    struct lys_node *iter;
+    struct ly_set *src_parents, *trg_parents, *features;
+    unsigned int i, j, size, x;
+    int ret = EXIT_SUCCESS;
+
+    assert(type->parent);
+
+    src_parents = ly_set_new();
+    trg_parents = ly_set_new();
+    features = ly_set_new();
+
+    /* get parents chain of source (leafref) */
+    for (iter = (struct lys_node *)type->parent; iter; iter = iter->parent) {
+        if (iter->nodetype & (LYS_INPUT | LYS_OUTPUT)) {
+            continue;
+        }
+        ly_set_add(src_parents, iter, LY_SET_OPT_USEASLIST);
+    }
+    /* get parents chain of target */
+    for (iter = (struct lys_node *)type->info.lref.target; iter; iter = iter->parent) {
+        if (iter->nodetype & (LYS_INPUT | LYS_OUTPUT)) {
+            continue;
+        }
+        ly_set_add(trg_parents, iter, LY_SET_OPT_USEASLIST);
+    }
+
+    /* compare the features used in if-feature statements in the rest of both
+     * chains of parents. The set of features used for target must be a subset
+     * of features used for the leafref. This is not a perfect, we should compare
+     * the truth tables but it could require too much resources, so we simplify that */
+    for (i = 0; i < src_parents->number; i++) {
+        iter = src_parents->set.s[i]; /* shortcut */
+        if (!iter->iffeature_size) {
+            continue;
+        }
+        for (j = 0; j < iter->iffeature_size; j++) {
+            resolve_iffeature_getsizes(&iter->iffeature[j], NULL, &size);
+            for (; size; size--) {
+                if (!iter->iffeature[j].features[size - 1]) {
+                    /* not yet resolved feature, postpone this check */
+                    ret = EXIT_FAILURE;
+                    goto cleanup;
+                }
+                ly_set_add(features, iter->iffeature[j].features[size - 1], 0);
+            }
+        }
+    }
+    x = features->number;
+    for (i = 0; i < trg_parents->number; i++) {
+        iter = trg_parents->set.s[i]; /* shortcut */
+        if (!iter->iffeature_size) {
+            continue;
+        }
+        for (j = 0; j < iter->iffeature_size; j++) {
+            resolve_iffeature_getsizes(&iter->iffeature[j], NULL, &size);
+            for (; size; size--) {
+                if (!iter->iffeature[j].features[size - 1]) {
+                    /* not yet resolved feature, postpone this check */
+                    ret = EXIT_FAILURE;
+                    goto cleanup;
+                }
+                if ((unsigned int)ly_set_add(features, iter->iffeature[j].features[size - 1], 0) >= x) {
+                    /* the feature is not present in features set of target's parents chain */
+                    LOGVAL(LYE_NORESOLV, LY_VLOG_LYS, type->parent, "leafref", type->info.lref.path);
+                    LOGVAL(LYE_SPEC, LY_VLOG_LYS, type->parent,
+                           "Leafref is not conditional based on \"%s\" feature as its target.",
+                           iter->iffeature[j].features[size - 1]->name);
+                    ret = -1;
+                    goto cleanup;
+                }
+            }
+        }
+    }
+
+cleanup:
+    ly_set_free(features);
+    ly_set_free(src_parents);
+    ly_set_free(trg_parents);
+
+    return ret;
+}
+
 /**
  * @brief Check all XPath expressions of a node (when and must), set LYS_XPATH_DEP flag if required.
  *
@@ -5570,6 +5714,7 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
     struct lyxml_elem *yin;
     struct yang_type *yang;
     struct unres_list_uniq *unique_info;
+    struct unres_iffeat_data *iff_data;
 
     switch (type) {
     case UNRES_IDENT:
@@ -5608,6 +5753,12 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
                                      (const struct lys_node **)&stype->info.lref.target);
         if (!tpdf_flag && !rc) {
             assert(stype->info.lref.target);
+            /* check if leafref and its target are under a common if-features */
+            rc = check_leafref_features(stype);
+            if (rc) {
+                break;
+            }
+
             /* store the backlink from leafref target */
             if (lys_leaf_add_leafref_target(stype->info.lref.target, (struct lys_node *)stype->parent)) {
                 rc = -1;
@@ -5670,13 +5821,12 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
         }
         break;
     case UNRES_IFFEAT:
-        node = str_snode;
-        expr = *((const char **)item);
-
-        rc = resolve_feature(expr, strlen(expr), node, item);
+        iff_data = str_snode;
+        rc = resolve_feature(iff_data->fname, strlen(iff_data->fname), iff_data->node, item);
         if (!rc) {
             /* success */
-            free((char *)expr);
+            lydict_remove(mod->ctx, iff_data->fname);
+            free(iff_data);
         }
         break;
     case UNRES_FEATURE:
@@ -5694,7 +5844,7 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
                 for (i = 0; i < ref->iffeature_size; i++) {
                     resolve_iffeature_getsizes(&ref->iffeature[i], NULL, &j);
                     for (; j > 0 ; j--) {
-                        if (unres_schema_find(unres, -1, &ref->iffeature[i].features[j - 1], UNRES_IFFEAT) == -1) {
+                        if (ref->iffeature[i].features[j - 1]) {
                             if (ref->iffeature[i].features[j - 1] == feat) {
                                 LOGVAL(LYE_CIRC_FEATURES, LY_VLOG_NONE, NULL, feat->name);
                                 goto featurecheckdone;
@@ -5783,6 +5933,7 @@ print_unres_schema_item_fail(void *item, enum UNRES_ITEM type, void *str_node)
 {
     struct lyxml_elem *xml;
     struct lyxml_attr *attr;
+    struct unres_iffeat_data *iff_data;
     const char *type_name = NULL;
 
     switch (type) {
@@ -5813,7 +5964,8 @@ print_unres_schema_item_fail(void *item, enum UNRES_ITEM type, void *str_node)
         LOGVRB("Resolving %s \"%s\" failed, it will be attempted later.", "derived type", type_name);
         break;
     case UNRES_IFFEAT:
-        LOGVRB("Resolving %s \"%s\" failed, it will be attempted later.", "if-feature", (char *)item);
+        iff_data = str_node;
+        LOGVRB("Resolving %s \"%s\" failed, it will be attempted later.", "if-feature", iff_data->fname);
         break;
     case UNRES_FEATURE:
         LOGVRB("There are unresolved if-features for \"%s\" feature circular dependency check, it will be attempted later",
@@ -6088,6 +6240,7 @@ unres_schema_dup(struct lys_module *mod, struct unres_schema *unres, void *item,
 {
     int i;
     struct unres_list_uniq aux_uniq;
+    struct unres_iffeat_data *iff_data;
 
     assert(item && new_item && ((type != UNRES_LEAFREF) && (type != UNRES_INSTID) && (type != UNRES_WHEN)));
 
@@ -6109,6 +6262,15 @@ unres_schema_dup(struct lys_module *mod, struct unres_schema *unres, void *item,
     if ((type == UNRES_TYPE_LEAFREF) || (type == UNRES_USES) || (type == UNRES_TYPE_DFLT) ||
             (type == UNRES_IFFEAT) || (type == UNRES_FEATURE) || (type == UNRES_LIST_UNIQ)) {
         if (unres_schema_add_node(mod, unres, new_item, type, unres->str_snode[i]) == -1) {
+            LOGINT;
+            return -1;
+        }
+    } else if (type == UNRES_IFFEAT) {
+        /* duplicate unres_iffeature_data */
+        iff_data = malloc(sizeof *iff_data);
+        iff_data->fname = lydict_insert(mod->ctx, ((struct unres_iffeat_data *)unres->str_snode[i])->fname, 0);
+        iff_data->node = ((struct unres_iffeat_data *)unres->str_snode[i])->node;
+        if (unres_schema_add_node(mod, unres, new_item, type, (struct lys_node *)iff_data) == -1) {
             LOGINT;
             return -1;
         }
@@ -6159,6 +6321,7 @@ unres_schema_free_item(struct ly_ctx *ctx, struct unres_schema *unres, uint32_t 
 {
     struct lyxml_elem *yin;
     struct yang_type *yang;
+    struct unres_iffeat_data *iff_data;
 
     switch (unres->type[i]) {
     case UNRES_TYPE_DER_TPDF:
@@ -6174,7 +6337,9 @@ unres_schema_free_item(struct ly_ctx *ctx, struct unres_schema *unres, uint32_t 
         }
         break;
     case UNRES_IFFEAT:
-        free(*((char **)unres->item[i]));
+        iff_data = (struct unres_iffeat_data *)unres->str_snode[i];
+        lydict_remove(ctx, iff_data->fname);
+        free(unres->str_snode[i]);
         break;
     case UNRES_IDENT:
     case UNRES_TYPE_IDENTREF:
@@ -6354,7 +6519,13 @@ resolve_unres_data_item(struct lyd_node *node, enum UNRES_ITEM type)
         break;
 
     case UNRES_MUST:
-        if ((rc = resolve_must(node))) {
+        if ((rc = resolve_must(node, 0))) {
+            return rc;
+        }
+        break;
+
+    case UNRES_MUST_INOUT:
+        if ((rc = resolve_must(node, 1))) {
             return rc;
         }
         break;
@@ -6389,7 +6560,7 @@ unres_data_add(struct unres_data *unres, struct lyd_node *node, enum UNRES_ITEM 
 {
     assert(unres && node);
     assert((type == UNRES_LEAFREF) || (type == UNRES_INSTID) || (type == UNRES_WHEN) || (type == UNRES_MUST)
-           || (type == UNRES_UNION) || (type == UNRES_EMPTYCONT));
+           || (type == UNRES_MUST_INOUT) || (type == UNRES_UNION) || (type == UNRES_EMPTYCONT));
 
     unres->count++;
     unres->node = ly_realloc(unres->node, unres->count * sizeof *unres->node);

@@ -42,7 +42,7 @@ void
 cmd_print_help(void)
 {
     printf("print [-f (yang | yin | tree | info)] [-t <info-target-node>] [-o <output-file>] <model-name>[@<revision>]\n\n");
-    printf("\tinfo-target-node: <absolute-schema-node> | typedef/<typedef-name> |\n");
+    printf("\tinfo-target-node: <absolute-schema-node> | typedef[<absolute-schema-nodeid]/<typedef-name> |\n");
     printf("\t                  | identity/<identity-name> | feature/<feature-name> |\n");
     printf("\t                  | grouping/<grouping-name>(<absolute-schema-nodeid>) |\n");
     printf("\t                  | type/<absolute-schema-node-leaf-or-leaflist>\n");
@@ -757,10 +757,10 @@ error:
 
             /* submodules print */
             LY_TREE_FOR(module->child, submodule) {
-                if (!strcmp(submodule->schema->name, "submodules")) {
+                if (!strcmp(submodule->schema->name, "submodule")) {
                     printf(" (");
                     flag = 0;
-                    LY_TREE_FOR(submodule->child, submodule) {
+                    LY_TREE_FOR(submodule, submodule) {
                         if (!strcmp(submodule->schema->name, "submodule")) {
                             LY_TREE_FOR(submodule->child, node) {
                                 if (!strcmp(node->schema->name, "name")) {
