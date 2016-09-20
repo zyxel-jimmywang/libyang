@@ -31,6 +31,75 @@
 #include "tree_internal.h"
 
 /**
+ * @brief Convert a string with a decimal64 value into our representation.
+ * Syntax is expected to be correct.
+ *
+ * @param[in,out] str_num Pointer to the beginning of the decimal64 number, returns the first unparsed character.
+ * @param[in] dig Fraction-digits of the resulting number.
+ * @return Decimal64 base value, fraction-digits equal \p dig.
+ */
+static int64_t
+parse_range_dec64(const char **str_num, uint8_t dig)
+{
+    const char *ptr;
+    int minus = 0;
+    int64_t ret = 0;
+    int8_t str_exp, str_dig = -1;
+
+    ptr = *str_num;
+
+    if (ptr[0] == '-') {
+        minus = 1;
+        ++ptr;
+    }
+
+    for (str_exp = 0; isdigit(ptr[0]) || ((ptr[0] == '.') && (str_dig < 0)); ++ptr) {
+        if (str_exp > 18) {
+            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, *str_num, "range");
+            return 0;
+        }
+
+        if (ptr[0] == '.') {
+            if (ptr[1] == '.') {
+                /* it's the next interval */
+                break;
+            }
+            ++str_dig;
+        } else {
+            ret = ret * 10 + (ptr[0] - 48);
+            if (str_dig > -1) {
+                ++str_dig;
+            }
+            ++str_exp;
+        }
+    }
+    if (str_dig == -1) {
+        /* there are 0 number after the floating point */
+        str_dig = 0;
+    }
+
+    /* it's parsed, now adjust the number based on fraction-digits, if needed */
+    if (str_dig < dig) {
+        if ((str_exp - 1) + (dig - str_dig) > 18) {
+            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, *str_num, "range");
+            return 0;
+        }
+        ret *= dec_pow(dig - str_dig);
+    }
+    if (str_dig > dig) {
+        LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, *str_num, "range");
+        return 0;
+    }
+
+    if (minus) {
+        ret *= -1;
+    }
+    *str_num = ptr;
+
+    return ret;
+}
+
+/**
  * @brief Parse an identifier.
  *
  * ;; An identifier MUST NOT start with (('X'|'x') ('M'|'m') ('L'|'l'))
@@ -2298,11 +2367,10 @@ resolve_len_ran_interval(const char *str_restr, struct lys_type *type, struct le
 {
     /* 0 - unsigned, 1 - signed, 2 - floating point */
     int kind;
-    int64_t local_smin, local_smax;
+    int64_t local_smin, local_smax, local_fmin, local_fmax;
     uint64_t local_umin, local_umax;
-    long double local_fmin, local_fmax;
+    uint8_t local_fdig;
     const char *seg_ptr, *ptr;
-    char *num_end;
     struct len_ran_intv *local_intv = NULL, *tmp_local_intv = NULL, *tmp_intv, *intv = NULL;
 
     switch (type->base) {
@@ -2317,8 +2385,9 @@ resolve_len_ran_interval(const char *str_restr, struct lys_type *type, struct le
         break;
     case LY_TYPE_DEC64:
         kind = 2;
-        local_fmin = ((long double)-9223372036854775808.0) / type->info.dec64.div;
-        local_fmax = ((long double)9223372036854775807.0) / type->info.dec64.div;
+        local_fmin = __INT64_C(-9223372036854775807) - __INT64_C(1);
+        local_fmax = __INT64_C(9223372036854775807);
+        local_fdig = type->info.dec64.dig;
 
         if (!str_restr && type->info.dec64.range) {
             str_restr = type->info.dec64.range->expr;
@@ -2478,20 +2547,12 @@ resolve_len_ran_interval(const char *str_restr, struct lys_type *type, struct le
         }
         if (isdigit(ptr[0]) || (ptr[0] == '+') || (ptr[0] == '-')) {
             if (kind == 0) {
-                tmp_local_intv->value.uval.min = strtol(ptr, &num_end, 10);
+                tmp_local_intv->value.uval.min = strtol(ptr, (char **)&ptr, 10);
             } else if (kind == 1) {
-                tmp_local_intv->value.sval.min = strtol(ptr, &num_end, 10);
+                tmp_local_intv->value.sval.min = strtol(ptr, (char **)&ptr, 10);
             } else if (kind == 2) {
-                for (num_end = (char *)ptr + 1; isdigit(num_end[0]); ++num_end);
-                if ((num_end[0] == '.') && (num_end[1] == '.')) {
-                    /* cannot use strtod, one '.' would be incorrectly parsed */
-                    tmp_local_intv->value.fval.min = strtol(ptr, &num_end, 10);
-                } else {
-                    tmp_local_intv->value.fval.min = strtod(ptr, &num_end);
-                }
+                tmp_local_intv->value.fval.min = parse_range_dec64(&ptr, local_fdig);
             }
-
-            ptr = num_end;
         } else if (!strncmp(ptr, "min", 3)) {
             if (kind == 0) {
                 tmp_local_intv->value.uval.min = local_umin;
@@ -2540,17 +2601,11 @@ resolve_len_ran_interval(const char *str_restr, struct lys_type *type, struct le
             /* max */
             if (isdigit(ptr[0]) || (ptr[0] == '+') || (ptr[0] == '-')) {
                 if (kind == 0) {
-                    tmp_local_intv->value.uval.max = strtol(ptr, &num_end, 10);
+                    tmp_local_intv->value.uval.max = strtol(ptr, (char **)&ptr, 10);
                 } else if (kind == 1) {
-                    tmp_local_intv->value.sval.max = strtol(ptr, &num_end, 10);
+                    tmp_local_intv->value.sval.max = strtol(ptr, (char **)&ptr, 10);
                 } else if (kind == 2) {
-                    for (num_end = (char *)ptr + 1; isdigit(num_end[0]); ++num_end);
-                    if ((num_end[0] == '.') && (num_end[1] == '.')) {
-                        /* cannot use strtod, one '.' would be incorrectly parsed */
-                        tmp_local_intv->value.fval.max = strtol(ptr, &num_end, 10);
-                    } else {
-                        tmp_local_intv->value.fval.max = strtod(ptr, &num_end);
-                    }
+                    tmp_local_intv->value.fval.max = parse_range_dec64(&ptr, local_fdig);
                 }
             } else if (!strncmp(ptr, "max", 3)) {
                 if (kind == 0) {
@@ -2600,6 +2655,7 @@ resolve_len_ran_interval(const char *str_restr, struct lys_type *type, struct le
                 goto error;
             }
             if (tmp_intv && (tmp_intv->value.fval.max >= tmp_local_intv->value.fval.min)) {
+                /* fraction-digits value is always the same (it cannot be changed in derived types) */
                 goto error;
             }
         }
@@ -2651,8 +2707,9 @@ resolve_len_ran_interval(const char *str_restr, struct lys_type *type, struct le
                 local_fmin = tmp_local_intv->value.fval.min;
                 local_fmax = tmp_local_intv->value.fval.max;
 
-                 if ((local_fmin >= tmp_intv->value.fval.min) && (local_fmin <= tmp_intv->value.fval.max)) {
-                    if (local_fmax <= tmp_intv->value.fval.max) {
+                 if ((dec64cmp(local_fmin, local_fdig, tmp_intv->value.fval.min, local_fdig) > -1)
+                        && (dec64cmp(local_fmin, local_fdig, tmp_intv->value.fval.max, local_fdig) > 1)) {
+                    if (dec64cmp(local_fmax, local_fdig, tmp_intv->value.fval.max, local_fdig) < 1) {
                         tmp_local_intv = tmp_local_intv->next;
                         continue;
                     } else {
@@ -5667,10 +5724,16 @@ check_xpath(struct lys_node *node)
     /* RPC, action can have neither must nor when */
     for (parent = node; parent && !(parent->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF)); parent = lys_parent(parent));
 
-    if (parent) {
-        for (i = 0; i < set.used; ++i) {
-            /* skip roots'n'stuff */
-            if (set.val.snodes[i].type == LYXP_NODE_ELEM) {
+    for (i = 0; i < set.used; ++i) {
+        /* skip roots'n'stuff */
+        if (set.val.snodes[i].type == LYXP_NODE_ELEM) {
+            /* XPath expression cannot reference "lower" status than the node that has the definition */
+            if (lyp_check_status(node->flags, lys_node_module(node), node->name, set.val.snodes[i].snode->flags,
+                    lys_node_module(set.val.snodes[i].snode), set.val.snodes[i].snode->name, node)) {
+                return -1;
+            }
+
+            if (parent) {
                 for (elem = set.val.snodes[i].snode; elem && (elem != parent); elem = lys_parent(elem));
                 if (!elem) {
                     /* not in node's RPC or notification subtree, set the flag */
@@ -5806,17 +5869,17 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
             if (!tpdf_flag && node->nodetype == LYS_LEAFLIST && stype->base == LY_TYPE_EMPTY) {
                 LOGWRN("The leaf-list \"%s\" is of \"empty\" type, which does not make sense.", node->name);
             }
-        } else if (rc == EXIT_FAILURE && stype->base != LY_TYPE_INGRP) {
+        } else if (rc == EXIT_FAILURE && stype->base != LY_TYPE_ERR) {
             /* forward reference - in case the type is in grouping, we have to make the grouping unusable
              * by uses statement until the type is resolved. We do that the same way as uses statements inside
              * grouping - the grouping's nacm member (not used un grouping) is used to increase the number of
              * so far unresolved items (uses and types). The grouping cannot be used unless the nacm value is 0.
-             * To remember that the grouping already increased grouping's nacm, the LY_TYPE_INGRP is used as value
+             * To remember that the grouping already increased grouping's nacm, the LY_TYPE_ERR is used as value
              * of the type's base member. */
             for (par_grp = node; par_grp && (par_grp->nodetype != LYS_GROUPING); par_grp = lys_parent(par_grp));
             if (par_grp) {
                 ((struct lys_node_grp *)par_grp)->nacm++;
-                stype->base = LY_TYPE_INGRP;
+                stype->base = LY_TYPE_ERR;
             }
         }
         break;
@@ -6392,18 +6455,21 @@ unres_schema_free(struct lys_module *module, struct unres_schema **unres)
     }
 }
 
+static int resolve_union(struct lyd_node_leaf_list *leaf, struct lys_type *type);
+
 static int
-resolve_leafref(struct lyd_node *node, struct lys_type *type)
+resolve_leafref(struct lyd_node_leaf_list *leaf, struct lys_type *type)
 {
-    struct lyd_node_leaf_list *leaf;
     struct unres_data matches;
     uint32_t i;
 
+    assert(type->base == LY_TYPE_LEAFREF);
+
+    /* init */
     memset(&matches, 0, sizeof matches);
-    leaf = (struct lyd_node_leaf_list *)node;
 
     /* EXIT_FAILURE return keeps leaf->value.lefref NULL, handled later */
-    if (resolve_path_arg_data(node, type->info.lref.path, &matches) == -1) {
+    if (resolve_path_arg_data((struct lyd_node *)leaf, type->info.lref.path, &matches) == -1) {
         return -1;
     }
 
@@ -6430,6 +6496,146 @@ resolve_leafref(struct lyd_node *node, struct lys_type *type)
     return EXIT_SUCCESS;
 }
 
+API LY_DATA_TYPE
+lyd_leaf_type(const struct lyd_node_leaf_list *leaf)
+{
+    struct lyd_node *node;
+    struct lys_type *type, *type_iter;
+    lyd_val value;
+    int f = 0, r;
+
+    if (!leaf || !(leaf->schema->nodetype & (LYS_LEAF | LYS_LEAFLIST))) {
+        return LY_TYPE_ERR;
+    }
+
+    if (leaf->value_type > 0 && (leaf->value_type & LY_DATA_TYPE_MASK) != LY_TYPE_UNION &&
+            (leaf->value_type & LY_DATA_TYPE_MASK) != LY_TYPE_LEAFREF) {
+        /* we can get the type directly from the data node (it was already resolved) */
+        return leaf->value_type & LY_DATA_TYPE_MASK;
+    }
+
+    /* init */
+    type = &((struct lys_node_leaf *)leaf->schema)->type;
+    value = leaf->value;
+    ly_vlog_hide(1);
+
+    /* resolve until we get the real data type */
+    while (1) {
+        /* get the correct data type from schema */
+        switch (type->base) {
+        case LY_TYPE_LEAFREF:
+            type = &type->info.lref.target->type;
+            break; /* continue in while loop */
+        case LY_TYPE_UNION:
+            type_iter = NULL;
+            while ((type_iter = lyp_get_next_union_type(type, type_iter, &f))) {
+                if (type_iter->base == LY_TYPE_LEAFREF) {
+                    if (type_iter->info.lref.req == -1) {
+                        /* target not required, so it always succeeds */
+                        break;
+                    } else {
+                        /* try to resolve leafref */
+                        memset(&((struct lyd_node_leaf_list *)leaf)->value, 0, sizeof leaf->value);
+                        r = resolve_leafref((struct lyd_node_leaf_list *)leaf, type_iter);
+                        /* revert leaf's content affected by resolve_leafref */
+                        ((struct lyd_node_leaf_list *)leaf)->value = value;
+                        if (!r) {
+                            /* success, we can continue with the leafref type */
+                            break;
+                        }
+                    }
+                } else if (type_iter->base == LY_TYPE_INST) {
+                    if (type_iter->info.inst.req == -1) {
+                        /* target not required, so it always succeeds */
+                        return LY_TYPE_INST;
+                    } else {
+                        /* try to resolve instance-identifier */
+                        ly_errno = 0;
+                        node = resolve_instid((struct lyd_node *)leaf, leaf->value_str);
+                        if (!ly_errno && node) {
+                            /* the real type is instance-identifier */
+                            return LY_TYPE_INST;
+                        }
+                    }
+                } else {
+                    r = lyp_parse_value_type((struct lyd_node_leaf_list *)leaf, type_iter, 1);
+                    /* revert leaf's content affected by resolve_leafref */
+                    ((struct lyd_node_leaf_list *)leaf)->value = value;
+                    if (!r) {
+                        /* we have the real type */
+                        return type_iter->base;
+                    }
+                }
+                f = 0;
+            }
+            /* erase ly_errno and ly_vecode */
+            ly_errno = LY_SUCCESS;
+            ly_vecode = LYVE_SUCCESS;
+
+            if (!type_iter) {
+                LOGERR(LY_EINVAL, "Unable to get type from union \"%s\" with no valid type.", type->parent->name)
+                return LY_TYPE_ERR;
+            }
+            type = type_iter;
+            break;
+        default:
+            /* we have the real type */
+            ly_vlog_hide(0);
+            return type->base;
+        }
+    }
+
+    ly_vlog_hide(0);
+    return LY_TYPE_ERR;
+}
+
+static int
+resolve_union(struct lyd_node_leaf_list *leaf, struct lys_type *type)
+{
+    struct lys_type *datatype = NULL;
+    int f = 0;
+
+    assert(type->base == LY_TYPE_UNION);
+
+    memset(&leaf->value, 0, sizeof leaf->value);
+    while ((datatype = lyp_get_next_union_type(type, datatype, &f))) {
+        leaf->value_type = datatype->base;
+
+        if (datatype->base == LY_TYPE_LEAFREF) {
+            /* try to resolve leafref */
+            if (!resolve_leafref(leaf, datatype)) {
+                /* success */
+                break;
+            }
+        } else if (datatype->base == LY_TYPE_INST) {
+            /* try to resolve instance-identifier */
+            ly_errno = 0;
+            leaf->value.instance = resolve_instid((struct lyd_node *)leaf, leaf->value_str);
+            if (!ly_errno && (leaf->value.instance || datatype->info.inst.req == -1)) {
+                /* success */
+                break;
+            }
+        } else {
+            if (!lyp_parse_value_type(leaf, datatype, 1)) {
+                /* success */
+                break;
+            }
+        }
+        f = 0;
+    }
+    /* erase ly_errno and ly_vecode */
+    ly_errno = LY_SUCCESS;
+    ly_vecode = LYVE_SUCCESS;
+
+    if (!datatype) {
+        /* failure */
+        LOGVAL(LYE_INVAL, LY_VLOG_LYD, leaf, (leaf->value_str ? leaf->value_str : ""), leaf->schema->name);
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
+}
+
 /**
  * @brief Resolve a single unres data item. Logs directly.
  *
@@ -6445,7 +6651,6 @@ resolve_unres_data_item(struct lyd_node *node, enum UNRES_ITEM type)
     struct lyd_node_leaf_list *leaf;
     struct lys_node_leaf *sleaf;
     struct lyd_node *parent;
-    struct lys_type *datatype;
 
     leaf = (struct lyd_node_leaf_list *)node;
     sleaf = (struct lys_node_leaf *)leaf->schema;
@@ -6453,7 +6658,7 @@ resolve_unres_data_item(struct lyd_node *node, enum UNRES_ITEM type)
     switch (type) {
     case UNRES_LEAFREF:
         assert(sleaf->type.base == LY_TYPE_LEAFREF);
-        return resolve_leafref(node, &sleaf->type);
+        return resolve_leafref(leaf, &sleaf->type);
 
     case UNRES_INSTID:
         assert(sleaf->type.base == LY_TYPE_INST);
@@ -6473,44 +6678,7 @@ resolve_unres_data_item(struct lyd_node *node, enum UNRES_ITEM type)
 
     case UNRES_UNION:
         assert(sleaf->type.base == LY_TYPE_UNION);
-        datatype = NULL;
-        memset(&leaf->value, 0, sizeof leaf->value);
-        while ((datatype = lyp_get_next_union_type(&sleaf->type, datatype, &rc))) {
-            leaf->value_type = datatype->base;
-
-            if (datatype->base == LY_TYPE_LEAFREF) {
-                /* try to resolve leafref */
-                if (!resolve_leafref(node, datatype)) {
-                    /* success */
-                    break;
-                }
-            } else if (datatype->base == LY_TYPE_INST) {
-                /* try to resolve instance-identifier */
-                ly_errno = 0;
-                leaf->value.instance = resolve_instid(node, leaf->value_str);
-                if (!ly_errno && (leaf->value.instance || datatype->info.inst.req == -1)) {
-                    /* success */
-                    break;
-                }
-            } else {
-                if (!lyp_parse_value_type(leaf, datatype, 1)) {
-                    /* success */
-                    break;
-                }
-            }
-            rc = 0;
-        }
-        /* erase ly_errno and ly_vecode */
-        ly_errno = LY_SUCCESS;
-        ly_vecode = LYVE_SUCCESS;
-
-        if (!datatype) {
-            /* failure */
-            LOGVAL(LYE_INVAL, LY_VLOG_LYD, leaf, (leaf->value_str ? leaf->value_str : ""), sleaf->name);
-            return EXIT_FAILURE;
-        }
-
-        break;
+        return resolve_union(leaf, &sleaf->type);
 
     case UNRES_WHEN:
         if ((rc = resolve_when(node, NULL))) {

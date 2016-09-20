@@ -214,8 +214,8 @@ lyp_search_file(struct ly_ctx *ctx, struct lys_module *module, const char *name,
                 int implement, struct unres_schema *unres)
 {
     size_t len, flen, match_len = 0, dir_len;
-    int fd;
-    char *wd, *cwd;
+    int fd, i;
+    char *wd;
     DIR *dir = NULL;
     struct dirent *file;
     char *match_name = NULL;
@@ -240,7 +240,6 @@ lyp_search_file(struct ly_ctx *ctx, struct lys_module *module, const char *name,
     }
 
     len = strlen(name);
-    cwd = wd = get_current_dir_name();
     if (ctx->models.search_path) {
         /* try context's search_path first */
         wd = strdup(ctx->models.search_path);
@@ -251,19 +250,11 @@ lyp_search_file(struct ly_ctx *ctx, struct lys_module *module, const char *name,
     } else {
         LOGWRN("No search path defined for the current context.");
         /* there is no search_path, search only in current working dir */
+        wd = get_current_dir_name();
         localsearch = 1;
     }
 
 opendir_search:
-    if (cwd != wd) {
-        if (chdir(wd)) {
-            LOGERR(LY_ESYS, "Unable to use search directory \"%s\" (%s)",
-                   wd, strerror(errno));
-            free(wd);
-            wd = cwd;
-            goto cleanup;
-        }
-    }
     dir = opendir(wd);
     dir_len = strlen(wd);
     LOGVRB("Searching for \"%s\" in %s.", name, wd);
@@ -318,11 +309,10 @@ opendir_search:
             } else {
                 /* remember the revision and try to find the newest one */
                 if (match_name) {
-                    int a;
                     if (file->d_name[len] != '@' || lyp_check_date(&file->d_name[len + 1])) {
                         continue;
                     } else if (match_name[match_len] == '@' &&
-                        (a = strncmp(&match_name[match_len + 1], &file->d_name[len + 1], LY_REV_SIZE - 1)) >= 0) {
+                            (strncmp(&match_name[match_len + 1], &file->d_name[len + 1], LY_REV_SIZE - 1) >= 0)) {
                         continue;
                     }
                     free(match_name);
@@ -346,34 +336,45 @@ opendir_search:
             dir = NULL;
         }
         free(wd);
-        wd = cwd;
+        wd = get_current_dir_name();
         localsearch = 1;
         goto opendir_search;
     }
 
     if (!match_name) {
         LOGERR(LY_ESYS, "Data model \"%s\" not found (neither in search path \"%s\" nor in working directory \"%s\")",
-               name, ctx->models.search_path, cwd);
+               name, ctx->models.search_path, wd);
         goto cleanup;
     }
 
 matched:
+    /* cut the format for now */
+    strrchr(match_name, '.')[1] = '\0';
+
+    /* check that the same file was not already loaded */
+    for (i = 0; i < ctx->models.used; ++i) {
+        if (ctx->models.list[i]->filepath && !strcmp(name, ctx->models.list[i]->name)
+                && !strncmp(match_name, ctx->models.list[i]->filepath, strlen(match_name))) {
+            result = ctx->models.list[i];
+            if (implement && !result->implemented) {
+                /* make it implemented now */
+                if (lys_set_implemented(result)) {
+                    result = NULL;
+                }
+            }
+            goto cleanup;
+        }
+    }
+
+    /* add the format back */
+    match_name[strlen(match_name)] = 'y';
+
     /* open the file */
     fd = open(match_name, O_RDONLY);
     if (fd < 0) {
         LOGERR(LY_ESYS, "Unable to open data model file \"%s\" (%s).",
                match_name, strerror(errno));
         goto cleanup;
-    }
-
-    /* go back to cwd if changed */
-    if (cwd != wd) {
-        if (chdir(cwd)) {
-            LOGWRN("Unable to return back to working directory \"%s\" (%s)",
-                   cwd, strerror(errno));
-        }
-        free(wd);
-        wd = cwd;
     }
 
     if (module) {
@@ -392,14 +393,7 @@ matched:
     /* success */
 
 cleanup:
-    if (cwd != wd) {
-        if (chdir(cwd)) {
-            LOGWRN("Unable to return back to working directory \"%s\" (%s)",
-                   cwd, strerror(errno));
-        }
-        free(wd);
-    }
-    free(cwd);
+    free(wd);
     if (dir) {
         closedir(dir);
     }
@@ -474,7 +468,7 @@ parse_uint(const char *val_str, uint64_t max, int base, uint64_t *ret, struct ly
  * kind == 0 - unsigned (unum used), 1 - signed (snum used), 2 - floating point (fnum used)
  */
 static int
-validate_length_range(uint8_t kind, uint64_t unum, int64_t snum, long double fnum, struct lys_type *type,
+validate_length_range(uint8_t kind, uint64_t unum, int64_t snum, int64_t fnum, uint8_t fnum_dig, struct lys_type *type,
                       const char *val_str, struct lyd_node *node)
 {
     struct lys_restr *restr = NULL;
@@ -504,13 +498,14 @@ validate_length_range(uint8_t kind, uint64_t unum, int64_t snum, long double fnu
 
             if (((kind == 0) && (unum < tmp_intv->value.uval.min))
                     || ((kind == 1) && (snum < tmp_intv->value.sval.min))
-                    || ((kind == 2) && (fnum < tmp_intv->value.fval.min))) {
+                    || ((kind == 2) && (dec64cmp(fnum, fnum_dig, tmp_intv->value.fval.min, cur_type->info.dec64.dig) < 0))) {
                 break;
             }
 
             if (((kind == 0) && (unum >= tmp_intv->value.uval.min) && (unum <= tmp_intv->value.uval.max))
                     || ((kind == 1) && (snum >= tmp_intv->value.sval.min) && (snum <= tmp_intv->value.sval.max))
-                    || ((kind == 2) && (fnum >= tmp_intv->value.fval.min) && (fnum <= tmp_intv->value.fval.max))) {
+                    || ((kind == 2) && (dec64cmp(fnum, fnum_dig, tmp_intv->value.fval.min, cur_type->info.dec64.dig) > -1)
+                    && (dec64cmp(fnum, fnum_dig, tmp_intv->value.fval.max, cur_type->info.dec64.dig) < 1))) {
                 match = 1;
             }
         }
@@ -891,7 +886,7 @@ lyp_parse_value_type(struct lyd_node_leaf_list *node, struct lys_type *stype, in
 switchtype:
     switch (node->value_type & LY_DATA_TYPE_MASK) {
     case LY_TYPE_BINARY:
-        if (validate_length_range(0, (node->value_str ? strlen(node->value_str) : 0), 0, 0, stype,
+        if (validate_length_range(0, (node->value_str ? strlen(node->value_str) : 0), 0, 0, 0, stype,
                                   node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
@@ -1051,7 +1046,7 @@ switchtype:
 
         if (parse_int(dec, __INT64_C(-9223372036854775807) - __INT64_C(1), __INT64_C(9223372036854775807), 10, &num,
                       (struct lyd_node *)node)
-                || validate_length_range(2, 0, 0, ((long double)num) / type->info.dec64.div, stype,
+                || validate_length_range(2, 0, 0, num, type->info.dec64.dig, stype,
                                          node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
@@ -1133,7 +1128,7 @@ switchtype:
         }
 
         if (!resolve) {
-            type = &((struct lys_node_leaf *)node->schema)->type.info.lref.target->type;
+            type = &stype->info.lref.target->type;
             while (type->base == LY_TYPE_LEAFREF) {
                 type = &type->info.lref.target->type;
             }
@@ -1146,7 +1141,7 @@ switchtype:
         break;
 
     case LY_TYPE_STRING:
-        if (validate_length_range(0, (node->value_str ? strlen(node->value_str) : 0), 0, 0, stype,
+        if (validate_length_range(0, (node->value_str ? strlen(node->value_str) : 0), 0, 0, 0, stype,
                                   node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
@@ -1160,7 +1155,7 @@ switchtype:
 
     case LY_TYPE_INT8:
         if (parse_int(node->value_str, __INT64_C(-128), __INT64_C(127), 0, &num, (struct lyd_node *)node)
-                || validate_length_range(1, 0, num, 0, stype, node->value_str, (struct lyd_node *)node)) {
+                || validate_length_range(1, 0, num, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
         node->value.int8 = num;
@@ -1168,7 +1163,7 @@ switchtype:
 
     case LY_TYPE_INT16:
         if (parse_int(node->value_str, __INT64_C(-32768), __INT64_C(32767), 0, &num, (struct lyd_node *)node)
-                || validate_length_range(1, 0, num, 0, stype, node->value_str, (struct lyd_node *)node)) {
+                || validate_length_range(1, 0, num, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
         node->value.int16 = num;
@@ -1176,7 +1171,7 @@ switchtype:
 
     case LY_TYPE_INT32:
         if (parse_int(node->value_str, __INT64_C(-2147483648), __INT64_C(2147483647), 0, &num, (struct lyd_node *)node)
-                || validate_length_range(1, 0, num, 0, stype, node->value_str, (struct lyd_node *)node)) {
+                || validate_length_range(1, 0, num, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
         node->value.int32 = num;
@@ -1185,7 +1180,7 @@ switchtype:
     case LY_TYPE_INT64:
         if (parse_int(node->value_str, __INT64_C(-9223372036854775807) - __INT64_C(1), __INT64_C(9223372036854775807),
                       0, &num, (struct lyd_node *)node)
-                || validate_length_range(1, 0, num, 0, stype, node->value_str, (struct lyd_node *)node)) {
+                || validate_length_range(1, 0, num, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
         node->value.int64 = num;
@@ -1193,7 +1188,7 @@ switchtype:
 
     case LY_TYPE_UINT8:
         if (parse_uint(node->value_str, __UINT64_C(255), __UINT64_C(0), &unum, (struct lyd_node *)node)
-                || validate_length_range(0, unum, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
+                || validate_length_range(0, unum, 0, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
         node->value.uint8 = unum;
@@ -1201,7 +1196,7 @@ switchtype:
 
     case LY_TYPE_UINT16:
         if (parse_uint(node->value_str, __UINT64_C(65535), __UINT64_C(0), &unum, (struct lyd_node *)node)
-                || validate_length_range(0, unum, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
+                || validate_length_range(0, unum, 0, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
         node->value.uint16 = unum;
@@ -1209,7 +1204,7 @@ switchtype:
 
     case LY_TYPE_UINT32:
         if (parse_uint(node->value_str, __UINT64_C(4294967295), __UINT64_C(0), &unum, (struct lyd_node *)node)
-                || validate_length_range(0, unum, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
+                || validate_length_range(0, unum, 0, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
         node->value.uint32 = unum;
@@ -1217,7 +1212,7 @@ switchtype:
 
     case LY_TYPE_UINT64:
         if (parse_uint(node->value_str, __UINT64_C(18446744073709551615), __UINT64_C(0), &unum, (struct lyd_node *)node)
-                || validate_length_range(0, unum, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
+                || validate_length_range(0, unum, 0, 0, 0, stype, node->value_str, (struct lyd_node *)node)) {
             return EXIT_FAILURE;
         }
         node->value.uint64 = unum;
@@ -1678,6 +1673,17 @@ lyp_check_mandatory_choice(struct lys_node *node)
     return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Check status for invalid combination.
+ *
+ * @param[in] flags1 Flags of the referencing node.
+ * @param[in] mod1 Module of the referencing node,
+ * @param[in] name1 Schema node name of the referencing node.
+ * @param[in] flags2 Flags of the referenced node.
+ * @param[in] mod2 Module of the referenced node,
+ * @param[in] name2 Schema node name of the referenced node.
+ * @return EXIT_SUCCES on success, EXIT_FAILURE on invalid reference.
+ */
 int
 lyp_check_status(uint16_t flags1, struct lys_module *mod1, const char *name1,
                  uint16_t flags2, struct lys_module *mod2, const char *name2,

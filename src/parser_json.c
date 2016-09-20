@@ -375,60 +375,42 @@ lyjson_parse_boolean(const char *data)
 }
 
 static unsigned int
-json_get_anyxml(struct lyd_node_anydata *any, const char *data)
+json_get_anydata(struct lyd_node_anydata *any, const char *data)
 {
-    struct ly_ctx *ctx;
-    unsigned int len = 0, r;
-    char *str;
+    unsigned int len = 0, start, stop, c;
 
-    ctx = any->schema->module->ctx;
-
-    if (data[len] == '"') {
-        /* string representations */
-        ++len;
-        str = lyjson_parse_text(&data[len], &r);
-        if (!str) {
-            LOGPATH(LY_VLOG_LYD, any);
-            return 0;
-        }
-        any->value_type = LYD_ANYDATA_CONSTSTRING;
-        any->value.str = lydict_insert_zc(ctx, str);
-        if (data[len + r] != '"') {
-            LOGVAL(LYE_XML_INVAL, LY_VLOG_LYD, any,
-                   "JSON data (missing quotation-mark at the end of string)");
-            return 0;
-        }
-        len += r + 1;
-    } else if (data[len] == '-' || isdigit(data[len])) {
-        /* numeric type */
-        r = lyjson_parse_number(&data[len]);
-        if (!r) {
-            LOGPATH(LY_VLOG_LYD, any);
-            return 0;
-        }
-        any->value_type = LYD_ANYDATA_CONSTSTRING;
-        any->value.str = lydict_insert(ctx, &data[len], r);
-        len += r;
-    } else if (data[len] == 'f' || data[len] == 't') {
-        /* boolean */
-        r = lyjson_parse_boolean(&data[len]);
-        if (!r) {
-            LOGPATH(LY_VLOG_LYD, any);
-            return 0;
-        }
-        any->value_type = LYD_ANYDATA_CONSTSTRING;
-        any->value.str = lydict_insert(ctx, &data[len], r);
-        len += r;
-    } else if (!strncmp(&data[len], "[null]", 6)) {
-        /* empty */
-        any->value_type = LYD_ANYDATA_CONSTSTRING;
-        any->value.str = lydict_insert(ctx, "", 0);
-        len += 6;
-    } else {
-        /* error; TODO support JSON data in anydata */
-        LOGVAL(LYE_XML_INVAL, LY_VLOG_LYD, any, "JSON data (unexpected value)");
+    /* anydata (as well as meaningful anyxml) is supposed to be encoded as object */
+    if (data[len] != '{') {
+        LOGVAL(LYE_XML_INVAL, LY_VLOG_LYD, any, "Anydata/anyxml content (not an object)");
         return 0;
     }
+
+    /* count opening '{' and closing '}' to get the end of the object without its parsing */
+    c = 1;
+    len++;
+    len += skip_ws(&data[len]);
+    start = stop = len;
+    while (data[len] && c) {
+        switch (data[len]) {
+        case '{':
+            c++;
+            break;
+        case '}':
+            c--;
+            break;
+        default:
+            if (!isspace(data[len])) {
+                stop = len;
+            }
+        }
+        len++;
+    }
+    if (c) {
+        LOGVAL(LYE_EOF, LY_VLOG_LYD, any);
+        return 0;
+    }
+    any->value_type = LYD_ANYDATA_JSON;
+    any->value.str = lydict_insert(any->schema->module->ctx, &data[start], stop - start + 1);
 
     len += skip_ws(&data[len]);
     return len;
@@ -753,7 +735,7 @@ json_parse_data(struct ly_ctx *ctx, const char *data, const struct lys_node *sch
     unsigned int len = 0;
     unsigned int r;
     unsigned int flag_leaflist = 0;
-    int i;
+    int i, pos;
     char *name, *prefix = NULL, *str = NULL;
     const struct lys_module *module = NULL;
     struct lys_node *schema = NULL;
@@ -978,21 +960,48 @@ attr_repeat:
         goto error;
     }
 
-    result->parent = *parent;
-    if (*parent && !(*parent)->child) {
-        (*parent)->child = result;
-    }
-    if (prev) {
-        result->prev = prev;
-        prev->next = result;
-
-        /* fix the "last" pointer */
-        first_sibling->prev = result;
-    } else {
-        result->prev = result;
-        first_sibling = result;
-    }
+    result->prev = result;
     result->schema = schema;
+    result->parent = *parent;
+    diter = NULL;
+    if (*parent && (*parent)->child && schema->nodetype == LYS_LEAF && (*parent)->schema->nodetype == LYS_LIST &&
+        (pos = lys_is_key((struct lys_node_list *)(*parent)->schema, (struct lys_node_leaf *)schema))) {
+        /* it is key and we need to insert it into a correct place */
+        for (i = 0, diter = (*parent)->child;
+                diter && i < (pos - 1) && diter->schema->nodetype == LYS_LEAF &&
+                    lys_is_key((struct lys_node_list *)(*parent)->schema, (struct lys_node_leaf *)diter->schema);
+                i++, diter = diter->next);
+        if (diter) {
+            /* out of order insertion - insert list's key to the correct position, before the diter */
+            if ((*parent)->child == diter) {
+                (*parent)->child = result;
+                /* update first_sibling */
+                first_sibling = result;
+            }
+            if (diter->prev->next) {
+                diter->prev->next = result;
+            }
+            result->prev = diter->prev;
+            diter->prev = result;
+            result->next = diter;
+        }
+    }
+    if (!diter) {
+        /* simplified (faster) insert as the last node */
+        if (*parent && !(*parent)->child) {
+            (*parent)->child = result;
+        }
+        if (prev) {
+            result->prev = prev;
+            prev->next = result;
+
+            /* fix the "last" pointer */
+            first_sibling->prev = result;
+        } else {
+            result->prev = result;
+            first_sibling = result;
+        }
+    }
     result->validity = LYD_VAL_NOT;
     if (resolve_applies_when(schema, 0, NULL)) {
         result->when_status = LYD_WHEN;
@@ -1012,7 +1021,7 @@ attr_repeat:
         len += r;
         len += skip_ws(&data[len]);
     } else if (schema->nodetype & LYS_ANYDATA) {
-        r = json_get_anyxml((struct lyd_node_anydata *)result, &data[len]);
+        r = json_get_anydata((struct lyd_node_anydata *)result, &data[len]);
         if (!r) {
             goto error;
         }
@@ -1119,7 +1128,7 @@ attr_repeat:
                 ly_errno = 0;
                 if (!(options & LYD_OPT_TRUSTED) &&
                         (lyv_data_content(list, options, unres) ||
-                         lyv_multicases(list, NULL, first_sibling == list ? NULL : &first_sibling, 0, NULL))) {
+                         lyv_multicases(list, NULL, prev ? &first_sibling : NULL, 0, NULL))) {
                     if (ly_errno) {
                         goto error;
                     }
@@ -1161,7 +1170,7 @@ attr_repeat:
     ly_errno = 0;
     if (!(options & LYD_OPT_TRUSTED) &&
             (lyv_data_content(result, options, unres) ||
-             lyv_multicases(result, NULL, first_sibling == result ? NULL : &first_sibling, 0, NULL))) {
+             lyv_multicases(result, NULL, prev ? &first_sibling : NULL, 0, NULL))) {
         if (ly_errno) {
             goto error;
         }

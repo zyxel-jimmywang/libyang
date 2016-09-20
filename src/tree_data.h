@@ -56,9 +56,16 @@ typedef enum {
     LYD_ANYDATA_DATATREE,    /**< value is struct lyd_node* (first sibling), the structure is directly connected into
                                   the anydata node without duplication, caller is supposed to not manipulate with the
                                   data after a successful call (including calling lyd_free() on the provided data) */
-    LYD_ANYDATA_XML          /**< value is struct lyxml_elem*, the structure is directly connected into
+    LYD_ANYDATA_XML,         /**< value is struct lyxml_elem*, the structure is directly connected into
                                   the anydata node without duplication, caller is supposed to not manipulate with the
                                   data after a successful call (including calling lyxml_free() on the provided data)*/
+    LYD_ANYDATA_JSON,        /**< value is string containing the data modeled by YANG and encoded as I-JSON. The string
+                                  is handled as constant string. In case of using the value as input parameter, the
+                                  #LYD_ANYDATA_JSOND can be used for dynamically allocated string. */
+    LYD_ANYDATA_JSOND        /**< In case of using value as input parameter, this value is supposed to be used for
+                                  dynamically allocated strings (it is actually combination of #LYD_ANYDATA_JSON and
+                                  #LYD_ANYDATA_STRING (and it can be also specified as ORed value of the mentioned
+                                  values. */
 } LYD_ANYDATA_VALUETYPE;
 
 /**
@@ -1109,6 +1116,29 @@ int lyd_print_file(FILE *f, const struct lyd_node *root, LYD_FORMAT format, int 
  */
 int lyd_print_clb(ssize_t (*writeclb)(void *arg, const void *buf, size_t count), void *arg,
                   const struct lyd_node *root, LYD_FORMAT format, int options);
+
+/**
+ * @brief Get the double value of a decimal64 leaf/leaf-list.
+ *
+ * YANG decimal64 type enables higher precision numbers than IEEE 754 double-precision
+ * format, so this conversion does not have to be lossless.
+ *
+ * @param[in] node Leaf/leaf-list of type decimal64.
+ * @return Closest double equivalent to the decimal64 value.
+ */
+double lyd_dec64_to_double(const struct lyd_node *node);
+
+/**
+ * @brief Get the real data type of the leaf/leaf-list node.
+ *
+ * Usually the data type can be obtained directly from the value_type member of the leaf/leaf-list.
+ * However, in case the node is unresolved leafref, it can be more complicated to get the correct
+ * data type, so this function can be used.
+ *
+ * @param[in] leaf The leaf/leaf-list node to be examined.
+ * @return The specific data type of the \p leaf.
+ */
+LY_DATA_TYPE lyd_leaf_type(const struct lyd_node_leaf_list *leaf);
 
 /**@} */
 
