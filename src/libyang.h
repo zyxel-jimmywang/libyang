@@ -37,12 +37,12 @@ extern "C" {
  * - Parsing (and validating) schemas in YANG format.
  * - Parsing (and validating) schemas in YIN format.
  * - Parsing, validating and printing instance data in XML format.
- * - Parsing, validating and printing instance data in JSON format.
+ * - Parsing, validating and printing instance data in JSON format ([RFC 7951](https://tools.ietf.org/html/rfc7951)).
  * - Manipulation with the instance data.
- * - Support for adding default values into instance data.
+ * - Support for default values in the instance data ([RFC 6243](https://tools.ietf.org/html/rfc6243)).
  *
- * The current implementation covers YANG 1.0 specified in [RFC 6020](https://tools.ietf.org/html/rfc6020).
- * Future plans include support for [YANG 1.1](https://tools.ietf.org/html/draft-ietf-netmod-rfc6020bis-11).
+ * The current implementation covers YANG 1.0 [RFC 6020](https://tools.ietf.org/html/rfc6020) as well as
+ * [YANG 1.1](https://tools.ietf.org/html/rfc7950).
  *
  * @subsection about-features-others Extra (side-effect) Features
  *
@@ -118,8 +118,7 @@ extern "C" {
  * the most efficient way. Alternatively, the ly_ctx_info() function can be used to get complex information
  * about the schemas in the context in the form of data tree defined by
  * <a href="https://tools.ietf.org/html/draft-ietf-netconf-yang-library-04">ietf-yang-library</a> schema.
- * To get a specific node defined in a module in the context, ly_ctx_get_node() and ly_ctx_get_node2() can be used.
- * They differ in parameters used to identify the schema node.
+ * To get a specific node defined in a module in the context, ly_ctx_get_node() can be used.
  *
  * Modules held by a context cannot be removed one after one. The only way how to \em change modules in the
  * context is to create a new context and remove the old one. To remove a context, there is ly_ctx_destroy()
@@ -145,7 +144,6 @@ extern "C" {
  * - ly_ctx_get_submodule()
  * - ly_ctx_get_submodule2()
  * - ly_ctx_get_node()
- * - ly_ctx_get_node2()
  * - ly_ctx_destroy()
  * - lys_set_implemented()
  */
@@ -391,6 +389,7 @@ extern "C" {
  * --------------------------------------------------
  * - lyd_find_instance()
  * - lyd_find_xpath()
+ * - lyd_leaf_type()
  */
 
 /**
@@ -444,10 +443,9 @@ extern "C" {
  * of nodes, requires less information about the modified data, and is generally simpler to use. The path format
  * specifics can be found [here](@ref howtoxpath).
  *
- * Working with two data subtrees can also be performed two ways. Usually, you should use lyd_insert*() functions.
- * But they always work with a single subtree and it must be placed on an exact and correct location in the other
- * tree. If using lyd_merge(), this information is learned internally and duplicities (that would invalidate
- * the final data tree) are filtered out at the cost of somewhat reduced efficiency.
+ * Working with two data subtrees can also be performed two ways. Usually, you would use lyd_insert*() functions.
+ * They are generally meant for simple inserts of a node into a data tree. For more complicated inserts and when
+ * merging 2 trees use lyd_merge(). It offers additional options and is basically a more powerful insert.
  *
  * Also remember, that when you are creating/inserting a node, all the objects in that operation must belong to the
  * same context.
