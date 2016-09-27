@@ -819,13 +819,15 @@ lyd_create_anydata(struct lyd_node *parent, const struct lys_node *schema, void 
     /* set the value */
     switch (value_type) {
     case LYD_ANYDATA_CONSTSTRING:
+    case LYD_ANYDATA_SXML:
     case LYD_ANYDATA_JSON:
         ret->value.str = lydict_insert(schema->module->ctx, (const char *)value, 0);
         break;
     case LYD_ANYDATA_STRING:
+    case LYD_ANYDATA_SXMLD:
     case LYD_ANYDATA_JSOND:
         ret->value.str = lydict_insert_zc(schema->module->ctx, (char *)value);
-        value_type = LYD_ANYDATA_CONSTSTRING;
+        value_type &= ~LYD_ANYDATA_STRING; /* make const string from string */
         break;
     case LYD_ANYDATA_DATATREE:
         ret->value.tree = (struct lyd_node *)value;
@@ -1082,9 +1084,8 @@ lyd_new_path(struct lyd_node *data_tree, struct ly_ctx *ctx, const char *path, v
                     /* values are not the same - 1) remove the old one ... */
                     switch (any->value_type) {
                     case LYD_ANYDATA_CONSTSTRING:
-                    case LYD_ANYDATA_STRING:
+                    case LYD_ANYDATA_SXML:
                     case LYD_ANYDATA_JSON:
-                    case LYD_ANYDATA_JSOND:
                         lydict_remove(ctx, any->value.str);
                         break;
                     case LYD_ANYDATA_DATATREE:
@@ -1093,17 +1094,25 @@ lyd_new_path(struct lyd_node *data_tree, struct ly_ctx *ctx, const char *path, v
                     case LYD_ANYDATA_XML:
                         lyxml_free_withsiblings(ctx, any->value.xml);
                         break;
+                    case LYD_ANYDATA_STRING:
+                    case LYD_ANYDATA_SXMLD:
+                    case LYD_ANYDATA_JSOND:
+                        /* dynamic strings are used only as input parameters */
+                        assert(1);
+                        break;
                     }
                     /* ... and 2) store the new one */
                     switch (value_type) {
                     case LYD_ANYDATA_CONSTSTRING:
+                    case LYD_ANYDATA_SXML:
                     case LYD_ANYDATA_JSON:
                         any->value.str = lydict_insert(ctx, (const char*)value, 0);
                         break;
                     case LYD_ANYDATA_STRING:
+                    case LYD_ANYDATA_SXMLD:
                     case LYD_ANYDATA_JSOND:
                         any->value.str = lydict_insert_zc(ctx, (char*)value);
-                        value_type = LYD_ANYDATA_CONSTSTRING;
+                        value_type &= ~LYD_ANYDATA_STRING; /* make const string from string */
                         break;
                     case LYD_ANYDATA_DATATREE:
                         any->value.tree = value;
@@ -1533,9 +1542,8 @@ lyd_merge_node_update(struct lyd_node *target, struct lyd_node *source)
 
         switch(trg_any->value_type) {
         case LYD_ANYDATA_CONSTSTRING:
-        case LYD_ANYDATA_STRING:
+        case LYD_ANYDATA_SXML:
         case LYD_ANYDATA_JSON:
-        case LYD_ANYDATA_JSOND:
             lydict_remove(ctx, trg_any->value.str);
             break;
         case LYD_ANYDATA_DATATREE:
@@ -1543,6 +1551,12 @@ lyd_merge_node_update(struct lyd_node *target, struct lyd_node *source)
             break;
         case LYD_ANYDATA_XML:
             lyxml_free_withsiblings(ctx, trg_any->value.xml);
+            break;
+        case LYD_ANYDATA_STRING:
+        case LYD_ANYDATA_SXMLD:
+        case LYD_ANYDATA_JSOND:
+            /* dynamic strings are used only as input parameters */
+            assert(1);
             break;
         }
 
@@ -2802,64 +2816,64 @@ autodelete:
 }
 
 API int
-lyd_replace(struct lyd_node *old, struct lyd_node *new, int destroy)
+lyd_replace(struct lyd_node *orig, struct lyd_node *repl, int destroy)
 {
     struct lyd_node *iter, *last;
 
-    if (!old) {
+    if (!orig) {
         ly_errno = LY_EINVAL;
         return EXIT_FAILURE;
     }
 
-    if (!new) {
+    if (!repl) {
         /* remove the old one */
         goto finish;
     }
 
-    if (new->parent || new->prev->next) {
+    if (repl->parent || repl->prev->next) {
         /* isolate the new node */
-        new->next = NULL;
-        new->prev = new;
-        last = new;
+        repl->next = NULL;
+        repl->prev = repl;
+        last = repl;
     } else {
         /* get the last node of a possible list of nodes to be inserted */
-        for(last = new; last->next; last = last->next) {
+        for(last = repl; last->next; last = last->next) {
             /* part of the parent changes */
-            last->parent = old->parent;
+            last->parent = orig->parent;
         }
     }
 
     /* parent */
-    if (old->parent) {
-        if (old->parent->child == old) {
-            old->parent->child = new;
+    if (orig->parent) {
+        if (orig->parent->child == orig) {
+            orig->parent->child = repl;
         }
-        old->parent = NULL;
+        orig->parent = NULL;
     }
 
     /* predecessor */
-    if (old->prev == old) {
+    if (orig->prev == orig) {
         /* the old was alone */
         goto finish;
     }
-    if (old->prev->next) {
-        old->prev->next = new;
+    if (orig->prev->next) {
+        orig->prev->next = repl;
     }
-    new->prev = old->prev;
-    old->prev = old;
+    repl->prev = orig->prev;
+    orig->prev = orig;
 
     /* successor */
-    if (old->next) {
-        old->next->prev = last;
-        last->next = old->next;
-        old->next = NULL;
+    if (orig->next) {
+        orig->next->prev = last;
+        last->next = orig->next;
+        orig->next = NULL;
     } else {
         /* fix the last pointer */
-        if (new->parent) {
-            new->parent->child->prev = last;
+        if (repl->parent) {
+            repl->parent->child->prev = last;
         } else {
             /* get the first sibling */
-            for (iter = new; iter->prev != old; iter = iter->prev);
+            for (iter = repl; iter->prev != orig; iter = iter->prev);
             iter->prev = last;
         }
     }
@@ -2867,7 +2881,7 @@ lyd_replace(struct lyd_node *old, struct lyd_node *new, int destroy)
 finish:
     /* remove the old one */
     if (destroy) {
-        lyd_free(old);
+        lyd_free(orig);
     }
     return EXIT_SUCCESS;
 }
@@ -2876,8 +2890,9 @@ static int
 lyd_insert_common(struct lyd_node *parent, struct lyd_node **sibling, struct lyd_node *node)
 {
     struct lys_node *par1, *par2;
+    const struct lys_node *siter;
     struct lyd_node *start, *iter, *ins, *next1, *next2;
-    int invalid = 0, clrdflt = 0;
+    int invalid = 0, isrpc = 0, clrdflt = 0;
     struct ly_set *llists = NULL;
     int pos, i;
     int stype = LYS_INPUT | LYS_OUTPUT;
@@ -2926,7 +2941,8 @@ lyd_insert_common(struct lyd_node *parent, struct lyd_node **sibling, struct lyd
         return EXIT_FAILURE;
     }
 
-    if (!parent || node->parent != parent || (invalid = lyp_is_rpc_action(node->schema))) {
+    invalid = isrpc = lyp_is_rpc_action(node->schema);
+    if (!parent || node->parent != parent || isrpc) {
         /* it is not just moving under a parent node or it is in an RPC where
          * nodes order matters, so the validation will be necessary */
         invalid++;
@@ -3025,6 +3041,40 @@ lyd_insert_common(struct lyd_node *parent, struct lyd_node **sibling, struct lyd
                 start = ins;
                 if (parent) {
                     parent->child = ins;
+                }
+            } else if (isrpc) {
+                /* add to the specific position in rpc/rpc-reply/action */
+                for (par1 = ins->schema->parent; !(par1->nodetype & (LYS_INPUT | LYS_OUTPUT)); par1 = par1->parent);
+                siter = NULL;
+                LY_TREE_FOR(start, iter) {
+                    while ((siter = lys_getnext(siter, par1, par1->module, 0))) {
+                        if (iter->schema == siter || ins->schema == siter) {
+                            break;
+                        }
+                    }
+                    if (ins->schema == siter) {
+                        /* we have the correct place for new node (before the iter) */
+                        if (iter == start) {
+                            start = ins;
+                            if (parent) {
+                                parent->child = ins;
+                            }
+                        } else {
+                            iter->prev->next = ins;
+                        }
+                        ins->prev = iter->prev;
+                        iter->prev = ins;
+                        ins->next = iter;
+
+                        /* we are done */
+                        break;
+                    }
+                }
+                if (!iter) {
+                    /* add as the last child of the parent */
+                    start->prev->next = ins;
+                    ins->prev = start->prev;
+                    start->prev = ins;
                 }
             } else {
                 /* add as the last child of the parent */
@@ -3928,9 +3978,8 @@ lyd_dup(const struct lyd_node *node, int recursive)
             /* duplicate the value */
             switch (old_any->value_type) {
             case LYD_ANYDATA_CONSTSTRING:
-            case LYD_ANYDATA_STRING:
+            case LYD_ANYDATA_SXML:
             case LYD_ANYDATA_JSON:
-            case LYD_ANYDATA_JSOND:
                 new_any->value.str = lydict_insert(elem->schema->module->ctx, old_any->value.str, 0);
                 break;
             case LYD_ANYDATA_DATATREE:
@@ -3938,6 +3987,12 @@ lyd_dup(const struct lyd_node *node, int recursive)
                 break;
             case LYD_ANYDATA_XML:
                 new_any->value.xml = lyxml_dup_elem(elem->schema->module->ctx, old_any->value.xml, NULL, 1);
+                break;
+            case LYD_ANYDATA_STRING:
+            case LYD_ANYDATA_SXMLD:
+            case LYD_ANYDATA_JSOND:
+                /* dynamic strings are used only as input parameters */
+                assert(1);
                 break;
             }
             break;
@@ -4157,9 +4212,8 @@ lyd_free(struct lyd_node *node)
     } else if (node->schema->nodetype & LYS_ANYDATA) {
         switch (((struct lyd_node_anydata *)node)->value_type) {
         case LYD_ANYDATA_CONSTSTRING:
-        case LYD_ANYDATA_STRING:
+        case LYD_ANYDATA_SXML:
         case LYD_ANYDATA_JSON:
-        case LYD_ANYDATA_JSOND:
             lydict_remove(node->schema->module->ctx, ((struct lyd_node_anydata *)node)->value.str);
             break;
         case LYD_ANYDATA_DATATREE:
@@ -4167,6 +4221,12 @@ lyd_free(struct lyd_node *node)
             break;
         case LYD_ANYDATA_XML:
             lyxml_free_withsiblings(node->schema->module->ctx, ((struct lyd_node_anydata *)node)->value.xml);
+            break;
+        case LYD_ANYDATA_STRING:
+        case LYD_ANYDATA_SXMLD:
+        case LYD_ANYDATA_JSOND:
+            /* dynamic strings are used only as input parameters */
+            assert(1);
             break;
         }
     } else { /* LYS_LEAF | LYS_LEAFLIST */
@@ -4995,7 +5055,7 @@ lyd_wd_add_leaf(struct lyd_node **tree, struct lyd_node *last_parent, struct lys
     }
     if (!dummy->parent && (*tree)) {
         /* connect dummy nodes into the data tree (at the end of top level nodes) */
-        if (lyd_insert_after((*tree)->prev, dummy)) {
+        if (lyd_insert_sibling(tree, dummy)) {
             goto error;
         }
     }
@@ -5131,7 +5191,7 @@ lyd_wd_add_leaflist(struct lyd_node **tree, struct lyd_node *last_parent, struct
     /* insert into the tree */
     if (first && !first->parent && (*tree)) {
         /* connect dummy nodes into the data tree (at the end of top level nodes) */
-        if (lyd_insert_after((*tree)->prev, first)) {
+        if (lyd_insert_sibling(tree, first)) {
             goto error;
         }
     } else if (!(*tree)) {
@@ -5250,7 +5310,7 @@ lyd_wd_add_subtree(struct lyd_node **root, struct lyd_node *last_parent, struct 
             subroot = _lyd_new(last_parent, schema, 1);
             if (!last_parent) {
                 if (*root) {
-                    lyd_insert_after((*root)->prev, subroot);
+                    lyd_insert_sibling(root, subroot);
                 } else {
                     *root = subroot;
                 }
