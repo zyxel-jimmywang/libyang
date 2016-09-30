@@ -154,6 +154,7 @@ union YYSTYPE
   int32_t i;
   uint32_t uint;
   char *str;
+  char **p_str;
   void *v;
   char ch;
   struct lys_module *inc;
@@ -162,14 +163,13 @@ union YYSTYPE
     uint32_t index;
     struct lys_node_container *container;
     struct lys_node_anydata *anydata;
-    struct type_choice choice;
     struct type_node node;
     struct lys_node_case *cs;
     struct lys_node_grp *grouping;
-    struct type_uses uses;
     struct lys_refine *refine;
     struct lys_node_notif *notif;
     struct type_deviation *deviation;
+    struct lys_node_uses *uses;
   } nodes;
 
 

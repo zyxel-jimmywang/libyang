@@ -569,10 +569,6 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 }
 
                 GETVAL(value, node, "value");
-                if (lyp_check_length_range(value, type)) {
-                    LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "range");
-                    goto error;
-                }
                 type->info.dec64.range = calloc(1, sizeof *type->info.dec64.range);
                 if (!type->info.dec64.range) {
                     LOGMEM;
@@ -624,6 +620,11 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
         if (type->der->type.der) {
             type->info.dec64.dig = type->der->type.info.dec64.dig;
             type->info.dec64.div = type->der->type.info.dec64.div;
+        }
+
+        if (type->info.dec64.range && lyp_check_length_range(type->info.dec64.range->expr, type)) {
+            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "range");
+            goto error;
         }
 
         break;
@@ -2204,7 +2205,7 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                 }
 
                 /* check XPath dependencies again */
-                if (*trg_must_size && unres_schema_add_node(dev_target->module, unres, dev_target, UNRES_XPATH, NULL)) {
+                if (*trg_must_size && unres_schema_add_node(module, unres, dev_target, UNRES_XPATH, NULL)) {
                     goto error;
                 }
             } else if (!strcmp(child->name, "unique")) {
@@ -5022,7 +5023,7 @@ read_yin_rpc_action(struct lys_module *module, struct lys_node *parent, struct l
             return NULL;
         }
         for (node = parent; node; node = lys_parent(node)) {
-            if (node->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF)
+            if ((node->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF))
                     || ((node->nodetype == LYS_LIST) && !((struct lys_node_list *)node)->keys_size)) {
                 LOGVAL(LYE_INPAR, LY_VLOG_NONE, NULL, strnodetype(node->nodetype), "action");
                 return NULL;

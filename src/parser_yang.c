@@ -302,6 +302,7 @@ yang_read_if_feature(struct lys_module *module, void *ptr, char *value, struct u
     struct lys_node *n;
     struct lys_type_enum *e;
     struct lys_type_bit *b;
+    struct lys_refine *r;
 
     if ((module->version != 2) && ((value[0] == '(') || strchr(value, ' '))) {
         LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "if-feature");
@@ -335,6 +336,11 @@ yang_read_if_feature(struct lys_module *module, void *ptr, char *value, struct u
         b = &((struct yang_type *)ptr)->type->info.bits.bit[((struct yang_type *)ptr)->type->info.bits.count - 1];
         ret = resolve_iffeature_compile(&b->iffeature[b->iffeature_size], exp, (struct lys_node *)((struct yang_type *)ptr)->type->parent, unres);
         b->iffeature_size++;
+        break;
+    case REFINE_KEYWORD:
+        r = &((struct lys_node_uses *)ptr)->refine[((struct lys_node_uses *)ptr)->refine_size - 1];
+        ret = resolve_iffeature_compile(&r->iffeature[r->iffeature_size], exp, (struct lys_node *) ptr, unres);
+        r->iffeature_size++;
         break;
     default:
         n = (struct lys_node *) ptr;
@@ -961,10 +967,6 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
         break;
     case LY_TYPE_DEC64:
         if (typ->type->base == LY_TYPE_DEC64) {
-            if (typ->type->info.dec64.range && lyp_check_length_range(typ->type->info.dec64.range->expr, typ->type)) {
-                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, typ->type->info.dec64.range->expr, "range");
-                goto error;
-            }
             /* mandatory sub-statement(s) check */
             if (!typ->type->info.dec64.dig && !typ->type->der->type.der) {
                 /* decimal64 type directly derived from built-in type requires fraction-digits */
@@ -981,6 +983,10 @@ yang_check_type(struct lys_module *module, struct lys_node *parent, struct yang_
             if (typ->type->der->type.der) {
                 typ->type->info.dec64.dig = typ->type->der->type.info.dec64.dig;
                 typ->type->info.dec64.div = typ->type->der->type.info.dec64.div;
+            }
+            if (typ->type->info.dec64.range && lyp_check_length_range(typ->type->info.dec64.range->expr, typ->type)) {
+                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, typ->type->info.dec64.range->expr, "range");
+                goto error;
             }
         } else if (typ->type->base >= LY_TYPE_INT8 && typ->type->base <=LY_TYPE_UINT64) {
             if (typ->type->info.dec64.dig) {
@@ -1712,10 +1718,9 @@ yang_read_augment(struct lys_module *module, struct lys_node *parent, char *valu
 void *
 yang_read_deviation(struct lys_module *module, char *value)
 {
-    struct lys_node *dev_target = NULL, *parent;
+    struct lys_node *dev_target = NULL;
     struct lys_deviation *dev;
     struct type_deviation *deviation = NULL;
-    struct lys_module *mod;
     int rc;
 
     dev = &module->deviation[module->deviation_size];
@@ -1741,15 +1746,6 @@ yang_read_deviation(struct lys_module *module, char *value)
         LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, dev->target_name, "deviation");
         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Deviating own module is not allowed.");
         goto error;
-    }
-
-    /* mark all the affected modules as deviated and implemented */
-    for(parent = dev_target; parent; parent = lys_parent(parent)) {
-        mod = lys_node_module(parent);
-        if (module != mod) {
-            mod->deviated = 1;
-            lys_set_implemented(mod);
-        }
     }
 
     /*save pointer to the deviation and deviated target*/
@@ -1808,6 +1804,7 @@ yang_read_deviate(struct type_deviation *dev, LYS_DEVIATE_TYPE mod)
     dev->deviation->deviate[dev->deviation->deviate_size].mod = mod;
     dev->deviate = &dev->deviation->deviate[dev->deviation->deviate_size];
     dev->deviation->deviate_size++;
+    dev->trg_must_size = NULL;
     if (dev->deviation->deviate[0].mod == LY_DEVIATE_NO) {
         LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, "not-supported");
         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "\"not-supported\" deviation cannot be combined with any other deviation.");
@@ -2604,13 +2601,13 @@ nacm_inherit(struct lys_module *module)
 }
 
 int
-store_flags(struct lys_node *node, uint8_t flags, int config_inherit)
+store_flags(struct lys_node *node, uint8_t flags, int config_opt)
 {
     struct lys_node *elem;
 
-    node->flags |= flags;
-    if (!(node->flags & LYS_CONFIG_MASK)) {
-        if (config_inherit) {
+    node->flags |= (config_opt == CONFIG_IGNORE) ? flags & (~(LYS_CONFIG_MASK | LYS_CONFIG_SET)): flags;
+    if (config_opt == CONFIG_INHERIT_ENABLE) {
+        if (!(node->flags & LYS_CONFIG_MASK)) {
             /* get config flag from parent */
             if (node->parent) {
                 node->flags |= node->parent->flags & LYS_CONFIG_MASK;
@@ -2618,15 +2615,15 @@ store_flags(struct lys_node *node, uint8_t flags, int config_inherit)
                 /* default config is true */
                 node->flags |= LYS_CONFIG_W;
             }
-        }
-    } else {
-        /* do we even care about config flags? */
-        for (elem = node; elem && !(elem->nodetype & (LYS_NOTIF | LYS_INPUT | LYS_OUTPUT | LYS_RPC)); elem = elem->parent);
+        } else {
+            /* do we even care about config flags? */
+            for (elem = node; elem && !(elem->nodetype & (LYS_NOTIF | LYS_INPUT | LYS_OUTPUT | LYS_RPC)); elem = elem->parent);
 
-        if (!elem && (node->flags & LYS_CONFIG_W) && node->parent && (node->parent->flags & LYS_CONFIG_R)) {
-            LOGVAL(LYE_INARG, LY_VLOG_LYS, node, "true", "config");
-            LOGVAL(LYE_SPEC, LY_VLOG_LYS, node, "State nodes cannot have configuration nodes as children.");
-            return EXIT_FAILURE;
+            if (!elem && (node->flags & LYS_CONFIG_W) && node->parent && (node->parent->flags & LYS_CONFIG_R)) {
+                LOGVAL(LYE_INARG, LY_VLOG_LYS, node, "true", "config");
+                LOGVAL(LYE_SPEC, LY_VLOG_LYS, node, "State nodes cannot have configuration nodes as children.");
+                return EXIT_FAILURE;
+            }
         }
     }
 
@@ -2794,19 +2791,6 @@ error:
 }
 
 static int
-count_substring(const char *str, char c)
-{
-    const char *tmp = str;
-    int count = 0;
-
-    while ((tmp = strchr(tmp, c))) {
-        tmp++;
-        count++;
-    }
-    return count;
-}
-
-static int
 read_indent(const char *input, int indent, int size, int in_index, int *out_index, char *output)
 {
     int k = 0, j;
@@ -2817,6 +2801,10 @@ read_indent(const char *input, int indent, int size, int in_index, int *out_inde
         } else if (input[in_index] == '\t') {
             /* RFC 6020 6.1.3 tab character is treated as 8 space characters */
             k += 8;
+        } else  if (input[in_index] == '\\' && input[in_index + 1] == 't') {
+            /* RFC 6020 6.1.3 tab character is treated as 8 space characters */
+            k += 8;
+            ++in_index;
         } else {
             break;
         }
@@ -2829,87 +2817,67 @@ read_indent(const char *input, int indent, int size, int in_index, int *out_inde
             break;
         }
     }
-    return in_index;
+    return in_index - 1;
 }
 
 char *
-yang_read_string(const char *input, int size, int indent, int version)
-{
-    int space, count;
-    int in_index, out_index;
-    char *value;
-    char *retval = NULL;
+yang_read_string(const char *input, char *output, int size, int offset, int indent, int version) {
+    int i = 0, out_index = offset, space = 0;
 
-    value = malloc(size + 1);
-    if (!value) {
-        LOGMEM;
-        return NULL;
-    }
-    /* replace special character in escape sequence */
-    in_index = out_index = 0;
-    while (in_index < size) {
-        if (input[in_index] == '\\') {
-            if (input[in_index + 1] == 'n') {
-                value[out_index] = '\n';
-                ++in_index;
-            } else if (input[in_index + 1] == 't') {
-                value[out_index] = '\t';
-                ++in_index;
-            } else if (input[in_index + 1] == '\\') {
-                value[out_index] = '\\';
-                ++in_index;
-            } else if ((in_index + 1) != size && input[in_index + 1] == '"') {
-                value[out_index] = '"';
-                ++in_index;
+    while (i < size) {
+        switch (input[i]) {
+        case '\n':
+            out_index -= space;
+            output[out_index] = '\n';
+            space = 0;
+            i = read_indent(input, indent, size, i + 1, &out_index, output);
+            break;
+        case ' ':
+        case '\t':
+            output[out_index] = input[i];
+            ++space;
+            break;
+        case '\\':
+            if (input[i + 1] == 'n') {
+                out_index -= space;
+                output[out_index] = '\n';
+                space = 0;
+                i = read_indent(input, indent, size, i + 2, &out_index, output);
+            } else if (input[i + 1] == 't') {
+                output[out_index] = '\t';
+                ++i;
+                ++space;
+            } else if (input[i + 1] == '\\') {
+                output[out_index] = '\\';
+                ++i;
+            } else if ((i + 1) != size && input[i + 1] == '"') {
+                output[out_index] = '"';
+                ++i;
             } else {
                 if (version < 2) {
-                    value[out_index] = input[in_index];
+                    output[out_index] = input[i];
                 } else {
                     /* YANG 1.1 backslash must not be followed by any other character */
                     LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, input);
-                    goto error;
+                    return NULL;
                 }
             }
-        } else {
-            value[out_index] = input[in_index];
+            break;
+        default:
+            output[out_index] = input[i];
+            space = 0;
+            break;
         }
-        ++in_index;
+        ++i;
         ++out_index;
     }
-    value[out_index] = '\0';
-    size = out_index;
-    count = count_substring(value, '\t');
-
-    /* extend size of string due to replacing character '\t' with 8 spaces */
-    retval = malloc(size + 1 + 7 * count);
-    if (!retval) {
-        LOGMEM;
-        goto error;
-    }
-    in_index = out_index = space = 0;
-    while (in_index < size) {
-        if (value[in_index] == '\n') {
-            out_index -= space;
-            space = 0;
-            retval[out_index] = '\n';
-            ++out_index;
-            ++in_index;
-            in_index = read_indent(value, indent, size, in_index, &out_index, retval);
-            continue;
-        } else {
-            space = (value[in_index] == ' ' || value[in_index] == '\t') ? space + 1 : 0;
-            retval[out_index] = value[in_index];
-            ++out_index;
+    output[out_index] = '\0';
+    if (size != out_index) {
+        output = realloc(output, out_index + 1);
+        if (!output) {
+            LOGMEM;
+            return NULL;
         }
-        ++in_index;
     }
-    retval[out_index] = '\0';
-    if (out_index != size) {
-        retval = ly_realloc(retval, out_index + 1);
-    }
-    free(value);
-    return retval;
-error:
-    free(value);
-    return NULL;
+    return output;
 }
