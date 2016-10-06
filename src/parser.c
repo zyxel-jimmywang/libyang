@@ -1333,7 +1333,7 @@ dup_feature_check(const char *id, struct lys_module *module)
 }
 
 /* does not log */
-int
+static int
 dup_prefix_check(const char *prefix, struct lys_module *module)
 {
     int i;

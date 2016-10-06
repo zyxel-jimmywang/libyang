@@ -39,9 +39,6 @@
         goto error;                                                              \
     }
 
-/* parser.c */
-int dup_prefix_check(const char *prefix, struct lys_module *module);
-
 #define OPT_IDENT       0x01
 #define OPT_CFG_PARSE   0x02
 #define OPT_CFG_INHERIT 0x04
@@ -626,7 +623,6 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, "range");
             goto error;
         }
-
         break;
 
     case LY_TYPE_ENUM:

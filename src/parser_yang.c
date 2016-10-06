@@ -627,7 +627,7 @@ yang_read_action(struct lys_module *module, struct lys_node *parent, char *value
     }
 
     for (node = parent; node; node = lys_parent(node)) {
-        if (node->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF)
+        if ((node->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF))
                 || ((node->nodetype == LYS_LIST) && !((struct lys_node_list *)node)->keys_size)) {
             LOGVAL(LYE_INPAR, LY_VLOG_NONE, NULL, strnodetype(node->nodetype), "action");
             return NULL;
