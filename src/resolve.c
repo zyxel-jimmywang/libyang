@@ -1253,6 +1253,7 @@ iff_getop(uint8_t *list, int pos)
 struct unres_iffeat_data {
     struct lys_node *node;
     const char *fname;
+    int infeature;
 };
 
 void
@@ -1303,7 +1304,7 @@ result:
 
 int
 resolve_iffeature_compile(struct lys_iffeature *iffeat_expr, const char *value, struct lys_node *node,
-                          struct unres_schema *unres)
+                          int infeature, struct unres_schema *unres)
 {
     const char *c = value;
     int r, rc = EXIT_FAILURE;
@@ -1452,6 +1453,7 @@ resolve_iffeature_compile(struct lys_iffeature *iffeat_expr, const char *value, 
             iff_data = malloc(sizeof *iff_data);
             iff_data->node = node;
             iff_data->fname = lydict_insert(node->module->ctx, &c[i], j - i);
+            iff_data->infeature = infeature;
             r = unres_schema_add_node(node->module, unres, &iffeat_expr->features[f_size], UNRES_IFFEAT,
                                       (struct lys_node *)iff_data);
             f_size--;
@@ -2188,8 +2190,9 @@ resolve_partial_json_data_nodeid(const char *nodeid, const char *llist_value, st
                                  int *parsed)
 {
     char *module_name = ly_buf(), *buf_backup = NULL, *str;
-    const char *id, *mod_name, *name;
-    int r, ret, mod_name_len, nam_len, is_relative = -1, has_predicate, last_parsed;
+    const char *id, *mod_name, *name, *pred_name;
+    int r, ret, mod_name_len, nam_len, is_relative = -1;
+    int has_predicate, last_parsed, val_len, pred_name_len, last_has_pred;
     struct lyd_node *sibling, *last_match = NULL;
     struct lyd_node_leaf_list *llist;
     const struct lys_module *prefix_mod, *prev_mod;
@@ -2219,7 +2222,7 @@ resolve_partial_json_data_nodeid(const char *nodeid, const char *llist_value, st
 
     while (1) {
         LY_TREE_FOR(start, sibling) {
-            /* RPC data check, return simply invalid argument, because the data tree is invalid */
+            /* RPC/action data check, return simply invalid argument, because the data tree is invalid */
             if (lys_parent(sibling->schema)) {
                 if (options & LYD_PATH_OPT_OUTPUT) {
                     if (lys_parent(sibling->schema)->nodetype == LYS_INPUT) {
@@ -2281,11 +2284,36 @@ resolve_partial_json_data_nodeid(const char *nodeid, const char *llist_value, st
 
                 /* leaf-list, did we find it with the correct value or not? */
                 if (sibling->schema->nodetype == LYS_LEAFLIST) {
+                    last_has_pred = 0;
+                    if (has_predicate) {
+                        if ((r = parse_schema_json_predicate(id, &pred_name, &pred_name_len, &llist_value, &val_len, &last_has_pred)) < 1) {
+                            LOGVAL(LYE_PATH_INCHAR, LY_VLOG_NONE, NULL, id[0], id);
+                            *parsed = -1;
+                            return NULL;
+                        }
+                        if ((pred_name[0] != '.') || (pred_name_len != 1)) {
+                            LOGVAL(LYE_PATH_INCHAR, LY_VLOG_NONE, NULL, id[1], id + 1);
+                            *parsed = -1;
+                            return NULL;
+                        }
+                    } else {
+                        r = 0;
+                        if (llist_value) {
+                            val_len = strlen(llist_value);
+                        } else {
+                            val_len = 0;
+                        }
+                    }
+
                     llist = (struct lyd_node_leaf_list *)sibling;
-                    if ((!llist_value && llist->value_str && llist->value_str[0])
-                            || (llist_value && strcmp(llist_value, llist->value_str))) {
+                    if ((!val_len && llist->value_str && llist->value_str[0])
+                            || (val_len && (strncmp(llist_value, llist->value_str, val_len) || llist->value_str[val_len]))) {
                         continue;
                     }
+                    id += r;
+                    last_parsed += r;
+                    has_predicate = last_has_pred;
+
                 } else if (sibling->schema->nodetype == LYS_LIST) {
                     /* list, we need predicates'n'stuff then */
                     r = 0;
@@ -3559,12 +3587,41 @@ error:
     return rc;
 }
 
+static int
+resolve_path_arg_schema_valid_dep_flag(const struct lys_node *op_node, const struct lys_node *first_node, int abs_path)
+{
+    int dep1, dep2;
+    const struct lys_node *node;
+
+    if (lys_parent(op_node)) {
+        /* inner operation (notif/action) */
+        if (abs_path) {
+            return 1;
+        } else {
+            /* compare depth of both nodes */
+            for (dep1 = 0, node = op_node; lys_parent(node); node = lys_parent(node));
+            for (dep2 = 0, node = first_node; lys_parent(node); node = lys_parent(node));
+            if ((dep2 > dep1) || ((dep2 == dep1) && (op_node != first_node))) {
+                return 1;
+            }
+        }
+    } else {
+        /* top-level operation (notif/rpc) */
+        if (op_node != first_node) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 /**
  * @brief Resolve a path (leafref) predicate in JSON schema context. Logs directly.
  *
  * @param[in] path Path to use.
  * @param[in] context_node Predicate context node (where the predicate is placed).
  * @param[in] parent Path context node (where the path begins/is placed).
+ * @param[in] op_node Optional node if the leafref is in an operation (action/rpc/notif).
  *
  * @return 0 on forward reference, otherwise the number
  *         of characters successfully parsed,
@@ -3572,12 +3629,12 @@ error:
  */
 static int
 resolve_path_predicate_schema(const char *path, const struct lys_node *context_node,
-                              struct lys_node *parent)
+                              struct lys_node *parent, const struct lys_node *op_node)
 {
     const struct lys_node *src_node, *dst_node;
     const char *path_key_expr, *source, *sour_pref, *dest, *dest_pref;
     int pke_len, sour_len, sour_pref_len, dest_len, dest_pref_len, parsed = 0, pke_parsed = 0;
-    int has_predicate, dest_parent_times = 0, i, rc;
+    int has_predicate, dest_parent_times = 0, i, rc, first_iter;
 
     do {
         if ((i = parse_path_predicate(path, &sour_pref, &sour_pref_len, &source, &sour_len, &path_key_expr,
@@ -3608,16 +3665,18 @@ resolve_path_predicate_schema(const char *path, const struct lys_node *context_n
         pke_parsed += i;
 
         for (i = 0, dst_node = parent; i < dest_parent_times; ++i) {
+            /* path is supposed to be evaluated in data tree, so we have to skip
+             * all schema nodes that cannot be instantiated in data tree */
+            for (dst_node = lys_parent(dst_node);
+                 dst_node && !(dst_node->nodetype & (LYS_CONTAINER | LYS_LIST | LYS_ACTION | LYS_NOTIF | LYS_RPC));
+                 dst_node = lys_parent(dst_node));
+
             if (!dst_node) {
                 LOGVAL(LYE_NORESOLV, parent ? LY_VLOG_LYS : LY_VLOG_NONE, parent, "leafref predicate", path_key_expr);
                 return 0;
             }
-            /* path is supposed to be evaluated in data tree, so we have to skip
-             * all schema nodes that cannot be instantiated in data tree */
-            for (dst_node = lys_parent(dst_node);
-                 dst_node && !(dst_node->nodetype & (LYS_CONTAINER | LYS_LIST));
-                 dst_node = lys_parent(dst_node));
         }
+        first_iter = 1;
         while (1) {
             if (!dest_pref) {
                 dest_pref = dst_node->module->name;
@@ -3627,6 +3686,13 @@ resolve_path_predicate_schema(const char *path, const struct lys_node *context_n
             if (rc) {
                 LOGVAL(LYE_NORESOLV, parent ? LY_VLOG_LYS : LY_VLOG_NONE, parent, "leafref predicate", path_key_expr);
                 return 0;
+            }
+
+            if (first_iter) {
+                if (resolve_path_arg_schema_valid_dep_flag(op_node, dst_node, 0)) {
+                    parent->flags |= LYS_VALID_DEP;
+                }
+                first_iter = 0;
             }
 
             if (pke_len == pke_parsed) {
@@ -3669,7 +3735,7 @@ static int
 resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tpdf,
                         const struct lys_node **ret)
 {
-    const struct lys_node *node;
+    const struct lys_node *node, *op_node = NULL;
     const struct lys_module *mod, *mod2;
     const char *id, *prefix, *name;
     int pref_len, nam_len, parent_times, has_predicate;
@@ -3678,6 +3744,13 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
     first_iter = 1;
     parent_times = 0;
     id = path;
+
+    /* find operation schema we are in, if applicable */
+    if (!parent_tpdf) {
+        for (op_node = lys_parent(parent);
+             op_node && !(op_node->nodetype & (LYS_ACTION | LYS_NOTIF | LYS_RPC));
+             op_node = lys_parent(op_node));
+    }
 
     mod2 = lys_node_module(parent);
     do {
@@ -3706,27 +3779,23 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
                     return -1;
                 }
 
-                /* node is the parent already, skip one ".." */
-                for (i = 1, node = parent; i < parent_times; i++) {
+                /* we are looking for a sibling of a node, node it's parent (that is why parent_times - 1) */
+                for (i = 0, node = parent; i < parent_times - 1; i++) {
                     /* path is supposed to be evaluated in data tree, so we have to skip
                      * all schema nodes that cannot be instantiated in data tree */
                     for (node = lys_parent(node);
-                         node && !(node->nodetype & (LYS_CONTAINER | LYS_LIST));
+                         node && !(node->nodetype & (LYS_CONTAINER | LYS_LIST | LYS_ACTION | LYS_NOTIF | LYS_RPC));
                          node = lys_parent(node));
 
                     if (!node) {
-                        LOGVAL(LYE_NORESOLV, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent,
-                               "leafref", path);
+                        LOGVAL(LYE_NORESOLV, LY_VLOG_LYS, parent, "leafref", path);
                         return EXIT_FAILURE;
                     }
-
                 }
             } else {
                 LOGINT;
                 return -1;
             }
-
-            first_iter = 0;
         } else {
             /* move down the tree, if possible */
             if (node->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA)) {
@@ -3734,6 +3803,11 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
                 return -1;
             }
             node = node->child;
+            if (!node) {
+                LOGVAL(LYE_NORESOLV, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent,
+                       "leafref", path);
+                return EXIT_FAILURE;
+            }
         }
 
         if (!prefix) {
@@ -3746,6 +3820,15 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
             return EXIT_FAILURE;
         }
 
+        if (first_iter) {
+            /* set external dependency flag, we can decide based on the first found node */
+            if (!parent_tpdf && op_node && parent_times &&
+                    resolve_path_arg_schema_valid_dep_flag(op_node, node, (parent_times == -1 ? 1 : 0))) {
+                parent->flags |= LYS_VALID_DEP;
+            }
+            first_iter = 0;
+        }
+
         if (has_predicate) {
             /* we have predicate, so the current result must be list */
             if (node->nodetype != LYS_LIST) {
@@ -3753,7 +3836,7 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
                 return -1;
             }
 
-            i = resolve_path_predicate_schema(id, node, parent);
+            i = resolve_path_predicate_schema(id, node, parent, op_node);
             if (i <= 0) {
                 if (i == 0) {
                     return EXIT_FAILURE;
@@ -4014,6 +4097,69 @@ error:
 }
 
 /**
+ * @brief Check all XPath expressions of a node (when and must), set LYS_XPATH_DEP flag if required.
+ *
+ * @param[in] node Node to examine.
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE on forward reference, -1 on error.
+ */
+static int
+check_node_xpath(struct lys_node *node)
+{
+    struct lys_node *parent, *elem;
+    struct lyxp_set set;
+    uint32_t i;
+    int rc;
+
+    parent = node;
+    while (parent) {
+        if (parent->nodetype == LYS_GROUPING) {
+            /* unresolved grouping, skip for now (will be checked later) */
+            return EXIT_SUCCESS;
+        }
+        if (parent->nodetype == LYS_AUGMENT) {
+            if (!((struct lys_node_augment *)parent)->target) {
+                /* uresolved augment, skip for now (will be checked later) */
+                return EXIT_SUCCESS;
+            } else {
+                parent = ((struct lys_node_augment *)parent)->target;
+                continue;
+            }
+        }
+        parent = parent->parent;
+    }
+
+    rc = lyxp_node_atomize(node, &set);
+    if (rc) {
+        return rc;
+    }
+
+    for (parent = node; parent && !(parent->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF)); parent = lys_parent(parent));
+
+    for (i = 0; i < set.used; ++i) {
+        /* skip roots'n'stuff */
+        if (set.val.snodes[i].type == LYXP_NODE_ELEM) {
+            /* XPath expression cannot reference "lower" status than the node that has the definition */
+            if (lyp_check_status(node->flags, lys_node_module(node), node->name, set.val.snodes[i].snode->flags,
+                    lys_node_module(set.val.snodes[i].snode), set.val.snodes[i].snode->name, node)) {
+                return -1;
+            }
+
+            if (parent) {
+                for (elem = set.val.snodes[i].snode; elem && (elem != parent); elem = lys_parent(elem));
+                if (!elem) {
+                    /* not in node's RPC or notification subtree, set the flag */
+                    node->flags |= LYS_VALID_DEP;
+                    break;
+                }
+            }
+        }
+    }
+
+    free(set.val.snodes);
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Passes config flag down to children, skips nodes without config flags.
  * Does not log.
  *
@@ -4024,10 +4170,13 @@ error:
  * @return 0 on success, -1 on error.
  */
 static int
-inherit_config_flag(struct lys_node *node, int flags, int clear, int check_list)
+inherit_config_flag(struct lys_node *node, int flags, int clear, int check_list, int check_xpath)
 {
     assert(!(flags ^ (flags & LYS_CONFIG_MASK)));
     LY_TREE_FOR(node, node) {
+        if (check_xpath && check_node_xpath(node)) {
+            return -1;
+        }
         if (clear) {
             node->flags &= ~LYS_CONFIG_MASK;
             node->flags &= ~LYS_CONFIG_SET;
@@ -4053,7 +4202,7 @@ inherit_config_flag(struct lys_node *node, int flags, int clear, int check_list)
             }
         }
         if (!(node->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA))) {
-            if (inherit_config_flag(node->child, flags, clear, check_list)) {
+            if (inherit_config_flag(node->child, flags, clear, check_list, check_xpath)) {
                 return -1;
             }
         }
@@ -4150,15 +4299,6 @@ resolve_augment(struct lys_node_augment *aug, struct lys_node *siblings)
         return -1;
     }
 
-    /* inherit config information from actual parent */
-    for(parent = aug_target; parent && !(parent->nodetype & (LYS_NOTIF | LYS_INPUT | LYS_OUTPUT | LYS_RPC)); parent = lys_parent(parent));
-    clear_config = (parent) ? 1 : 0;
-    LY_TREE_FOR(aug->child, sub) {
-        if (inherit_config_flag(sub, aug_target->flags & LYS_CONFIG_MASK, clear_config, 1)) {
-            return -1;
-        }
-    }
-
     /* check identifier uniqueness as in lys_node_addchild() */
     LY_TREE_FOR(aug->child, sub) {
         if (lys_check_id(sub, (struct lys_node *)aug_target, NULL)) {
@@ -4176,6 +4316,15 @@ resolve_augment(struct lys_node_augment *aug, struct lys_node *siblings)
         aug->child->prev = sub;         /* finish connecting of both child lists */
     } else {
         aug->target->child = aug->child;
+    }
+
+    /* inherit config information from actual parent */
+    for(parent = aug_target; parent && !(parent->nodetype & (LYS_NOTIF | LYS_INPUT | LYS_OUTPUT | LYS_RPC)); parent = lys_parent(parent));
+    clear_config = (parent) ? 1 : 0;
+    LY_TREE_FOR(aug->child, sub) {
+        if (inherit_config_flag(sub, aug_target->flags & LYS_CONFIG_MASK, clear_config, 1, 1)) {
+            return -1;
+        }
     }
 
 success:
@@ -4240,7 +4389,7 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
     struct lys_refine *rfn;
     struct lys_restr *must, **old_must;
     struct lys_iffeature *iff, **old_iff;
-    int i, j, k, rc, parent_config, clear_config, check_list;
+    int i, j, k, rc, parent_config, clear_config, check_list, check_xpath;
     uint8_t size, *old_size;
     unsigned int usize, usize1, usize2;
 
@@ -4297,18 +4446,21 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
             /* we are still in some other unresolved grouping or augment, unable to check lists */
             check_list = 0;
             clear_config = 0;
+            check_xpath = 0;
         } else {
             check_list = 0;
             clear_config = 1;
+            check_xpath = 1;
         }
     } else {
         check_list = 1;
         clear_config = 0;
+        check_xpath = 1;
     }
 
     if (parent_config) {
         assert(uses->child);
-        if (inherit_config_flag(uses->child, parent_config, clear_config, check_list)) {
+        if (inherit_config_flag(uses->child, parent_config, clear_config, check_list, check_xpath)) {
             goto fail;
         }
     }
@@ -4676,13 +4828,14 @@ identity_backlink_update(struct lys_ident *der, struct lys_ident *base)
 
     assert(der && base);
 
-    base->der = ly_realloc(base->der, (base->der_size + 1) * sizeof *(base->der));
     if (!base->der) {
-        LOGMEM;
-        return EXIT_FAILURE;
+        /* create a set for backlinks if it does not exist */
+        base->der = ly_set_new();
     }
-    base->der[base->der_size++] = der;
+    /* store backlink */
+    ly_set_add(base->der, der, LY_SET_OPT_USEASLIST);
 
+    /* do it recursively */
     for (i = 0; i < base->base_size; i++) {
         if (identity_backlink_update(der, base->base[i])) {
             return EXIT_FAILURE;
@@ -4879,7 +5032,8 @@ struct lys_ident *
 resolve_identref(struct lys_type *type, const char *ident_name, struct lyd_node *node)
 {
     const char *mod_name, *name;
-    int mod_name_len, rc, i, j;
+    int mod_name_len, rc, i;
+    unsigned int u;
     struct lys_ident *der, *cur;
 
     if (!type || (!type->info.ident.count && !type->der) || !ident_name) {
@@ -4904,13 +5058,16 @@ resolve_identref(struct lys_type *type, const char *ident_name, struct lyd_node 
                 goto match;
             }
 
-            for (j = 0; j < cur->der_size; j++) {
-                der = cur->der[j]; /* shortcut */
-                if (!strcmp(der->name, name) &&
-                        (!mod_name || (!strncmp(der->module->name, mod_name, mod_name_len) && !der->module->name[mod_name_len]))) {
-                    /* we have match */
-                    cur = der;
-                    goto match;
+            if (cur->der) {
+                /* there are also some derived identities */
+                for (u = 0; u < cur->der->number; u++) {
+                    der = (struct lys_ident *)cur->der->set.g[u]; /* shortcut */
+                    if (!strcmp(der->name, name) &&
+                            (!mod_name || (!strncmp(der->module->name, mod_name, mod_name_len) && !der->module->name[mod_name_len]))) {
+                        /* we have match */
+                        cur = der;
+                        goto match;
+                    }
                 }
             }
         }
@@ -4956,7 +5113,7 @@ resolve_unres_schema_uses(struct lys_node_uses *uses, struct unres_schema *unres
     if (!uses->grp) {
         rc = resolve_uses_schema_nodeid(uses->name, (const struct lys_node *)uses, (const struct lys_node_grp **)&uses->grp);
         if (rc == -1) {
-            LOGVAL(LYE_INRESOLV, LY_VLOG_LYS, uses, "grouping", uses->name);
+            LOGVAL(LYE_INRESOLV, LY_VLOG_LYS, uses, "uses", uses->name);
             return -1;
         } else if (rc > 0) {
             LOGVAL(LYE_INCHAR, LY_VLOG_LYS, uses, uses->name[rc - 1], &uses->name[rc - 1]);
@@ -4969,6 +5126,7 @@ resolve_unres_schema_uses(struct lys_node_uses *uses, struct unres_schema *unres
                 ((struct lys_node_grp *)par_grp)->nacm++;
                 uses->flags |= LYS_USESGRP;
             }
+            LOGVAL(LYE_INRESOLV, LY_VLOG_LYS, uses, "uses", uses->name);
             return EXIT_FAILURE;
         }
     }
@@ -4981,6 +5139,7 @@ resolve_unres_schema_uses(struct lys_node_uses *uses, struct unres_schema *unres
             /* instantiate grouping only when it is completely resolved */
             uses->grp = NULL;
         }
+        LOGVAL(LYE_INRESOLV, LY_VLOG_LYS, uses, "uses", uses->name);
         return EXIT_FAILURE;
     }
 
@@ -5004,9 +5163,6 @@ resolve_unres_schema_uses(struct lys_node_uses *uses, struct unres_schema *unres
         }
 
         return EXIT_SUCCESS;
-    } else if ((rc == EXIT_FAILURE) && par_grp && !(uses->flags & LYS_USESGRP)) {
-        ((struct lys_node_grp *)par_grp)->nacm++;
-        uses->flags |= LYS_USESGRP;
     }
 
     return rc;
@@ -5727,70 +5883,6 @@ cleanup:
 }
 
 /**
- * @brief Check all XPath expressions of a node (when and must), set LYS_XPATH_DEP flag if required.
- *
- * @param[in] node Node to examine.
- * @return EXIT_SUCCESS on success, EXIT_FAILURE on forward reference, -1 on error.
- */
-static int
-check_xpath(struct lys_node *node)
-{
-    struct lys_node *parent, *elem;
-    struct lyxp_set set;
-    uint32_t i;
-    int rc;
-
-    parent = node;
-    while (parent) {
-        if (parent->nodetype == LYS_GROUPING) {
-            /* unresolved grouping, skip for now */
-            return 0;
-        }
-        if (parent->nodetype == LYS_AUGMENT) {
-            if (!((struct lys_node_augment *)parent)->target) {
-                /* uresolved augment skip for now */
-                return 0;
-            } else {
-                parent = ((struct lys_node_augment *)parent)->target;
-                continue;
-            }
-        }
-        parent = parent->parent;
-    }
-
-    rc = lyxp_node_atomize(node, &set);
-    if (rc) {
-        return rc;
-    }
-
-    /* RPC, action can have neither must nor when */
-    for (parent = node; parent && !(parent->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF)); parent = lys_parent(parent));
-
-    for (i = 0; i < set.used; ++i) {
-        /* skip roots'n'stuff */
-        if (set.val.snodes[i].type == LYXP_NODE_ELEM) {
-            /* XPath expression cannot reference "lower" status than the node that has the definition */
-            if (lyp_check_status(node->flags, lys_node_module(node), node->name, set.val.snodes[i].snode->flags,
-                    lys_node_module(set.val.snodes[i].snode), set.val.snodes[i].snode->name, node)) {
-                return -1;
-            }
-
-            if (parent) {
-                for (elem = set.val.snodes[i].snode; elem && (elem != parent); elem = lys_parent(elem));
-                if (!elem) {
-                    /* not in node's RPC or notification subtree, set the flag */
-                    node->flags |= LYS_XPATH_DEP;
-                    break;
-                }
-            }
-        }
-    }
-
-    free(set.val.snodes);
-    return EXIT_SUCCESS;
-}
-
-/**
  * @brief Resolve a single unres schema item. Logs indirectly.
  *
  * @param[in] mod Main module.
@@ -5930,6 +6022,15 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
         rc = resolve_feature(iff_data->fname, strlen(iff_data->fname), iff_data->node, item);
         if (!rc) {
             /* success */
+            if (iff_data->infeature) {
+                /* store backlink into the target feature to allow reverse changes in case of changing feature status */
+                feat = *((struct lys_feature **)item);
+                if (!feat->depfeatures) {
+                    feat->depfeatures = ly_set_new();
+                }
+                ly_set_add(feat->depfeatures, iff_data->node, LY_SET_OPT_USEASLIST);
+            }
+            /* cleanup temporary data */
             lydict_remove(mod->ctx, iff_data->fname);
             free(iff_data);
         }
@@ -6016,7 +6117,7 @@ featurecheckdone:
         break;
     case UNRES_XPATH:
         node = (struct lys_node *)item;
-        rc = check_xpath(node);
+        rc = check_node_xpath(node);
         break;
     default:
         LOGINT;
@@ -6080,7 +6181,11 @@ print_unres_schema_item_fail(void *item, enum UNRES_ITEM type, void *str_node)
         LOGVRB("Resolving %s \"%s\" failed, it will be attempted later.", "uses", ((struct lys_node_uses *)item)->name);
         break;
     case UNRES_TYPE_DFLT:
-        LOGVRB("Resolving %s \"%s\" failed, it will be attempted later.", "type default", (char *)str_node);
+        if (str_node) {
+            LOGVRB("Resolving %s \"%s\" failed, it will be attempted later.", "type default", (char *)str_node);
+        }   /* else no default value in the type itself, but we are checking some restrictions against
+             *  possible default value of some base type. The failure is caused by not resolved base type,
+             *  so it was already reported */
         break;
     case UNRES_CHOICE_DFLT:
         LOGVRB("Resolving %s \"%s\" failed, it will be attempted later.", "choice default", (char *)str_node);
@@ -6805,16 +6910,19 @@ unres_data_add(struct unres_data *unres, struct lyd_node *node, enum UNRES_ITEM 
 /**
  * @brief Resolve every unres data item in the structure. Logs directly.
  *
+ * If options includes LYD_OPT_TRUSTED, the data are considered trusted (when, must conditions are not expected,
+ * unresolved leafrefs/instids are accepted).
+ *
+ * If options includes LYD_OPT_NOAUTODEL, the false resulting when condition on non-default nodes, the error is raised.
+ *
  * @param[in] unres Unres data structure to use.
- * @param[in,out] root Root node of the data tree. If not NULL, auto-delete is performed on false when condition. If
- * NULL and when condition is false the error is raised.
- * @param[in] trusted Whether the data are considered trusted (when, must conditions are not expected, unresolved
- * leafrefs/instids are accepted).
+ * @param[in,out] root Root node of the data tree, can be changed due to autodeletion.
+ * @param[in] options Data options as described above.
  *
  * @return EXIT_SUCCESS on success, -1 on error.
  */
 int
-resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int trusted)
+resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int options)
 {
     uint32_t i, j, first = 1, resolved = 0, del_items = 0, when_stmt = 0;
     int rc, progress;
@@ -6822,6 +6930,7 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int trusted
     struct lyd_node *parent;
     struct lyd_node_leaf_list *leaf;
 
+    assert(root);
     assert(unres);
 
     if (!unres->count) {
@@ -6840,7 +6949,7 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int trusted
             if (unres->type[i] != UNRES_WHEN) {
                 continue;
             }
-            assert(!trusted);
+            assert(!(options & LYD_OPT_TRUSTED));
             if (first) {
                 /* count when-stmt nodes in unres list */
                 when_stmt++;
@@ -6867,7 +6976,7 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int trusted
             rc = resolve_unres_data_item(unres->node[i], unres->type[i]);
             if (!rc) {
                 if (unres->node[i]->when_status & LYD_WHEN_FALSE) {
-                    if (!root) {
+                    if ((options & LYD_OPT_NOAUTODEL) && !unres->node[i]->dflt) {
                         /* false when condition */
                         ly_vlog_hide(0);
                         if (ly_log_level >= LY_LLERR) {
@@ -6981,7 +7090,7 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int trusted
         if (unres->type[i] == UNRES_RESOLVED) {
             continue;
         }
-        assert(!trusted || ((unres->type[i] != UNRES_MUST) && (unres->type[i] != UNRES_MUST_INOUT)));
+        assert(!(options & LYD_OPT_TRUSTED) || ((unres->type[i] != UNRES_MUST) && (unres->type[i] != UNRES_MUST_INOUT)));
 
         rc = resolve_unres_data_item(unres->node[i], unres->type[i]);
         if (rc == -1) {
@@ -6989,10 +7098,10 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int trusted
             /* print only this last error */
             resolve_unres_data_item(unres->node[i], unres->type[i]);
             return -1;
-        } else if ((rc == 0) || (trusted && ((unres->type[i] == UNRES_LEAFREF) || (unres->type[i] == UNRES_INSTID)))) {
+        } else if ((rc == 0) || ((options & LYD_OPT_TRUSTED) && ((unres->type[i] == UNRES_LEAFREF) || (unres->type[i] == UNRES_INSTID)))) {
             unres->type[i] = UNRES_RESOLVED;
             resolved++;
-            if (trusted) {
+            if (options & LYD_OPT_TRUSTED) {
                 /* accept it in this case */
                 if (unres->type[i] == UNRES_LEAFREF) {
                     LOGVRB("Leafref \"%s\" with value \"%s\" failed to be resolved.",

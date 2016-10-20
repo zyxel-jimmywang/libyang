@@ -5,10 +5,11 @@ set(LIBYANG_DESCRIPTION "libyang is YANG data modelling language parser and tool
 
 # set version
 set(LIBYANG_MAJOR_VERSION 0)
-set(LIBYANG_MINOR_VERSION 10)
-set(LIBYANG_MICRO_VERSION 205)
+set(LIBYANG_MINOR_VERSION 11)
+set(LIBYANG_MICRO_VERSION 6)
 set(LIBYANG_VERSION ${LIBYANG_MAJOR_VERSION}.${LIBYANG_MINOR_VERSION}.${LIBYANG_MICRO_VERSION})
 set(LIBYANG_SOVERSION ${LIBYANG_MAJOR_VERSION}.${LIBYANG_MINOR_VERSION})
+configure_file(${PROJECT_SOURCE_DIR}/src/libyang.h.in ${PROJECT_SOURCE_DIR}/src/libyang.h)
 
 # include custom Modules
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/CMakeModules/")
@@ -95,6 +96,7 @@ set(libsrc
 
 set(lintsrc
 	tools/lint/main.c
+	tools/lint/main_ni.c
 	tools/lint/commands.c
 	tools/lint/completion.c
 	linenoise/linenoise.c)

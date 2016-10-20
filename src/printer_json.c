@@ -234,7 +234,7 @@ json_print_leaf_list(struct lyout *out, int level, const struct lyd_node *node, 
             }
             if (list->attr) {
                 ly_print(out, "%*s\"@\":%s{%s", LEVEL, INDENT, (level ? " " : ""), (level ? "\n" : ""));
-                json_print_attrs(out, level + 1, node, NULL);
+                json_print_attrs(out, level + 1, list, NULL);
                 ly_print(out, "%*s}%s", LEVEL, INDENT, list->child ? ",\n" : "");
             }
             json_print_nodes(out, level, list->child, 1, 0, options);
@@ -361,6 +361,7 @@ json_print_nodes(struct lyout *out, int level, const struct lyd_node *root, int 
 
         switch (node->schema->nodetype) {
         case LYS_RPC:
+        case LYS_ACTION:
         case LYS_NOTIF:
         case LYS_CONTAINER:
             if (node->prev->next) {
@@ -423,21 +424,59 @@ json_print_nodes(struct lyout *out, int level, const struct lyd_node *root, int 
 int
 json_print_data(struct lyout *out, const struct lyd_node *root, int options)
 {
-    int level = 0;
+    const struct lyd_node *node, *next;
+    int level = 0, action_input = 0;
 
     if (options & LYP_FORMAT) {
         ++level;
     }
 
+    if (options & LYP_NETCONF) {
+        if (root->schema->nodetype != LYS_RPC) {
+            /* learn whether we are printing an action */
+            LY_TREE_DFS_BEGIN(root, next, node) {
+                if (node->schema->nodetype == LYS_ACTION) {
+                    break;
+                }
+                LY_TREE_DFS_END(root, next, node);
+            }
+        } else {
+            node = root;
+        }
+
+        if (node && (node->schema->nodetype & (LYS_RPC | LYS_ACTION))) {
+            if (node->child && (node->child->schema->parent->nodetype == LYS_OUTPUT)) {
+                /* skip the container */
+                root = node->child;
+            } else if (node->schema->nodetype == LYS_ACTION) {
+                action_input = 1;
+            }
+        }
+    }
+
     /* start */
     ly_print(out, "{%s", (level ? "\n" : ""));
+
+    if (action_input) {
+        ly_print(out, "%*s\"yang:action\":%s{%s", LEVEL, INDENT, (level ? " " : ""), (level ? "\n" : ""));
+        if (level) {
+            ++level;
+        }
+    }
 
     /* content */
     json_print_nodes(out, level, root, options & LYP_WITHSIBLINGS, 1, options);
 
+    if (action_input) {
+        if (level) {
+            --level;
+        }
+        ly_print(out, "%*s}%s", LEVEL, INDENT, (level ? "\n" : ""));
+    }
+
     /* end */
     ly_print(out, "}%s", (level ? "\n" : ""));
-    ly_print_flush(out);
 
+    ly_print_flush(out);
     return EXIT_SUCCESS;
 }
