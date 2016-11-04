@@ -969,11 +969,7 @@ yang_print_list(struct lyout *out, int level, const struct lys_node *node)
         yang_print_must(out, level, list->module, &list->must[i]);
     }
     if (list->keys_size) {
-        ly_print(out, "%*skey \"", LEVEL, INDENT);
-        for (i = 0; i < list->keys_size; i++) {
-            ly_print(out, "%s%s", list->keys[i]->name, i + 1 < list->keys_size ? " " : "");
-        }
-        ly_print(out, "\";\n");
+        ly_print(out, "%*skey \"%s\";\n", LEVEL, INDENT, list->keys_str);
     }
     for (i = 0; i < list->unique_size; i++) {
         yang_print_unique(out, level, &list->unique[i]);
@@ -1079,6 +1075,11 @@ yang_print_input_output(struct lyout *out, int level, const struct lys_node *nod
     int i;
     struct lys_node *sub;
     struct lys_node_inout *inout = (struct lys_node_inout *)node;
+
+    if (node->flags & LYS_IMPLICIT) {
+        /* implicit input/output which is not a part of the schema */
+        return;
+    }
 
     ly_print(out, "%*s%s {\n", LEVEL, INDENT, (inout->nodetype == LYS_INPUT ? "input" : "output"));
 

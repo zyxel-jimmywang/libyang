@@ -310,7 +310,7 @@ yang_read_if_feature(struct lys_module *module, void *ptr, char *value, struct u
         return EXIT_FAILURE;
     }
 
-    if (!(exp = transform_schema2json(module, value))) {
+    if (!(exp = transform_iffeat_schema2json(module, value))) {
         free(value);
         return EXIT_FAILURE;
     }
@@ -687,6 +687,7 @@ int
 yang_read_key(struct lys_module *module, struct lys_node_list *list, struct unres_schema *unres)
 {
     char *exp, *value;
+    struct lys_node *node;
 
     exp = value = (char *) list->keys;
     list->keys_size = 0;
@@ -697,20 +698,18 @@ yang_read_key(struct lys_module *module, struct lys_node_list *list, struct unre
         }
     }
     list->keys_size++;
+
+    list->keys_str = lydict_insert_zc(module->ctx, exp);
     list->keys = calloc(list->keys_size, sizeof *list->keys);
     if (!list->keys) {
         LOGMEM;
-        goto error;
+        return EXIT_FAILURE;
     }
-    if (unres_schema_add_str(module, unres, list, UNRES_LIST_KEYS, exp) == -1) {
-        goto error;
+    for (node = list->parent; node && node->nodetype != LYS_GROUPING; node = lys_parent(node));
+    if (!node && unres_schema_add_node(module, unres, list, UNRES_LIST_KEYS, NULL) == -1) {
+        return EXIT_FAILURE;
     }
-    free(exp);
     return EXIT_SUCCESS;
-
-error:
-    free(exp);
-    return EXIT_FAILURE;
 }
 
 int
@@ -2453,13 +2452,16 @@ yang_check_deviation(struct lys_module *module, struct ly_set *dflt_check, struc
         if (dflt_check->set.s[u]->nodetype == LYS_LEAF) {
             leaf = (struct lys_node_leaf *)dflt_check->set.s[u];
             target_name = leaf->name;
-            rc = unres_schema_add_str(module, unres, &leaf->type, UNRES_TYPE_DFLT, value = leaf->dflt);
+            value = leaf->dflt;
+            rc = unres_schema_add_node(module, unres, &leaf->type, UNRES_TYPE_DFLT, (struct lys_node *)(&leaf->dflt));
         } else { /* LYS_LEAFLIST */
             llist = (struct lys_node_leaflist *)dflt_check->set.s[u];
             target_name = llist->name;
             for (i = 0; i < llist->dflt_size; i++) {
-                rc = unres_schema_add_str(module, unres, &llist->type, UNRES_TYPE_DFLT, value = llist->dflt[i]);
+                rc = unres_schema_add_node(module, unres, &llist->type, UNRES_TYPE_DFLT,
+                                           (struct lys_node *)(&llist->dflt[i]));
                 if (rc == -1) {
+                    value = llist->dflt[i];
                     break;
                 }
             }
@@ -2611,8 +2613,8 @@ store_flags(struct lys_node *node, uint8_t flags, int config_opt)
     if (config_opt == CONFIG_INHERIT_ENABLE) {
         if (!(node->flags & LYS_CONFIG_MASK)) {
             /* get config flag from parent */
-            if (node->parent && (node->parent->flags & LYS_CONFIG_R)) {
-                node->flags |= LYS_CONFIG_R;
+            if (node->parent) {
+                node->flags |= node->parent->flags & LYS_CONFIG_MASK;
             } else {
                 /* default config is true */
                 node->flags |= LYS_CONFIG_W;

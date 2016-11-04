@@ -637,6 +637,7 @@ int
 lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys_node *child)
 {
     struct lys_node *iter;
+    struct lys_node_inout *in, *out, *inout;
     int type;
 
     assert(child);
@@ -730,32 +731,57 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
         lys_node_unlink(child);
     }
 
-    /* connect the child correctly */
-    if (!parent) {
-        if (module->data) {
-            module->data->prev->next = child;
-            child->prev = module->data->prev;
-            module->data->prev = child;
-        } else {
-            module->data = child;
-        }
-    } else {
-        if (!parent->child) {
-            /* the only/first child of the parent */
+    if (child->nodetype & (LYS_INPUT | LYS_OUTPUT)) {
+        /* replace the implicit input/output node */
+        if (child->nodetype == LYS_OUTPUT) {
+            inout = (struct lys_node_inout *)parent->child->next;
+        } else { /* LYS_INPUT */
+            inout = (struct lys_node_inout *)parent->child;
             parent->child = child;
-            child->parent = parent;
-            iter = child;
+        }
+        if (inout->next) {
+            child->next = inout->next;
+            inout->next->prev = child;
+            inout->next = NULL;
         } else {
-            /* add a new child at the end of parent's child list */
-            iter = parent->child->prev;
-            iter->next = child;
-            child->prev = iter;
+            parent->child->prev = child;
         }
-        while (iter->next) {
-            iter = iter->next;
-            iter->parent = parent;
+        child->prev = inout->prev;
+        if (inout->prev->next) {
+            inout->prev->next = child;
         }
-        parent->child->prev = iter;
+        inout->prev = (struct lys_node *)inout;
+        child->parent = parent;
+        inout->parent = NULL;
+        lys_node_free((struct lys_node *)inout, NULL, 0);
+    } else {
+        /* connect the child correctly */
+        if (!parent) {
+            if (module->data) {
+                module->data->prev->next = child;
+                child->prev = module->data->prev;
+                module->data->prev = child;
+            } else {
+                module->data = child;
+            }
+        } else {
+            if (!parent->child) {
+                /* the only/first child of the parent */
+                parent->child = child;
+                child->parent = parent;
+                iter = child;
+            } else {
+                /* add a new child at the end of parent's child list */
+                iter = parent->child->prev;
+                iter->next = child;
+                child->prev = iter;
+            }
+            while (iter->next) {
+                iter = iter->next;
+                iter->parent = parent;
+            }
+            parent->child->prev = iter;
+        }
     }
 
     /* check config value (but ignore them in groupings and augments) */
@@ -784,6 +810,23 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
             }
         }
     }
+
+    /* create implicit input/output nodes to have available them as possible target for augment */
+    if (child->nodetype & (LYS_RPC | LYS_ACTION)) {
+        in = calloc(1, sizeof *in);
+        in->nodetype = LYS_INPUT;
+        in->name = lydict_insert(child->module->ctx, "input", 5);
+        out = calloc(1, sizeof *out);
+        out->name = lydict_insert(child->module->ctx, "output", 6);
+        out->nodetype = LYS_OUTPUT;
+        in->module = out->module = child->module;
+        in->parent = out->parent = child;
+        in->flags = out->flags = LYS_IMPLICIT;
+        in->next = (struct lys_node *)out;
+        in->prev = (struct lys_node *)out;
+        out->prev = (struct lys_node *)in;
+        child->child = (struct lys_node *)in;
+    }
     return EXIT_SUCCESS;
 }
 
@@ -794,7 +837,7 @@ lys_parse_mem_(struct ly_ctx *ctx, const char *data, LYS_INFORMAT format, int in
     struct lys_module *mod = NULL;
     unsigned int len;
 
-    ly_errno = LY_SUCCESS;
+    ly_err_clean(1);
 
     if (!ctx || !data) {
         LOGERR(LY_EINVAL, "%s: Invalid parameter.", __func__);
@@ -867,6 +910,8 @@ lys_parse_path(struct ly_ctx *ctx, const char *path, LYS_INFORMAT format)
 {
     int fd;
     const struct lys_module *ret;
+    const char *rev, *dot, *filename;
+    size_t len;
 
     if (!ctx || !path) {
         LOGERR(LY_EINVAL, "%s: Invalid parameter.", __func__);
@@ -882,7 +927,36 @@ lys_parse_path(struct ly_ctx *ctx, const char *path, LYS_INFORMAT format)
     ret = lys_parse_fd(ctx, fd, format);
     close(fd);
 
-    if (ret && !ret->filepath) {
+    if (!ret) {
+        /* error */
+        return NULL;
+    }
+
+    /* check that name and revision match filename */
+    filename = strrchr(path, '/');
+    if (!filename) {
+        filename = path;
+    } else {
+        filename++;
+    }
+    rev = strchr(filename, '@');
+    dot = strrchr(filename, '.');
+
+    /* name */
+    len = strlen(ret->name);
+    if (strncmp(filename, ret->name, len) ||
+            ((rev && rev != &filename[len]) || (!rev && dot != &filename[len]))) {
+        LOGWRN("File name \"%s\" does not match module name \"%s\".", filename, ret->name);
+    }
+    if (rev) {
+        len = dot - ++rev;
+        if (!ret->rev_size || len != 10 || strncmp(ret->rev[0].date, rev, len)) {
+            LOGWRN("File name \"%s\" does not match module revision \"%s\".", filename,
+                   ret->rev_size ? ret->rev[0].date : "none");
+        }
+    }
+
+    if (!ret->filepath) {
         /* store URI */
         ((struct lys_module *)ret)->filepath = lydict_insert(ctx, path, 0);
     }
@@ -2376,7 +2450,8 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
 
         if (leaf_orig->dflt) {
             leaf->dflt = lydict_insert(ctx, leaf_orig->dflt, 0);
-            if (unres_schema_add_str(module, unres, &leaf->type, UNRES_TYPE_DFLT, leaf->dflt) == -1) {
+            if (unres_schema_add_node(module, unres, &leaf->type, UNRES_TYPE_DFLT,
+                                      (struct lys_node *)(&leaf->dflt)) == -1) {
                 goto error;
             }
         }
@@ -2401,6 +2476,16 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
         llist->must_size = llist_orig->must_size;
         llist->must = lys_restr_dup(ctx, llist_orig->must, llist->must_size);
 
+        llist->dflt_size = llist_orig->dflt_size;
+        llist->dflt = malloc(llist->dflt_size * sizeof *llist->dflt);
+        for (i = 0; i < llist->dflt_size; i++) {
+            llist->dflt[i] = lydict_insert(ctx, llist_orig->dflt[i], 0);
+            if (unres_schema_add_node(module, unres, &llist->type, UNRES_TYPE_DFLT,
+                                      (struct lys_node *)(&llist->dflt[i])) == -1) {
+                goto error;
+            }
+        }
+
         if (llist_orig->when) {
             llist->when = lys_when_dup(ctx, llist_orig->when);
         }
@@ -2419,30 +2504,18 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
         list->keys_size = list_orig->keys_size;
         if (list->keys_size) {
             list->keys = calloc(list->keys_size, sizeof *list->keys);
+            list->keys_str = lydict_insert(ctx, list_orig->keys_str, 0);
             if (!list->keys) {
                 LOGMEM;
                 goto error;
             }
 
             if (!shallow) {
-                /* we managed to resolve it before, resolve it again manually */
-                if (list_orig->keys[0]) {
-                    for (i = 0; i < list->keys_size; ++i) {
-                        rc = lys_get_sibling(list->child, lys_node_module(retval)->name, 0, list_orig->keys[i]->name, 0, LYS_LEAF,
-                                            (const struct lys_node **)&list->keys[i]);
-                        if (rc) {
-                            if (rc == EXIT_FAILURE) {
-                                LOGINT;
-                            }
-                            goto error;
-                        }
-                    }
-                /* it was not resolved yet, add unres copy */
-                } else {
-                    if (unres_schema_dup(module, unres, list_orig, UNRES_LIST_KEYS, list)) {
-                        LOGINT;
-                        goto error;
-                    }
+                /* the keys are going to be resolved only if the list is instantiated in data tree, not just
+                 * in another grouping */
+                for (iter = parent; iter && iter->nodetype != LYS_GROUPING; iter = iter->parent);
+                if (!iter && unres_schema_add_node(module, unres, list, UNRES_LIST_KEYS, NULL) == -1) {
+                    goto error;
                 }
             } else {
                 memcpy(list->keys, list_orig->keys, list->keys_size * sizeof *list->keys);
@@ -3629,3 +3702,4 @@ lys_path(const struct lys_node *node)
 
     return result;
 }
+

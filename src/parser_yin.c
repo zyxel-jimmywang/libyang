@@ -106,7 +106,7 @@ error:
         return EXIT_FAILURE;
     }
 
-    if (!(value = transform_schema2json(parent->module, value))) {
+    if (!(value = transform_iffeat_schema2json(parent->module, value))) {
         return EXIT_FAILURE;
     }
 
@@ -1318,7 +1318,7 @@ fill_yin_typedef(struct lys_module *module, struct lys_node *parent, struct lyxm
 
     /* check default value (if not defined, there still could be some restrictions
      * that need to be checked against a default value from a derived type) */
-    if (unres_schema_add_str(module, unres, &tpdf->type, UNRES_TYPE_DFLT, tpdf->dflt) == -1) {
+    if (unres_schema_add_node(module, unres, &tpdf->type, UNRES_TYPE_DFLT, (struct lys_node *)(&tpdf->dflt)) == -1) {
         goto error;
     }
 
@@ -2370,12 +2370,15 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
         rc = EXIT_SUCCESS;
         if (dflt_check->set.s[u]->nodetype == LYS_LEAF) {
             leaf = (struct lys_node_leaf *)dflt_check->set.s[u];
-            rc = unres_schema_add_str(module, unres, &leaf->type, UNRES_TYPE_DFLT, value = leaf->dflt);
+            value = leaf->dflt;
+            rc = unres_schema_add_node(module, unres, &leaf->type, UNRES_TYPE_DFLT, (struct lys_node *)(&leaf->dflt));
         } else { /* LYS_LEAFLIST */
             llist = (struct lys_node_leaflist *)dflt_check->set.s[u];
             for (j = 0; j < llist->dflt_size; j++) {
-                rc = unres_schema_add_str(module, unres, &llist->type, UNRES_TYPE_DFLT, value = llist->dflt[j]);
+                rc = unres_schema_add_node(module, unres, &llist->type, UNRES_TYPE_DFLT,
+                                           (struct lys_node *)(&llist->dflt[j]));
                 if (rc == -1) {
+                    value = llist->dflt[j];
                     break;
                 }
             }
@@ -2465,7 +2468,7 @@ fill_yin_augment(struct lys_module *module, struct lys_node *parent, struct lyxm
         } else if (!strcmp(child->name, "uses")) {
             node = read_yin_uses(module, (struct lys_node *)aug, child, unres);
         } else if (!strcmp(child->name, "choice")) {
-            node = read_yin_case(module, (struct lys_node *)aug, child, 1, unres);
+            node = read_yin_choice(module, (struct lys_node *)aug, child, 1, unres);
         } else if (!strcmp(child->name, "case")) {
             node = read_yin_case(module, (struct lys_node *)aug, child, 1, unres);
         } else if (!strcmp(child->name, "anyxml")) {
@@ -3073,9 +3076,9 @@ read_yin_common(struct lys_module *module, struct lys_node *parent,
 
     if ((opt & OPT_CFG_INHERIT) && !(node->flags & LYS_CONFIG_MASK)) {
         /* get config flag from parent */
-        if (parent && (parent->flags & LYS_CONFIG_R)) {
-            node->flags |= LYS_CONFIG_R;
-        } else {
+        if (parent) {
+            node->flags |= parent->flags & LYS_CONFIG_MASK;
+        } else if (!parent) {
             /* default config is true */
             node->flags |= LYS_CONFIG_W;
         }
@@ -3748,7 +3751,7 @@ read_yin_leaf(struct lys_module *module, struct lys_node *parent, struct lyxml_e
 
     /* check default value (if not defined, there still could be some restrictions
      * that need to be checked against a default value from a derived type) */
-    if (unres_schema_add_str(module, unres, &leaf->type, UNRES_TYPE_DFLT, leaf->dflt) == -1) {
+    if (unres_schema_add_node(module, unres, &leaf->type, UNRES_TYPE_DFLT, (struct lys_node *)(&leaf->dflt)) == -1) {
         goto error;
     }
 
@@ -4014,7 +4017,8 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
     /* check default value (if not defined, there still could be some restrictions
      * that need to be checked against a default value from a derived type) */
     for (r = 0; r < llist->dflt_size; r++) {
-        if (unres_schema_add_str(module, unres, &llist->type, UNRES_TYPE_DFLT, llist->dflt[r]) == -1) {
+        if (unres_schema_add_node(module, unres, &llist->type, UNRES_TYPE_DFLT,
+                                  (struct lys_node *)(&llist->dflt[r])) == -1) {
             goto error;
         }
     }
@@ -4044,7 +4048,7 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     int r;
     int c_tpdf = 0, c_must = 0, c_uniq = 0, c_ftrs = 0;
     int f_ordr = 0, f_max = 0, f_min = 0;
-    const char *key_str = NULL, *value;
+    const char *value;
     char *auxs;
     unsigned long val;
 
@@ -4106,7 +4110,7 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
 
             /* count the number of keys */
             GETVAL(value, sub, "value");
-            key_str = value;
+            list->keys_str = lydict_insert(module->ctx, value, 0);
             while ((value = strpbrk(value, " \t\n"))) {
                 list->keys_size++;
                 while (isspace(*value)) {
@@ -4238,7 +4242,7 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     /* check - if list is configuration, key statement is mandatory
      * (but only if we are not in a grouping or augment, then the check is deferred) */
     for (node = retval; node && !(node->nodetype & (LYS_GROUPING | LYS_AUGMENT)); node = node->parent);
-    if (!node && (list->flags & LYS_CONFIG_W) && !key_str) {
+    if (!node && (list->flags & LYS_CONFIG_W) && !list->keys_str) {
         LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_LYS, retval, "key", "list");
         goto error;
     }
@@ -4322,8 +4326,10 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
         lyxml_free(module->ctx, sub);
     }
 
-    if (key_str) {
-        if (unres_schema_add_str(module, unres, list, UNRES_LIST_KEYS, key_str) == -1) {
+    if (list->keys_str) {
+        /* check that we are not in grouping */
+        for (node = parent; node && node->nodetype != LYS_GROUPING; node = lys_parent(node));
+        if (!node && unres_schema_add_node(module, unres, list, UNRES_LIST_KEYS, NULL) == -1) {
             goto error;
         }
     } /* else config false list without a key, key_str presence in case of config true is checked earlier */
@@ -4580,7 +4586,7 @@ read_yin_grouping(struct lys_module *module, struct lys_node *parent, struct lyx
     grp->prev = (struct lys_node *)grp;
     retval = (struct lys_node *)grp;
 
-    if (read_yin_common(module, parent, retval, yin, OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_INHERIT : 0))) {
+    if (read_yin_common(module, parent, retval, yin, OPT_IDENT | OPT_MODULE )) {
         goto error;
     }
 
@@ -5897,6 +5903,10 @@ yin_read_module(struct ly_ctx *ctx, const char *data, const char *revision, int 
     /* check root element */
     if (!yin->name || strcmp(yin->name, "module")) {
         LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, yin->name);
+        if (ly_strequal("submodule", yin->name, 0)) {
+            LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL,
+                   "Submodules are parsed automatically as includes to the main module, do not parse them separately.");
+        }
         goto error;
     }
 

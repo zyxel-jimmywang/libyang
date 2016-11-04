@@ -111,8 +111,7 @@ lyd_check_mandatory_data(struct lyd_node *root, struct lyd_node *last_parent,
                     if (!state) {
                         /* when evaluates to false */
                         lyd_free(dummy);
-                        ly_errno = LY_SUCCESS;
-                        ly_vecode = LYVE_SUCCESS;
+                        ly_err_clean(1);
                         return EXIT_SUCCESS;
                     }
 
@@ -518,7 +517,7 @@ lyd_parse_fd_(struct ly_ctx *ctx, int fd, LYD_FORMAT format, int options, va_lis
     }
 
     if (!sb.st_size) {
-        ly_errno = LY_SUCCESS;
+        ly_err_clean(1);
         return NULL;
     }
 
@@ -693,8 +692,9 @@ _lyd_new_leaf(struct lyd_node *parent, const struct lys_node *schema, const char
     }
 
     /* resolve the type correctly (after it was connected to parent cause of log) */
-    if (lyp_parse_value((struct lyd_node_leaf_list *)ret, NULL, 1)) {
-        lyd_free((struct lyd_node *)ret);
+    if (!lyp_parse_value(&((struct lys_node_leaf *)ret->schema)->type, &((struct lyd_node_leaf_list *)ret)->value_str,
+                         NULL, NULL, (struct lyd_node_leaf_list *)ret, 1, 0)) {
+        lyd_free(ret);
         return NULL;
     }
 
@@ -742,6 +742,7 @@ lyd_change_leaf(struct lyd_node_leaf_list *leaf, const char *val_str)
     lyd_val backup_val;
     struct lyd_node *parent;
     struct lys_node_list *slist;
+    LY_DATA_TYPE backup_type;
     uint32_t i;
 
     if (!leaf) {
@@ -766,16 +767,20 @@ lyd_change_leaf(struct lyd_node_leaf_list *leaf, const char *val_str)
     }
 
     backup = leaf->value_str;
+    backup_type = leaf->value_type;
     memcpy(&backup_val, &leaf->value, sizeof backup);
     leaf->value_str = lydict_insert(leaf->schema->module->ctx, val_str ? val_str : "", 0);
     /* leaf->value is erased by lyp_parse_value() */
 
-    /* resolve the type correctly */
-    if (lyp_parse_value(leaf, NULL, 1)) {
+    /* resolve the type correctly, makes the value canonical if needed */
+    if (!lyp_parse_value(&((struct lys_node_leaf *)leaf->schema)->type, &leaf->value_str, NULL, NULL, leaf, 1, 0)) {
         lydict_remove(leaf->schema->module->ctx, leaf->value_str);
         leaf->value_str = backup;
         memcpy(&leaf->value, &backup_val, sizeof backup);
         return EXIT_FAILURE;
+    }
+    if (backup_type == LY_TYPE_BITS) {
+        free(backup_val.bit);
     }
 
     /* value is correct, remove backup */
@@ -2671,7 +2676,7 @@ movedone:
     }
     lyd_free_diff(result2);
 
-    ly_errno = LY_SUCCESS;
+    ly_err_clean(1);
     return result;
 
 error:
@@ -3551,7 +3556,7 @@ lyd_validate(struct lyd_node **node, int options, void *var_arg)
     struct unres_data *unres = NULL;
     struct ly_set *set;
 
-    ly_errno = LY_SUCCESS;
+    ly_err_clean(1);
 
     if (!node) {
         ly_errno = LY_EINVAL;
@@ -4396,7 +4401,7 @@ lyd_get_unique_default(const char* unique_expr, struct lyd_node *list)
             node = last->child;
             if (lyv_multicases(NULL, (struct lys_node *)parent, &node, 0, NULL)) {
                 /* another case is present */
-                ly_errno = LY_SUCCESS;
+                ly_err_clean(1);
                 dflt = NULL;
                 goto end;
             }

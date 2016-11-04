@@ -480,8 +480,8 @@ char *lyd_path(struct lyd_node *node);
  *                    when checking any "when" or "must" conditions in the parsed tree that require
  *                    some nodes outside their subtree. It must be a list of top-level elements!
  *                - #LYD_OPT_RPCREPLY:
- *                  - const struct ::lyd_node *rpc_act - pointer to the RPC or action operation data node
- *                    of the reply.
+ *                  - const struct ::lyd_node *rpc_act - pointer to the whole RPC or action operation data
+ *                    tree (the request) of the reply.
  *                  - const struct ::lyd_node *data_tree - additional data tree that will be used
  *                    when checking any "when" or "must" conditions in the parsed tree that require
  *                    some nodes outside their subtree. It must be a list of top-level elements!
@@ -518,8 +518,8 @@ struct lyd_node *lyd_parse_mem(struct ly_ctx *ctx, const char *data, LYD_FORMAT 
  *                    when checking any "when" or "must" conditions in the parsed tree that require
  *                    some nodes outside their subtree. It must be a list of top-level elements!
  *                - #LYD_OPT_RPCREPLY:
- *                  - const struct ::lyd_node *rpc_act - pointer to the RPC or action operation data node
- *                    of the reply.
+ *                  - const struct ::lyd_node *rpc_act - pointer to the whole RPC or action operation data
+ *                    tree (the request) of the reply.
  *                  - const struct ::lyd_node *data_tree - additional data tree that will be used
  *                    when checking any "when" or "must" conditions in the parsed tree that require
  *                    some nodes outside their subtree. It must be a list of top-level elements!
@@ -554,8 +554,8 @@ struct lyd_node *lyd_parse_fd(struct ly_ctx *ctx, int fd, LYD_FORMAT format, int
  *                    when checking any "when" or "must" conditions in the parsed tree that require
  *                    some nodes outside their subtree. It must be a list of top-level elements!
  *                - #LYD_OPT_RPCREPLY:
- *                  - const struct ::lyd_node *rpc_act - pointer to the RPC or action operation data node
- *                    of the reply.
+ *                  - const struct ::lyd_node *rpc_act - pointer to the whole RPC or action operation data
+ *                    tree (the request) of the reply.
  *                  - const struct ::lyd_node *data_tree - additional data tree that will be used
  *                    when checking any "when" or "must" conditions in the parsed tree that require
  *                    some nodes outside their subtree. It must be a list of top-level elements!
@@ -600,8 +600,8 @@ struct lyd_node *lyd_parse_path(struct ly_ctx *ctx, const char *path, LYD_FORMAT
  *                    when checking any "when" or "must" conditions in the parsed tree that require
  *                    some nodes outside their subtree. It must be a list of top-level elements!
  *                - #LYD_OPT_RPCREPLY:
- *                  - const struct ::lyd_node *rpc_act - pointer to the RPC or action operation data node
- *                    of the reply.
+ *                  - const struct ::lyd_node *rpc_act - pointer to the whole RPC or action operation data
+ *                    tree (the request) of the reply.
  *                  - const struct ::lyd_node *data_tree - additional data tree that will be used
  *                    when checking any "when" or "must" conditions in the parsed tree that require
  *                    some nodes outside their subtree. It must be a list of top-level elements!
@@ -1143,16 +1143,20 @@ int lyd_print_clb(ssize_t (*writeclb)(void *arg, const void *buf, size_t count),
 double lyd_dec64_to_double(const struct lyd_node *node);
 
 /**
- * @brief Get the real data type of the leaf/leaf-list node.
+ * @brief Get the real data type definition of the leaf/leaf-list node.
  *
  * Usually the data type can be obtained directly from the value_type member of the leaf/leaf-list.
- * However, in case the node is unresolved leafref, it can be more complicated to get the correct
- * data type, so this function can be used.
+ * However, in case the node is unresolved leafref or the complete definition of the type is needed, it can be quite
+ * complicated to get the correct data type, so this function can be used. The real type describes the value
+ * representation so it is not #LY_TYPE_UNION neither #LY_TYPE_LEAFREF.
  *
  * @param[in] leaf The leaf/leaf-list node to be examined.
- * @return The specific data type of the \p leaf.
+ * @param[in] resolve Flag to store the leaf's value as its value data, in this case the value is resolved in the data
+ *            tree. Otherwise the data tree is not checked, so e.g. leafref type can be returned even if the value
+ *            does not match any target value in the data tree.
+ * @return Pointer to the type definition of the \p leaf.
  */
-LY_DATA_TYPE lyd_leaf_type(const struct lyd_node_leaf_list *leaf);
+const struct lys_type *lyd_leaf_type(struct lyd_node_leaf_list *leaf, int resolve);
 
 /**@} */
 

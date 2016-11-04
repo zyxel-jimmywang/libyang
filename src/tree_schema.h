@@ -15,7 +15,12 @@
 #ifndef LY_TREE_SCHEMA_H_
 #define LY_TREE_SCHEMA_H_
 
-#include <endian.h>
+#ifdef __APPLE__
+  #include <machine/endian.h>
+#else
+  #include <endian.h>
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -609,6 +614,7 @@ struct lys_iffeature {
  *     -------------------+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  *     1 LYS_USESGRP      | | | | | | | | | | | | |x| | | | | |
  *       LYS_AUTOASSIGNED | | | | | | | | | | | | | | | |x| | |
+ *       LYS_IMPLICIT     | | | | | | | | | |x|x| | | | | | | |
  *       LYS_CONFIG_W     |x|x|x|x|x|x| | | | | | | | | | | |x|
  *                        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  *     2 LYS_CONFIG_R     |x|x|x|x|x|x| | | | | | | | | | | |x|
@@ -660,6 +666,7 @@ struct lys_iffeature {
 #define LYS_AUTOASSIGNED 0x01        /**< value was auto-assigned, applicable only to
                                           ::lys_type enum and bits flags */
 #define LYS_USESGRP      0x01        /**< flag for resolving uses in groupings, applicable only to ::lys_node_uses */
+#define LYS_IMPLICIT     0x01        /**< flag for implicitely created LYS_INPUT and LYS_OUTPUT nodes */
 #define LYS_VALID_DEP    0x200       /**< flag marking nodes, whose validation (when, must expressions or leafrefs)
                                           depends on nodes outside their subtree (applicable only to RPCs,
                                           notifications, and actions) */
@@ -807,8 +814,6 @@ struct lys_node_choice {
  * #units, #must_size, #must and #dflt members. In addition, the structure is compatible with the ::lys_node_leaflist
  * structure except the last #dflt member, which is replaced by ::lys_node_leaflist#min and ::lys_node_leaflist#max
  * members.
- *
- * ::lys_node_leaf is terminating node in the schema tree, so the #child member value is always NULL.
  *
  * The leaf schema node can be instantiated in the data tree, so the ::lys_node_leaf can be directly referenced from
  * ::lyd_node#schema.
@@ -961,6 +966,9 @@ struct lys_node_list {
     struct lys_tpdf *tpdf;           /**< array of typedefs */
     struct lys_node_leaf **keys;     /**< array of pointers to the key nodes */
     struct lys_unique *unique;       /**< array of unique statement structures */
+
+    const char *keys_str;              /**< string defining the keys, must be stored besides the keys array since the
+                                          keys may not be present in case the list is inside grouping */
 
     uint8_t unique_size;             /**< number of elements in the #unique array (number of unique statements) */
 };
@@ -1158,11 +1166,21 @@ struct lys_node_case {
  * ::lys_node#iffeature_size is replaced by the #tpdf_size member and ::lys_node#iffeature is replaced by the #tpdf
  * member.
  *
+ * Note, that the the inout nodes are always present in ::lys_node_rpc_action node as its input and output children
+ * nodes. If they are not specified explicitely in the schema, they are implicitly added to serve as possible target
+ * of augments. These implicit elements can be recognised via #LYS_IMPLICIT bit in flags member of the input/output
+ * node.
  */
 struct lys_node_inout {
     const char *name;
     void *fill1[2];                  /**< padding for compatibility with ::lys_node - dsc and ref */
-    uint16_t fill2[1];               /**< padding for compatibility with ::lys_node - flags and nacm */
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+    uint16_t flags:14;               /**< [schema node flags](@ref snodeflags) - only LYS_IMPLICIT is applicable */
+    uint16_t nacm:2;                 /**< [NACM extension flags](@ref nacmflags) - not used */
+#else
+    uint16_t nacm:2;                 /**< [NACM extension flags](@ref nacmflags) - not used */
+    uint16_t flags:14;               /**< [schema node flags](@ref snodeflags) - only LYS_IMPLICIT is applicable  */
+#endif
     struct lys_module *module;       /**< link to the node's data model */
 
     LYS_NODE nodetype;               /**< type of the node (mandatory) - #LYS_INPUT or #LYS_OUTPUT */
@@ -1224,10 +1242,14 @@ struct lys_node_notif {
 };
 
 /**
- * @brief Schema rpc node structure.
+ * @brief Schema rpc/action node structure.
  *
  * Beginning of the structure is completely compatible with ::lys_node structure extending it by the #tpdf_size and
  * #tpdf members.
+ *
+ * Note, that the rpc/action node has always input and output children nodes. If they are not specified explicitly in
+ * the schema, they are implicitly added to server as possible target of augments. These implicit elements can be
+ * recognized via #LYS_IMPLICIT bit in flags member of the input/output node.
  */
 struct lys_node_rpc_action {
     const char *name;                /**< node name (mandatory) */

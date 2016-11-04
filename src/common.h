@@ -62,6 +62,13 @@ char *get_current_dir_name(void);
 
 #define LY_BUF_SIZE 1024
 #define LY_APPTAG_LEN 128
+struct ly_err_item {
+    LY_ERR no;
+    LY_VECODE code;
+    char *msg;
+    char *path;
+    struct ly_err_item *next;
+};
 struct ly_err {
     LY_ERR no;
     LY_VECODE code;
@@ -69,12 +76,16 @@ struct ly_err {
     uint8_t buf_used;
     uint16_t path_index;
     uint8_t path_obj_type;
+    struct ly_err_item *errlist; /* list of stored errors */
     const void *path_obj;
     char msg[LY_BUF_SIZE];
     char path[LY_BUF_SIZE];
     char apptag[LY_APPTAG_LEN];
     char buf[LY_BUF_SIZE];
 };
+struct ly_err *ly_err_location(void);
+void ly_err_clean(int with_errno);
+void ly_err_repeat(void);
 
 /**
  * @brief libyang internal thread-specific buffer of LY_BUF_SIZE size
@@ -203,6 +214,8 @@ typedef enum {
     LYE_XPATH_INOP_1,
     LYE_XPATH_INOP_2,
     LYE_XPATH_INCTX,
+    LYE_XPATH_INMOD,
+    LYE_XPATH_INFUNC,
     LYE_XPATH_INARGCOUNT,
     LYE_XPATH_INARGTYPE,
     LYE_XPATH_DUMMY,
@@ -333,6 +346,12 @@ const char *transform_xml2json(struct ly_ctx *ctx, const char *expr, struct lyxm
  * @return Transformed JSON expression in the dictionary, NULL on error.
  */
 const char *transform_schema2json(const struct lys_module *module, const char *expr);
+
+/**
+ * @brief Same as transform_schema2json, but dumbed down, because if-feature expressions
+ *        are not valid XPath expressions.
+ */
+const char *transform_iffeat_schema2json(const struct lys_module *module, const char *expr);
 
 /**
  * @brief Wrapper for realloc() call. The only difference is that if it fails to
