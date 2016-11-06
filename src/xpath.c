@@ -2799,9 +2799,14 @@ xpath_count(struct lyxp_set **args, uint16_t UNUSED(arg_count), struct lyd_node 
  * @return EXIT_SUCCESS on success, -1 on error.
  */
 static int
-xpath_current(struct lyxp_set **UNUSED(args), uint16_t UNUSED(arg_count), struct lyd_node *cur_node,
+xpath_current(struct lyxp_set **args, uint16_t arg_count, struct lyd_node *cur_node,
               struct lyxp_set *set, int options)
 {
+    if (arg_count || args) {
+        LOGVAL(LYE_XPATH_INARGCOUNT, LY_VLOG_NONE, NULL, arg_count, "current()");
+        return -1;
+    }
+
     if (options & LYXP_SNODE_ALL) {
         set_snode_clear_ctx(set);
 
