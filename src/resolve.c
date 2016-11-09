@@ -1605,11 +1605,10 @@ schema_nodeid_siblingcheck(const struct lys_node *sibling, int8_t *shorthand, co
                            int implemented_mod, const struct lys_node **start)
 {
     const struct lys_module *prefix_mod;
-    int sh = 0;
 
     /* module check */
     prefix_mod = lys_get_import_module(module, NULL, 0, mod_name, mod_name_len);
-    if (implemented_mod) {
+    if (prefix_mod && implemented_mod) {
         prefix_mod = lys_get_implemented_module(prefix_mod);
     }
     if (!prefix_mod) {
@@ -1624,7 +1623,6 @@ schema_nodeid_siblingcheck(const struct lys_node *sibling, int8_t *shorthand, co
         if (*shorthand != -1) {
             *shorthand = *shorthand ? 0 : 1;
         }
-        sh = 1;
     }
 
     /* the result node? */
@@ -1635,7 +1633,7 @@ schema_nodeid_siblingcheck(const struct lys_node *sibling, int8_t *shorthand, co
         return 0;
     }
 
-    if (!sh) {
+    if (!(*shorthand)) {
         /* move down the tree, if possible */
         if (sibling->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA)) {
             return -1;
@@ -1646,18 +1644,19 @@ schema_nodeid_siblingcheck(const struct lys_node *sibling, int8_t *shorthand, co
     return 2;
 }
 
-/* start - relative, module - absolute, -1 error, EXIT_SUCCESS ok (but ret can still be NULL), >0 unexpected char on ret - 1 */
+/* start - relative, module - absolute, -1 error, EXIT_SUCCESS ok (but ret can still be NULL), >0 unexpected char on ret - 1
+ * implement: 0 - do not change the implemented status of the affected modules, 1 - change implemented status of the affected modules
+ */
 int
 resolve_augment_schema_nodeid(const char *nodeid, const struct lys_node *start, const struct lys_module *module,
-                              const struct lys_node **ret)
+                              int implement, const struct lys_node **ret)
 {
-    const char *name, *mod_name, *id;
+    const char *name, *mod_name, *mod_name_prev, *id;
     const struct lys_node *sibling;
     int r, nam_len, mod_name_len, is_relative = -1;
     int8_t shorthand = 0;
-    int implemented_search = 0;
     /* resolved import module from the start module, it must match the next node-name-match sibling */
-    const struct lys_module *start_mod;
+    const struct lys_module *start_mod, *aux_mod;
 
     assert(nodeid && (start || module) && !(start && module) && ret);
 
@@ -1679,13 +1678,20 @@ resolve_augment_schema_nodeid(const char *nodeid, const struct lys_node *start, 
     /* absolute-schema-nodeid */
     } else {
         start_mod = lys_get_import_module(module, NULL, 0, mod_name, mod_name_len);
-        if (start_mod != lys_main_module(module)) {
+        if (start_mod != lys_main_module(module) && start_mod && !start_mod->implemented) {
             /* if the submodule augments the mainmodule (or in general a module augments
              * itself, we don't want to search for the implemented module but augments
              * the module anyway. But when augmenting another module, we need the implemented
              * revision of the module if any */
-            start_mod = lys_get_implemented_module(start_mod);
-            implemented_search = 1;
+            aux_mod = lys_get_implemented_module(start_mod);
+            if (!aux_mod->implemented && implement) {
+                /* make the found module implemented */
+                if (lys_set_implemented(aux_mod)) {
+                    return -1;
+                }
+            }
+            start_mod = aux_mod;
+            implement++;
         }
         if (!start_mod) {
             return -1;
@@ -1695,12 +1701,13 @@ resolve_augment_schema_nodeid(const char *nodeid, const struct lys_node *start, 
 
     while (1) {
         sibling = NULL;
+        mod_name_prev = mod_name;
         while ((sibling = lys_getnext(sibling, lys_parent(start), start_mod,
                                       LYS_GETNEXT_WITHCHOICE | LYS_GETNEXT_WITHCASE | LYS_GETNEXT_WITHINOUT))) {
             /* name match */
             if (sibling->name && !strncmp(name, sibling->name, nam_len) && !sibling->name[nam_len]) {
                 r = schema_nodeid_siblingcheck(sibling, &shorthand, id, module, mod_name, mod_name_len,
-                                               implemented_search, &start);
+                                               implement, &start);
                 if (r == 0) {
                     *ret = sibling;
                     return EXIT_SUCCESS;
@@ -1724,6 +1731,31 @@ resolve_augment_schema_nodeid(const char *nodeid, const struct lys_node *start, 
             return ((id - nodeid) - r) + 1;
         }
         id += r;
+
+        if ((mod_name && mod_name_prev && strncmp(mod_name, mod_name_prev, mod_name_len + 1)) ||
+                (mod_name != mod_name_prev && (!mod_name || !mod_name_prev))) {
+            /* we are getting into another module (augment) */
+            if (implement) {
+                /* we have to check that also target modules are implemented, if not, we have to change it */
+                aux_mod = lys_get_import_module(module, NULL, 0, mod_name, mod_name_len);
+                if (!aux_mod) {
+                    return -1;
+                }
+                if (!aux_mod->implemented) {
+                    aux_mod = lys_get_implemented_module(aux_mod);
+                    if (!aux_mod->implemented) {
+                        /* make the found module implemented */
+                        if (lys_set_implemented(aux_mod)) {
+                            return -1;
+                        }
+                    }
+                }
+            } else {
+                /* we are not implementing the module itself, so the augments outside the module are ignored */
+                *ret = NULL;
+                return EXIT_SUCCESS;
+            }
+        }
     }
 
     /* cannot get here */
@@ -3774,7 +3806,8 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
                         const struct lys_node **ret)
 {
     const struct lys_node *node, *op_node = NULL;
-    const struct lys_module *mod, *mod2;
+    const struct lys_module *mod;
+    struct lys_module *mod_start;
     const char *id, *prefix, *name;
     int pref_len, nam_len, parent_times, has_predicate;
     int i, first_iter, rc;
@@ -3790,9 +3823,9 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
              op_node = lys_parent(op_node));
     }
 
-    mod2 = lys_node_module(parent);
+    mod_start = lys_node_module(parent);
     do {
-        if ((i = parse_path_arg(parent->module, id, &prefix, &pref_len, &name, &nam_len, &parent_times, &has_predicate)) < 1) {
+        if ((i = parse_path_arg(mod_start, id, &prefix, &pref_len, &name, &nam_len, &parent_times, &has_predicate)) < 1) {
             LOGVAL(LYE_INCHAR, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent, id[-i], &id[-i]);
             return -1;
         }
@@ -3801,15 +3834,29 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
         if (first_iter) {
             if (parent_times == -1) {
                 /* resolve prefix of the module */
-                mod = lys_get_import_module(parent->module, NULL, 0, prefix, pref_len);
-                mod = lys_get_implemented_module(mod);
-                /* get start node */
-                node = mod ? mod->data : NULL;
-                if (!node) {
+                mod = prefix ? lys_get_import_module(mod_start, NULL, 0, prefix, pref_len) : mod_start;
+                if (!mod) {
                     LOGVAL(LYE_NORESOLV, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent,
                            "leafref", path);
                     return EXIT_FAILURE;
                 }
+                if (!mod->implemented) {
+                    mod = lys_get_implemented_module(mod);
+                    if (!mod->implemented) {
+                        /* make the found module implemented */
+                        if (lys_set_implemented(mod)) {
+                            return EXIT_FAILURE;
+                        }
+                    }
+                }
+                /* get start node */
+                if (!mod->data) {
+                    LOGVAL(LYE_NORESOLV, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent,
+                           "leafref", path);
+                    return EXIT_FAILURE;
+                }
+                node = mod->data;
+
             } else if (parent_times > 0) {
                 if (parent_tpdf) {
                     /* the path is not allowed to contain relative path since we are in top level typedef */
@@ -3830,11 +3877,44 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
                         return EXIT_FAILURE;
                     }
                 }
+
+                /* now we have to check that if we are going into a node from a different module,
+                 * the module is implemented (so its augments are applied) */
+                mod = prefix ? lys_get_import_module(mod_start, NULL, 0, prefix, pref_len) : mod_start;
+                if (!mod) {
+                    LOGVAL(LYE_NORESOLV, LY_VLOG_LYS, parent, "leafref", path);
+                    return EXIT_FAILURE;
+                }
+                if (!mod->implemented) {
+                    mod = lys_get_implemented_module(mod);
+                    if (!mod->implemented) {
+                        /* make the found module implemented */
+                        if (lys_set_implemented(mod)) {
+                            return EXIT_FAILURE;
+                        }
+                    }
+                }
             } else {
                 LOGINT;
                 return -1;
             }
         } else {
+            /* we have to first check that the module we are going into is implemented */
+            mod = prefix ? lys_get_import_module(mod_start, NULL, 0, prefix, pref_len) : mod_start;
+            if (!mod) {
+                LOGVAL(LYE_NORESOLV, LY_VLOG_LYS, parent, "leafref", path);
+                return EXIT_FAILURE;
+            }
+            if (!mod->implemented) {
+                mod = lys_get_implemented_module(mod);
+                if (!mod->implemented) {
+                    /* make the found module implemented */
+                    if (lys_set_implemented(mod)) {
+                        return EXIT_FAILURE;
+                    }
+                }
+            }
+
             /* move down the tree, if possible */
             if (node->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA)) {
                 LOGVAL(LYE_INCHAR, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent, name[0], name);
@@ -3849,7 +3929,7 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
         }
 
         if (!prefix) {
-            prefix = lys_node_module(parent)->name;
+            prefix = mod_start->name;
         }
 
         rc = lys_get_sibling(node, prefix, pref_len, name, nam_len, LYS_ANY & ~(LYS_USES | LYS_GROUPING), &node);
@@ -3884,13 +3964,6 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
             }
             id += i;
             has_predicate = 0;
-        }
-        mod = lys_node_module(node);
-        if (!mod->implemented && mod != mod2) {
-            /* set the module implemented */
-            if (lys_set_implemented(mod)) {
-                return -1;
-            }
         }
     } while (id[0]);
 
@@ -4151,8 +4224,14 @@ lys_check_xpath(struct lys_node *node, int check_place)
             }
             if (parent->nodetype == LYS_AUGMENT) {
                 if (!((struct lys_node_augment *)parent)->target) {
-                    /* uresolved augment, skip for now (will be checked later) */
-                    return EXIT_SUCCESS;
+                    /* unresolved augment */
+                    if (parent->module->implemented) {
+                        /* skip for now (will be checked later) */
+                        return EXIT_FAILURE;
+                    } else {
+                        /* not implemented augment, skip resolving */
+                        return EXIT_SUCCESS;
+                    }
                 } else {
                     parent = ((struct lys_node_augment *)parent)->target;
                     continue;
@@ -4223,17 +4302,18 @@ check_leafref_config(struct lys_node_leaf *leaf, struct lys_type *type)
  * @param[in] node Siblings and their children to have flags changed.
  * @param[in] clear Flag to clear all config flags if parent is LYS_NOTIF, LYS_INPUT, LYS_OUTPUT, LYS_RPC.
  * @param[in] flags Flags to assign to all the nodes.
+ * @param[in,out] unres List of unresolved items.
  *
  * @return 0 on success, -1 on error.
  */
 static int
-inherit_config_flag(struct lys_node *node, int flags, int clear)
+inherit_config_flag(struct lys_node *node, int flags, int clear, struct unres_schema *unres)
 {
     struct lys_node_leaf *leaf;
 
     assert(!(flags ^ (flags & LYS_CONFIG_MASK)));
     LY_TREE_FOR(node, node) {
-        if (lys_check_xpath(node, 0)) {
+        if (lys_has_xpath(node) && unres_schema_add_node(node->module, unres, node, UNRES_XPATH, NULL) == -1) {
             return -1;
         }
         if (clear) {
@@ -4261,7 +4341,7 @@ inherit_config_flag(struct lys_node *node, int flags, int clear)
             }
         }
         if (!(node->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA))) {
-            if (inherit_config_flag(node->child, flags, clear)) {
+            if (inherit_config_flag(node->child, flags, clear, unres)) {
                 return -1;
             }
         } else if (node->nodetype & (LYS_LEAF | LYS_LEAFLIST)) {
@@ -4280,11 +4360,12 @@ inherit_config_flag(struct lys_node *node, int flags, int clear)
  *
  * @param[in] aug Augment to use.
  * @param[in] siblings Nodes where to start the search in. If set, uses augment, if not, standalone augment.
+ * @param[in,out] unres List of unresolved items.
  *
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on forward reference, -1 on error.
  */
 static int
-resolve_augment(struct lys_node_augment *aug, struct lys_node *siblings)
+resolve_augment(struct lys_node_augment *aug, struct lys_node *siblings, struct unres_schema *unres)
 {
     int rc, clear_config;
     struct lys_node *sub;
@@ -4292,9 +4373,10 @@ resolve_augment(struct lys_node_augment *aug, struct lys_node *siblings)
     struct lys_module *mod;
 
     assert(aug && !aug->target);
+    mod = lys_main_module(aug->module);
 
     /* resolve target node */
-    rc = resolve_augment_schema_nodeid(aug->target_name, siblings, (siblings ? NULL : aug->module), &aug_target);
+    rc = resolve_augment_schema_nodeid(aug->target_name, siblings, (siblings ? NULL : aug->module), mod->implemented, &aug_target);
     if (rc == -1) {
         return -1;
     }
@@ -4302,19 +4384,22 @@ resolve_augment(struct lys_node_augment *aug, struct lys_node *siblings)
         LOGVAL(LYE_INCHAR, LY_VLOG_LYS, aug, aug->target_name[rc - 1], &aug->target_name[rc - 1]);
         return -1;
     }
-    if (!aug_target) {
+    if (!aug_target && mod->implemented) {
         LOGVAL(LYE_INRESOLV, LY_VLOG_LYS, aug, "augment", aug->target_name);
         return EXIT_FAILURE;
     }
-
     /* check that we want to connect augment into its target */
-    mod = lys_main_module(aug->module);
     if (!mod->implemented) {
         /* it must be augment only to the same module,
          * otherwise we do not apply augment in not-implemented
          * module. If the module is set to be implemented in future,
          * the augment is being resolved and checked again */
-        for (sub = aug->target; sub; sub = lys_parent(sub)) {
+        if (!aug_target) {
+            /* target was not even resolved */
+            return EXIT_SUCCESS;
+        }
+        /* target was resolved, but it may refer another module */
+        for (sub = (struct lys_node *)aug_target; sub; sub = lys_parent(sub)) {
             if (lys_node_module(sub) != mod) {
                 /* this is not an implemented module and the augment
                  * target some other module, so avoid its connecting
@@ -4334,7 +4419,7 @@ resolve_augment(struct lys_node_augment *aug, struct lys_node *siblings)
      * the added nodes cannot be mandatory
      */
     if (!aug->parent && (lys_node_module((struct lys_node *)aug) != lys_node_module(aug_target))
-            && (rc = lyp_check_mandatory_augment(aug))) {
+            && (rc = lyp_check_mandatory_augment(aug, aug_target))) {
         return rc;
     }
 
@@ -4386,7 +4471,7 @@ resolve_augment(struct lys_node_augment *aug, struct lys_node *siblings)
     for(parent = aug_target; parent && !(parent->nodetype & (LYS_NOTIF | LYS_INPUT | LYS_OUTPUT | LYS_RPC)); parent = lys_parent(parent));
     clear_config = (parent) ? 1 : 0;
     LY_TREE_FOR(aug->child, sub) {
-        if (inherit_config_flag(sub, aug_target->flags & LYS_CONFIG_MASK, clear_config)) {
+        if (inherit_config_flag(sub, aug_target->flags & LYS_CONFIG_MASK, clear_config, unres)) {
             return -1;
         }
     }
@@ -4700,7 +4785,7 @@ resolve_uses(struct lys_node_uses *uses, struct unres_schema *unres)
 
     /* apply augments */
     for (i = 0; i < uses->augment_size; i++) {
-        rc = resolve_augment(&uses->augment[i], uses->child);
+        rc = resolve_augment(&uses->augment[i], uses->child, unres);
         if (rc) {
             goto fail;
         }
@@ -6000,7 +6085,7 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
 
         if (!lys_node_module(node)->implemented) {
             /* not implemented module, don't bother with resolving the leafref
-             * if the module is set to be implemented, tha path will be resolved then */
+             * if the module is set to be implemented, the path will be resolved then */
             rc = 0;
             break;
         }
@@ -6168,7 +6253,7 @@ featurecheckdone:
         rc = resolve_unique(unique_info->list, unique_info->expr, unique_info->trg_type);
         break;
     case UNRES_AUGMENT:
-        rc = resolve_augment(item, NULL);
+        rc = resolve_augment(item, NULL, unres);
         break;
     case UNRES_XPATH:
         node = (struct lys_node *)item;
@@ -6362,9 +6447,22 @@ resolve_unres_schema(struct lys_module *mod, struct unres_schema *unres)
             if (unres->type[i] == UNRES_RESOLVED) {
                 continue;
             }
+            if (unres->type[i] == UNRES_XPATH) {
+                /* unresolvable XPaths are actually supposed to be warnings - they may be
+                 * unresolved due to the not implemented target module so it shouldn't avoid
+                 * parsing the module, but we still want to announce some issue here */
+                ly_vlog_hide(0xff);
+            }
             resolve_unres_schema_item(mod, unres->item[i], unres->type[i], unres->str_snode[i], unres);
+            if (unres->type[i] == UNRES_XPATH && *ly_vlog_hide_location() == 0xff) {
+                unres->type[i] = UNRES_RESOLVED;
+                resolved++;
+                ly_vlog_hide(0);
+            }
         }
-        return -1;
+        if (resolved < unres->count) {
+            return -1;
+        }
     }
 
     LOGVRB("All \"%s\" schema nodes and constraints resolved.", mod->name);
@@ -6415,10 +6513,20 @@ unres_schema_add_node(struct lys_module *mod, struct unres_schema *unres, void *
                       struct lys_node *snode)
 {
     int rc, log_hidden;
+    uint32_t u;
     struct lyxml_elem *yin;
 
     assert(unres && item && ((type != UNRES_LEAFREF) && (type != UNRES_INSTID) && (type != UNRES_WHEN)
            && (type != UNRES_MUST)));
+
+    /* check for duplicities in unres */
+    for (u = 0; u < unres->count; u++) {
+        if (unres->type[u] == type && unres->item[u] == item &&
+                unres->str_snode[u] == snode && unres->module[u] == mod) {
+            /* duplication, will be resolved later */
+            return EXIT_FAILURE;
+        }
+    }
 
     if (*ly_vlog_hide_location()) {
         log_hidden = 1;

@@ -1518,7 +1518,7 @@ lys_augment_dup(struct lys_module *module, struct lys_node *parent, struct lys_n
         new[i].nodetype = old[i].nodetype;
 
         /* this must succeed, it was already resolved once */
-        if (resolve_augment_schema_nodeid(new[i].target_name, parent->child, NULL,
+        if (resolve_augment_schema_nodeid(new[i].target_name, parent->child, NULL, 1,
                                           (const struct lys_node **)&new[i].target)) {
             LOGINT;
             free(new);
@@ -2175,7 +2175,7 @@ static struct lys_node *
 lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const struct lys_node *node, uint8_t nacm,
                        struct unres_schema *unres, int shallow, int finalize)
 {
-    struct lys_node *retval = NULL, *iter;
+    struct lys_node *retval = NULL, *iter, *p;
     struct ly_ctx *ctx = module->ctx;
     int i, j, rc;
     unsigned int size, size1, size2;
@@ -2340,7 +2340,10 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
         }
 
         /* inherit config flags */
-        for (iter = parent; iter && (iter->nodetype == LYS_USES); iter = lys_parent(iter));
+        p = parent;
+        do {
+            for (iter = p; iter && (iter->nodetype == LYS_USES); iter = iter->parent);
+        } while (iter && iter->nodetype == LYS_AUGMENT && (p = lys_parent(iter)));
         if (iter) {
             flags = iter->flags & LYS_CONFIG_MASK;
         } else {
@@ -2631,6 +2634,76 @@ error:
     return NULL;
 }
 
+int
+lys_has_xpath(const struct lys_node *node)
+{
+    assert(node);
+
+    switch (node->nodetype) {
+    case LYS_AUGMENT:
+        if (((struct lys_node_augment *)node)->when) {
+            return 1;
+        }
+        break;
+    case LYS_CASE:
+        if (((struct lys_node_case *)node)->when) {
+            return 1;
+        }
+        break;
+    case LYS_CHOICE:
+        if (((struct lys_node_choice *)node)->when) {
+            return 1;
+        }
+        break;
+    case LYS_ANYDATA:
+        if (((struct lys_node_anydata *)node)->when || ((struct lys_node_anydata *)node)->must_size) {
+            return 1;
+        }
+        break;
+    case LYS_LEAF:
+        if (((struct lys_node_leaf *)node)->when || ((struct lys_node_leaf *)node)->must_size) {
+            return 1;
+        }
+        break;
+    case LYS_LEAFLIST:
+        if (((struct lys_node_leaflist *)node)->when || ((struct lys_node_leaflist *)node)->must_size) {
+            return 1;
+        }
+        break;
+    case LYS_LIST:
+        if (((struct lys_node_list *)node)->when || ((struct lys_node_list *)node)->must_size) {
+            return 1;
+        }
+        break;
+    case LYS_CONTAINER:
+        if (((struct lys_node_container *)node)->when || ((struct lys_node_container *)node)->must_size) {
+            return 1;
+        }
+        break;
+    case LYS_INPUT:
+    case LYS_OUTPUT:
+        if (((struct lys_node_inout *)node)->must_size) {
+            return 1;
+        }
+        break;
+    case LYS_NOTIF:
+        if (((struct lys_node_notif *)node)->must_size) {
+            return 1;
+        }
+        break;
+    case LYS_USES:
+        if (((struct lys_node_uses *)node)->when) {
+            return 1;
+        }
+        break;
+    default:
+        /* does not have XPath */
+        break;
+    }
+
+    return 0;
+}
+
 struct lys_node *
 lys_node_dup(struct lys_module *module, struct lys_node *parent, const struct lys_node *node, uint8_t nacm,
              struct unres_schema *unres, int shallow)
@@ -2651,11 +2724,9 @@ lys_node_dup(struct lys_module *module, struct lys_node *parent, const struct ly
     if (finalize) {
         /* check xpath expressions in the instantiated tree */
         for (iter = next = parent->child; iter; iter = next) {
-            if (iter->nodetype != LYS_GROUPING) {
-                if (lys_check_xpath(iter, 0)) {
-                    /* invalid xpath */
-                    return NULL;
-                }
+            if (lys_has_xpath(iter) && unres_schema_add_node(module, unres, iter, UNRES_XPATH, NULL) == -1) {
+                /* invalid xpath */
+                return NULL;
             }
 
             /* select next item */
@@ -3157,6 +3228,7 @@ lys_find_xpath(const struct lys_node *node, const char *expr, int options)
     /* node and nodetype won't matter at all since it is absolute */
     if (lyxp_atomize(expr, node, LYXP_NODE_ELEM, &set, opts)) {
         free(set.val.snodes);
+        LOGVAL(LYE_SPEC, LY_VLOG_LYS, node, "Resolving XPath expression \"%s\" failed.", expr);
         return NULL;
     }
 
@@ -3218,6 +3290,7 @@ lys_xpath_atomize(const struct lys_node *cur_snode, enum lyxp_node_type cur_snod
 
     if (lyxp_atomize(expr, cur_snode, cur_snode_type, &set, options)) {
         free(set.val.snodes);
+        LOGVAL(LYE_SPEC, LY_VLOG_LYS, cur_snode, "Resolving XPath expression \"%s\" failed.", expr);
         return NULL;
     }
 
@@ -3329,7 +3402,8 @@ lys_switch_deviation(struct lys_deviation *dev, const struct lys_module *target_
                 parent_path = strndup(dev->target_name, strrchr(dev->target_name, '/') - dev->target_name);
 
                 target = NULL;
-                ret = resolve_augment_schema_nodeid(parent_path, NULL, target_module, (const struct lys_node **)&target);
+                ret = resolve_augment_schema_nodeid(parent_path, NULL, target_module, 1,
+                                                    (const struct lys_node **)&target);
                 free(parent_path);
                 if (ret || !target) {
                     LOGINT;
@@ -3346,7 +3420,8 @@ lys_switch_deviation(struct lys_deviation *dev, const struct lys_module *target_
         } else {
             /* adding not-supported deviation */
             target = NULL;
-            ret = resolve_augment_schema_nodeid(dev->target_name, NULL, target_module, (const struct lys_node **)&target);
+            ret = resolve_augment_schema_nodeid(dev->target_name, NULL, target_module, 1,
+                                                (const struct lys_node **)&target);
             if (ret || !target) {
                 LOGINT;
                 return;
@@ -3357,7 +3432,8 @@ lys_switch_deviation(struct lys_deviation *dev, const struct lys_module *target_
         }
     } else {
         target = NULL;
-        ret = resolve_augment_schema_nodeid(dev->target_name, NULL, target_module, (const struct lys_node **)&target);
+        ret = resolve_augment_schema_nodeid(dev->target_name, NULL, target_module, 1,
+                                            (const struct lys_node **)&target);
         if (ret || !target) {
             LOGINT;
             return;
@@ -3635,6 +3711,9 @@ lys_set_implemented(const struct lys_module *module)
             }
         }
     }
+    /* try again resolve augments in other modules possibly augmenting this one,
+     * since we have just enabled it
+     */
     /* resolve rest of unres items */
     if (unres->count && resolve_unres_schema((struct lys_module *)module, unres)) {
         goto error;
