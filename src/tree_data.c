@@ -2042,7 +2042,7 @@ lyd_diff_compare(struct lyd_node *first, struct lyd_node *second,
                  struct ly_set *ordset_keys, struct ly_set *ordset, int options)
 {
     int rc;
-    char *str1, *str2;
+    char *str1 = NULL, *str2 = NULL;
     struct lyd_node_anydata *anydata;
 
     if (first->dflt && !(options & LYD_DIFFOPT_WITHDEFAULTS)) {
@@ -3073,15 +3073,26 @@ lyd_insert_common(struct lyd_node *parent, struct lyd_node **sibling, struct lyd
                 }
             } else if (isrpc) {
                 /* add to the specific position in rpc/rpc-reply/action */
-                for (par1 = ins->schema->parent; !(par1->nodetype & (LYS_INPUT | LYS_OUTPUT)); par1 = par1->parent);
+                for (par1 = ins->schema->parent; !(par1->nodetype & (LYS_INPUT | LYS_OUTPUT)); par1 = lys_parent(par1));
                 siter = NULL;
                 LY_TREE_FOR(start, iter) {
-                    while ((siter = lys_getnext(siter, par1, par1->module, 0))) {
+                    while ((siter = lys_getnext(siter, par1, lys_node_module(par1), 0))) {
                         if (iter->schema == siter || ins->schema == siter) {
                             break;
                         }
                     }
                     if (ins->schema == siter) {
+                        if ((siter->nodetype & (LYS_LEAFLIST | LYS_LIST)) && iter->schema == siter) {
+                            /* we are inserting leaflist/list instance, but since there are already
+                             * some instances of the same leaflist/list, we want to insert the new one
+                             * as the last instance, so here we have to move on */
+                            while (iter && iter->schema == siter) {
+                                iter = iter->next;
+                            }
+                            if (!iter) {
+                                break;
+                            }
+                        }
                         /* we have the correct place for new node (before the iter) */
                         if (iter == start) {
                             start = ins;

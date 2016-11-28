@@ -994,6 +994,10 @@ make_canonical(struct ly_ctx *ctx, int type, const char **value, void *data1, vo
         c = *((uint8_t *)data2);
         if (num) {
             count = sprintf(buf, "%"PRId64" ", num);
+            if ((count - 1) <= c) {
+                /* we have 0. value, add a space for the leading zero */
+                count = sprintf(buf, "0%"PRId64" ", num);
+            }
             for (i = c, j = 1; i > 0 ; i--) {
                 if (j && i > 1 && buf[count - 2] == '0') {
                     /* we have trailing zero to skip */
@@ -1062,7 +1066,7 @@ lyp_parse_value(struct lys_type *type, const char **value_, struct lyxml_elem *x
     int c, i, j, len, found = 0, hidden;
     int64_t num;
     uint64_t unum;
-    const char *ptr, *value = *value_;
+    const char *ptr, *ptr2, *value = *value_;
     struct lys_type_bit **bits = NULL;
     struct lys_ident *ident;
 
@@ -1074,7 +1078,36 @@ lyp_parse_value(struct lys_type *type, const char **value_, struct lyxml_elem *x
 
     switch(type->base) {
     case LY_TYPE_BINARY:
-        if (validate_length_range(0, (value ? strlen(value) : 0), 0, 0, 0, type, value, (struct lyd_node *)leaf)) {
+        /* get number of octets for length validation */
+        unum = 0;
+        if (value) {
+            ptr = value;
+            ptr2 = strchr(value, '\n');
+            while (ptr2) {
+                unum += ptr2 - ptr;
+                ptr = ptr2 + 1;
+                ptr2 = strchr(ptr, '\n');
+            }
+            unum += strlen(ptr);
+        }
+
+        if (unum & 3) {
+            /* base64 length must be multiple of 4 chars */
+            LOGVAL(LYE_INVAL, LY_VLOG_LYD, leaf, value, leaf->schema->name);
+            LOGVAL(LYE_SPEC, LY_VLOG_LYD, leaf, "Base64 encoded value length must be divisible by 4.");
+            goto cleanup;
+        }
+        len = (unum / 4) * 3;
+        /* check padding */
+        if (unum) {
+            if (ptr[strlen(ptr) - 1] == '=') {
+                len--;
+            }
+            if (ptr[strlen(ptr) - 2] == '=') {
+                len--;
+            }
+        }
+        if (validate_length_range(0, len, 0, 0, 0, type, value, (struct lyd_node *)leaf)) {
             goto cleanup;
         }
 

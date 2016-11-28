@@ -88,7 +88,8 @@ parse_range_dec64(const char **str_num, uint8_t dig, int64_t *num)
     }
     /* remove trailing zeros */
     if (trailing_zeros) {
-        str_dig = str_dig - trailing_zeros;
+        str_dig -= trailing_zeros;
+        str_exp -= trailing_zeros;
         ret = ret / dec_pow(trailing_zeros);
     }
 
@@ -2266,11 +2267,11 @@ resolve_partial_json_data_nodeid(const char *nodeid, const char *llist_value, st
     last_parsed = r;
 
     if (is_relative) {
-        prev_mod = start->schema->module;
+        prev_mod = lyd_node_module(start);
         start = start->child;
     } else {
         for (; start->parent; start = start->parent);
-        prev_mod = start->schema->module;
+        prev_mod = lyd_node_module(start);
     }
 
     while (1) {
@@ -2331,7 +2332,7 @@ resolve_partial_json_data_nodeid(const char *nodeid, const char *llist_value, st
                 } else {
                     prefix_mod = prev_mod;
                 }
-                if (prefix_mod != lys_node_module(sibling->schema)) {
+                if (prefix_mod != lyd_node_module(sibling)) {
                     continue;
                 }
 
@@ -2401,10 +2402,8 @@ resolve_partial_json_data_nodeid(const char *nodeid, const char *llist_value, st
                     return NULL;
                 }
                 last_match = sibling;
+                prev_mod = lyd_node_module(sibling);
                 start = sibling->child;
-                if (start) {
-                    prev_mod = start->schema->module;
-                }
                 break;
             }
         }
@@ -4379,10 +4378,13 @@ resolve_augment(struct lys_node_augment *aug, struct lys_node *siblings, struct 
     rc = resolve_augment_schema_nodeid(aug->target_name, siblings, (siblings ? NULL : aug->module), mod->implemented, &aug_target);
     if (rc == -1) {
         return -1;
-    }
-    if (rc > 0) {
+    } else if (rc > 0) {
         LOGVAL(LYE_INCHAR, LY_VLOG_LYS, aug, aug->target_name[rc - 1], &aug->target_name[rc - 1]);
         return -1;
+    } else if (rc == 0 && aug->target) {
+        /* augment was resolved as a side effect of setting module implemented when
+         * resolving augment schema nodeid, so we are done here */
+        return 0;
     }
     if (!aug_target && mod->implemented) {
         LOGVAL(LYE_INRESOLV, LY_VLOG_LYS, aug, "augment", aug->target_name);
@@ -6341,8 +6343,8 @@ print_unres_schema_item_fail(void *item, enum UNRES_ITEM type, void *str_node)
                ((struct lys_node_augment *)item)->target_name);
         break;
     case UNRES_XPATH:
-        LOGVRB("Resolving %s \"%s\" with the context node \"%s\" failed, it will be attempted later.", "XPath",
-               (char *)str_node, ((struct lys_node *)item)->name);
+        LOGVRB("Resolving %s \"%s\" failed, it will be attempted later.", "XPath expressions of",
+               ((struct lys_node *)item)->name);
         break;
     default:
         LOGINT;
