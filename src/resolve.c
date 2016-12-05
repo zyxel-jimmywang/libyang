@@ -3097,7 +3097,7 @@ check_default(struct lys_type *type, const char **value, struct lys_module *modu
             }
         }
     } else {
-        if (!lyp_parse_value(&((struct lys_node_leaf *)node.schema)->type, &node.value_str, NULL, NULL, &node, 1, 1)) {
+        if (!lyp_parse_value(&((struct lys_node_leaf *)node.schema)->type, &node.value_str, NULL, NULL, &node, 1, 1, 1)) {
             /* possible forward reference */
             ret = 1;
             if (base_tpdf) {
@@ -5150,10 +5150,12 @@ resolve_base_ident(const struct lys_module *module, struct lys_ident *ident, con
 struct lys_ident *
 resolve_identref(struct lys_type *type, const char *ident_name, struct lyd_node *node)
 {
-    const char *mod_name, *name;
+    const char *mod_name, *name, *mod_name_iter;
     int mod_name_len, rc, i;
     unsigned int u;
     struct lys_ident *der, *cur;
+
+    assert(type && ident_name && node);
 
     if (!type || (!type->info.ident.count && !type->der) || !ident_name) {
         return NULL;
@@ -5161,29 +5163,25 @@ resolve_identref(struct lys_type *type, const char *ident_name, struct lyd_node 
 
     rc = parse_node_identifier(ident_name, &mod_name, &mod_name_len, &name, NULL);
     if (rc < 1) {
-        if (node) {
-            LOGVAL(LYE_INCHAR, LY_VLOG_LYD, node, ident_name[-rc], &ident_name[-rc]);
-        } else {
-            LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid identityref value \"%s\".", ident_name);
-            ly_vecode = LYVE_INCHAR;
-        }
+        LOGVAL(LYE_INCHAR, LY_VLOG_LYD, node, ident_name[-rc], &ident_name[-rc]);
         return NULL;
     } else if (rc < (signed)strlen(ident_name)) {
-        if (node) {
-            LOGVAL(LYE_INCHAR, LY_VLOG_LYD, node, ident_name[rc], &ident_name[rc]);
-        } else {
-            LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid identityref value \"%s\".", ident_name);
-            ly_vecode = LYVE_INCHAR;
-        }
+        LOGVAL(LYE_INCHAR, LY_VLOG_LYD, node, ident_name[rc], &ident_name[rc]);
         return NULL;
+    }
+    if (!mod_name) {
+        /* no prefix, identity must be defined in the same module as node */
+        mod_name = lys_main_module(node->schema->module)->name;
+        mod_name_len = strlen(mod_name);
     }
 
     /* go through all the bases in all the derived types */
     while (type->der) {
         for (i = 0; i < type->info.ident.count; ++i) {
             cur = type->info.ident.ref[i];
-            if (!strcmp(cur->name, name) && (!mod_name
-                    || (!strncmp(cur->module->name, mod_name, mod_name_len) && !cur->module->name[mod_name_len]))) {
+            mod_name_iter = lys_main_module(cur->module)->name;
+            if (!strcmp(cur->name, name) &&
+                    !strncmp(mod_name_iter, mod_name, mod_name_len) && !mod_name_iter[mod_name_len]) {
                 goto match;
             }
 
@@ -5191,8 +5189,9 @@ resolve_identref(struct lys_type *type, const char *ident_name, struct lyd_node 
                 /* there are also some derived identities */
                 for (u = 0; u < cur->der->number; u++) {
                     der = (struct lys_ident *)cur->der->set.g[u]; /* shortcut */
+                    mod_name_iter = lys_main_module(der->module)->name;
                     if (!strcmp(der->name, name) &&
-                            (!mod_name || (!strncmp(der->module->name, mod_name, mod_name_len) && !der->module->name[mod_name_len]))) {
+                            !strncmp(mod_name_iter, mod_name, mod_name_len) && !mod_name_iter[mod_name_len]) {
                         /* we have match */
                         cur = der;
                         goto match;
@@ -5203,26 +5202,14 @@ resolve_identref(struct lys_type *type, const char *ident_name, struct lyd_node 
         type = &type->der->type;
     }
 
-    if (node) {
-        LOGVAL(LYE_INRESOLV, LY_VLOG_LYD, node, "identityref", ident_name);
-    } else {
-        LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Invalid identityref value \"%s\".", ident_name);
-        ly_vecode = LYVE_INRESOLV;
-    }
+    LOGVAL(LYE_INRESOLV, LY_VLOG_LYD, node, "identityref", ident_name);
     return NULL;
 
 match:
     for (i = 0; i < cur->iffeature_size; i++) {
         if (!resolve_iffeature(&cur->iffeature[i])) {
-            if (node) {
-                LOGVAL(LYE_INVAL, LY_VLOG_LYD, node, cur->name, node->schema->name);
-                LOGVAL(LYE_SPEC, LY_VLOG_LYD, node, "Identity \"%s\" is disabled by its if-feature condition.",
-                       cur->name);
-            } else {
-                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Identity \"%s\" is disabled by its if-feature condition.",
-                       cur->name);
-                ly_vecode = LYVE_INVAL;
-            }
+            LOGVAL(LYE_INVAL, LY_VLOG_LYD, node, cur->name, node->schema->name);
+            LOGVAL(LYE_SPEC, LY_VLOG_LYD, node, "Identity \"%s\" is disabled by its if-feature condition.", cur->name);
             return NULL;
         }
     }
@@ -6820,7 +6807,7 @@ lyd_leaf_type(struct lyd_node_leaf_list *leaf, int resolve)
 
     /* resolve */
     return lyp_parse_value(&((struct lys_node_leaf *)leaf->schema)->type, (const char **)&leaf->value_str, NULL,
-                           (struct lyd_node *)leaf, resolve ? leaf : NULL, 1, 0);
+                           (struct lyd_node *)leaf, leaf, resolve, 1, 0);
 }
 
 static int
@@ -6831,7 +6818,7 @@ resolve_union(struct lyd_node_leaf_list *leaf, struct lys_type *type)
     assert(type->base == LY_TYPE_UNION);
 
     memset(&leaf->value, 0, sizeof leaf->value);
-    datatype = lyp_parse_value(type, &leaf->value_str, NULL, (struct lyd_node *)leaf, leaf, 1, 0);
+    datatype = lyp_parse_value(type, &leaf->value_str, NULL, (struct lyd_node *)leaf, leaf, 1, 1, 0);
     if (!datatype) {
         /* failure */
         LOGVAL(LYE_INVAL, LY_VLOG_LYD, leaf, (leaf->value_str ? leaf->value_str : ""), leaf->schema->name);
