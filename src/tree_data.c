@@ -355,8 +355,8 @@ lyd_check_mandatory_tree(struct lyd_node *root, struct ly_ctx *ctx, int options)
             }
         } else {
             for (i = 0; i < ctx->models.used; i++) {
-                /* skip not implemented modules */
-                if (!ctx->models.list[i]->implemented) {
+                /* skip not implemented and disabled modules */
+                if (!ctx->models.list[i]->implemented || ctx->models.list[i]->disabled) {
                     continue;
                 }
                 LY_TREE_FOR(ctx->models.list[i]->data, siter) {
@@ -773,7 +773,8 @@ lyd_change_leaf(struct lyd_node_leaf_list *leaf, const char *val_str)
     /* leaf->value is erased by lyp_parse_value() */
 
     /* resolve the type correctly, makes the value canonical if needed */
-    if (!lyp_parse_value(&((struct lys_node_leaf *)leaf->schema)->type, &leaf->value_str, NULL, NULL, leaf, 1, 1, 0)) {
+    if (!lyp_parse_value(&((struct lys_node_leaf *)leaf->schema)->type, &leaf->value_str, NULL, (struct lyd_node *)leaf,
+            leaf, 1, 1, 0)) {
         lydict_remove(leaf->schema->module->ctx, leaf->value_str);
         leaf->value_str = backup;
         memcpy(&leaf->value, &backup_val, sizeof backup);
@@ -5561,8 +5562,8 @@ lyd_wd_add(struct lyd_node **root, struct ly_ctx *ctx, struct unres_data *unres,
             }
         } else {
             for (i = 0; i < ctx->models.used; i++) {
-                /* skip not implemented modules */
-                if (!ctx->models.list[i]->implemented) {
+                /* skip not implemented and disabled modules */
+                if (!ctx->models.list[i]->implemented || ctx->models.list[i]->disabled) {
                     continue;
                 }
                 LY_TREE_FOR(ctx->models.list[i]->data, siter) {

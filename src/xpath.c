@@ -350,6 +350,7 @@ cast_string_recursive(struct lyd_node *node, int fake_cont, enum lyxp_node_type 
 {
     char *buf, *line, *ptr;
     const char *value_str;
+    const struct lys_type *type;
     struct lyd_node *child;
     struct lyd_node_anydata *any;
 
@@ -385,6 +386,15 @@ cast_string_recursive(struct lyd_node *node, int fake_cont, enum lyxp_node_type 
         value_str = ((struct lyd_node_leaf_list *)node)->value_str;
         if (!value_str) {
             value_str = "";
+        }
+
+        /* make value canonical */
+        type = lyd_leaf_type((struct lyd_node_leaf_list *)node, 1);
+        if (type->base == LY_TYPE_IDENT) {
+            if (!strncmp(value_str, lyd_node_module(node)->name, strlen(lyd_node_module(node)->name))) {
+                assert(value_str[strlen(lyd_node_module(node)->name)] == ':');
+                value_str += strlen(lyd_node_module(node)->name) + 1;
+            }
         }
 
         /* print indent */
@@ -4164,6 +4174,10 @@ moveto_resolve_model(const char *mod_name_ns, uint16_t mod_nam_ns_len, struct ly
     }
 
     for (i = 0; i < ctx->models.used; ++i) {
+        if (!ctx->models.list[i]->implemented || ctx->models.list[i]->disabled) {
+            /* skip not implemented or disabled modules */
+            continue;
+        }
         str = (is_name ? ctx->models.list[i]->name : ctx->models.list[i]->ns);
         if (!strncmp(str, mod_name_ns, mod_nam_ns_len) && !str[mod_nam_ns_len]) {
             return ctx->models.list[i];
