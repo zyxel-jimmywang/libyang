@@ -478,7 +478,8 @@ extern "C" {
  * there is lyd_validate() function supposed to be called to make sure that the current data tree is valid. If
  * working with RPCs, they are invalid also in case the data nodes are not ordered according to the schema, which
  * you can fix easily with lyd_schema_sort(). Note, that not performing validation after some data tree changes
- * can cause failure of various libyang functions later.
+ * can cause failure of various libyang functions later. All functions performing data tree changes are marked
+ * with the __PARTIAL CHANGE__ flag in their documentation meaning they leave at least partly non-validated data tree.
  *
  * Creating data is generally possible in two ways, they can be combined. You can add nodes one-by-one based on
  * the node name and/or its parent (lyd_new(), \b lyd_new_anydata_*(), lyd_new_leaf(), and their output variants) or
@@ -512,6 +513,7 @@ extern "C" {
  * - lyd_new_output()
  * - lyd_new_output_anydata()
  * - lyd_new_output_leaf()
+ * - lyd_list_pos()
  * - lyd_schema_sort()
  * - lyd_unlink()
  * - lyd_free()
@@ -541,8 +543,9 @@ extern "C" {
  * data. So how can then these conditions be verified during validation?
  *
  * There is an option to pass this additional data tree to all the functions that perform \b must and \b when condition
- * checking (\b lyd_parse_*() and lyd_validate()). Also, there is a flag #LYS_VALID_DEP of \b struct lys_node that
- * marks schema nodes that include conditions that require foreign nodes (outside their subtree) for their evaluation.
+ * checking (\b lyd_parse_*() and lyd_validate()). Also, there are 2 flags of \b struct lys_node that
+ * mark schema nodes that include paths that require foreign nodes (outside their subtree) for their evaluation. #LYS_XPATH_DEP
+ * marks nodes with such must and/or when expressions, #LYS_LEAFREF_DEP with such a leafref.
  * The subtree root is always the particular operation data node (for RPC it is the RPC data node and all
  * the input or output nodes as its children and similarly for action and notification). Note that for action and
  * not-top-level notification this means that all their parents are not considered as belonging to their subtree even though
@@ -558,7 +561,7 @@ extern "C" {
  *
  * Firstly, you should somehow learn that the operation data tree you are currently working with includes some schema
  * node instances that have conditions that require foreign data. You can either know this about every operation beforehand
- * or you go through all the schema nodes looking for the flag #LYS_VALID_DEP. Then you should use lys_node_xpath_atomize()
+ * or you go through all the schema nodes looking for the flags #LYS_XPATH_DEP and #LYS_LEAFREF_DEP. Then you should use lys_node_xpath_atomize()
  * to retrieve all XPath condition dependencies (in the form of schema nodes) outside the operation subtree. You will likely
  * want to use the flag #LYXP_NO_LOCAL to get rid of all the nodes from inside the subtree (you should already have those).
  * The last thing to do is to build a data tree that includes at least all the instances of the nodes obtained from lys_node_xpath_atomize()
@@ -699,13 +702,16 @@ extern "C" {
  *
  *
  * A very small subset of this full XPath is recognized by lyd_new_path(). Basically, only a relative or absolute
- * path can be specified to identify a new data node. However, lists must be identified by all their keys and created
- * with all of them, so for those cases predicates are allowed. Predicates must be ordered the way the keys are ordered
- * and all the keys must be specified. Every predicate includes a single key with its value. Optionally, leaves and
- * leaf-lists can have predicates specifying their value in the path itself. All these paths are valid XPath
- * expressions. Example:
+ * path can be specified to identify a new data node. However, lists must be identified by either all their keys and created
+ * with all of them or using their relative position on their level starting from 1, so for those cases predicates are
+ * allowed. List positions can be learned using lyd_list_pos(). Key predicates must be ordered the way the keys are
+ * ordered and all the keys must be specified. Every predicate includes a single key with its value. If an instance
+ * with such particular set of keys or with such relative position does not exist or no predicate is specified, list
+ * instance is created. Optionally, leaves and leaf-lists can have predicates specifying their value in the path itself.
+ * All these paths are valid XPath expressions. Example:
  *
  *     /ietf-yang-library:modules-state/module[name='ietf-yang-library'][revision='']/conformance[.='implement']
+ *     /ietf-yang-library:modules-state/module[1]/conformance[.='implement']
  *
  * Almost the same XPath is accepted by ly_ctx_get_node(). The difference is that it is not used on data, but schema,
  * which means there are no key values and only one node matches one path. In effect, lists do not have to have any

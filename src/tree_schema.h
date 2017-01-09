@@ -348,8 +348,11 @@ typedef enum {
 #define LY_DATA_TYPE_COUNT 20        /**< number of #LY_DATA_TYPE built-in types */
 #define LY_DATA_TYPE_MASK 0x3f       /**< mask for valid type values, 2 bits are reserver for #LY_TYPE_LEAFREF_UNRES and
                                           #LY_TYPE_INST_UNRES in case of parsing with #LYD_OPT_EDIT options. */
-#define LY_TYPE_LEAFREF_UNRES 0x40   /**< flag for unresolved leafref, the rest of bits store the target node's type */
-#define LY_TYPE_INST_UNRES 0x80      /**< flag for unresolved instance-identifier, always use in conjunction with LY_TYPE_INST */
+/* used only in lyd_node value_type attribute */
+#define LY_TYPE_LEAFREF_UNRES 0x40   /**< flag for unresolved leafref, the rest of bits store the target node's type and
+                                          the value union is filled as if being the target node's type */
+#define LY_TYPE_INST_UNRES 0x80      /**< flag for unresolved instance-identifier, always used in conjunction with LY_TYPE_INST
+                                          and the value union should not be accessed */
 
 /**
  *
@@ -479,6 +482,8 @@ struct lys_type_info_str {
 struct lys_type_info_union {
     struct lys_type *types;  /**< array of union's subtypes */
     int count;               /**< number of subtype definitions in types array */
+    int has_ptr_type;        /**< types include an instance-identifier or leafref meaning the union must always be resolved
+                                  after parsing */
 };
 
 /**
@@ -568,6 +573,8 @@ struct lys_type {
      * LY_TYPE_UNION (uni)
      * struct lys_type *uni.types;        array of union's subtypes
      * int uni.count;                     number of subtype definitions in types array
+     * int uni.has_ptr_type;              types recursively include an instance-identifier or leafref (union must always
+     *                                    be resolved after it is parsed)
      */
 };
 
@@ -640,9 +647,11 @@ struct lys_iffeature {
  *       LYS_UNIQUE       | | |x| | | | | | | | | | | | | | | |
  *       LYS_FENABLED     | | | | | | | | | | | | | | |x| | | |
  *                        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *    10 LYS_VALID_DEP    |x|x|x|x|x|x|x|x|x|x|x| |x|x| | | | |
+ *    10 LYS_XPATH_DEP    |x|x|x|x|x|x|x|x|x|x|x| |x|x| | | | |
  *                        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *    11 LYS_DFLTJSON     | | |x|x| | | | | | | | | | | |x| | |
+ *    11 LYS_LEAFREF_DEP  | | |x|x| | | | | | | | | | | | | | |
+ *                        +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *    12 LYS_DFLTJSON     | | |x|x| | | | | | | | | | | |x| | |
  *    --------------------+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
  * @{
  */
@@ -671,10 +680,13 @@ struct lys_iffeature {
                                           ::lys_type enum and bits flags */
 #define LYS_USESGRP      0x01        /**< flag for resolving uses in groupings, applicable only to ::lys_node_uses */
 #define LYS_IMPLICIT     0x01        /**< flag for implicitely created LYS_INPUT and LYS_OUTPUT nodes */
-#define LYS_VALID_DEP    0x200       /**< flag marking nodes, whose validation (when, must expressions or leafrefs)
+#define LYS_XPATH_DEP    0x200       /**< flag marking nodes, whose validation (when, must expressions)
                                           depends on nodes outside their subtree (applicable only to RPCs,
                                           notifications, and actions) */
-#define LYS_DFLTJSON     0x400       /**< default value (in ::lys_node_leaf, ::lys_node_leaflist, :lys_tpdf) was
+#define LYS_LEAFREF_DEP  0x400       /**< flag marking nodes, whose validation (leafrefs)
+                                          depends on nodes outside their subtree (applicable only to RPCs,
+                                          notifications, and actions) */
+#define LYS_DFLTJSON     0x800       /**< default value (in ::lys_node_leaf, ::lys_node_leaflist, :lys_tpdf) was
                                           converted into JSON format, since it contains identityref value which is
                                           being used in JSON format (instead of module prefixes, we use the module
                                           names) */
@@ -896,9 +908,9 @@ struct lys_node_leaflist {
 
     LYS_NODE nodetype;               /**< type of the node (mandatory) - #LYS_LEAFLIST */
     struct lys_node *parent;         /**< pointer to the parent node, NULL in case of a top level node */
-    struct lys_node *child;          /**< always NULL except the leaf/leaflist is target of a leafref, in that case
-                                          the pointer stores set of ::lys_node leafref objects with path referencing
-                                          the current ::lys_node_leaflist */
+    struct ly_set *backlinks;        /**< replacement for ::lys_node's child member, it is NULL except the leaf/leaflist
+                                          is target of a leafref. In that case the set stores ::lys_node leafref objects
+                                          with path referencing the current ::lys_node_leaf */
     struct lys_node *next;           /**< pointer to the next sibling node (NULL if there is no one) */
     struct lys_node *prev;           /**< pointer to the previous sibling node \note Note that this pointer is
                                           never NULL. If there is no sibling node, pointer points to the node

@@ -86,11 +86,11 @@ json_print_attrs(struct lyout *out, int level, const struct lyd_node *node, cons
 static void
 json_print_leaf(struct lyout *out, int level, const struct lyd_node *node, int onlyvalue, int toplevel, int options)
 {
-    struct lyd_node_leaf_list *leaf = (struct lyd_node_leaf_list *)node;
+    struct lyd_node_leaf_list *leaf = (struct lyd_node_leaf_list *)node, *iter;
+    const struct lys_type *type;
     const char *schema = NULL, *p, *mod_name;
     const struct lys_module *wdmod = NULL;
     LY_DATA_TYPE datatype;
-    const struct lys_type *type;
     size_t len;
 
     if ((node->dflt && (options & (LYP_WD_ALL_TAG | LYP_WD_IMPL_TAG))) ||
@@ -148,13 +148,22 @@ contentprint:
         break;
 
     case LY_TYPE_LEAFREF:
-        type = lyd_leaf_type(leaf, 1);
-        if (!type) {
-            /* error */
-            ly_print(out, "\"(!error!)\"");
-            break;
+        iter = (struct lyd_node_leaf_list *)leaf->value.leafref;
+        while (iter && (iter->value_type == LY_TYPE_LEAFREF)) {
+            iter = (struct lyd_node_leaf_list *)iter->value.leafref;
         }
-        datatype = type->base;
+        if (!iter) {
+            /* unresolved and invalid, but we can learn the correct type anyway */
+            type = lyd_leaf_type((struct lyd_node_leaf_list *)leaf);
+            if (!type) {
+                /* error */
+                ly_print(out, "\"(!error!)\"");
+                return;
+            }
+            datatype = type->base;
+        } else {
+            datatype = iter->value_type & LY_DATA_TYPE_MASK;
+        }
         goto contentprint;
 
     case LY_TYPE_EMPTY:

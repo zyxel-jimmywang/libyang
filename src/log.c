@@ -185,7 +185,7 @@ const char *ly_errs[] = {
 /* LYE_KEY_DUP */      "Key identifier \"%s\" is not unique.",
 /* LYE_INREGEX */      "Regular expression \"%s\" is not valid (\"%s\": %s).",
 /* LYE_INRESOLV */     "Failed to resolve %s \"%s\".",
-/* LYE_INSTATUS */     "A \"%s\" definition %s references \"%s\" definition %s.",
+/* LYE_INSTATUS */     "A %s definition \"%s\" references %s definition \"%s\".",
 /* LYE_CIRC_LEAFREFS */"A circular chain of leafrefs detected.",
 /* LYE_CIRC_FEATURES */"A circular chain features detected in \"%s\" feature.",
 /* LYE_CIRC_IMPORTS */ "A circular dependency (import) for module \"%s\".",
@@ -234,7 +234,7 @@ const char *ly_errs[] = {
 /* LYE_PATH_MISSMOD */ "Missing module name.",
 /* LYE_PATH_INNODE */  "Schema node not found.",
 /* LYE_PATH_INKEY */   "List key not found or on incorrect position (%s).",
-/* LYE_PATH_MISSKEY */ "Not all list keys specified (%s).",
+/* LYE_PATH_MISSKEY */ "List keys or position missing (%s).",
 /* LYE_PATH_EXISTS */  "Node already exists.",
 /* LYE_PATH_MISSPAR */ "Parent does not exist.",
 };
@@ -343,11 +343,12 @@ ly_vlog_hide(uint8_t hide)
 void
 ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *path, uint16_t *index)
 {
-    int i;
+    int i, j;
     struct lys_node_list *slist;
     struct lys_node *sparent = NULL;
     struct lyd_node *dlist, *diter;
-    const char *name, *prefix = NULL;
+    const char *name, *prefix = NULL, *val_end, *val_start;
+    char *str;
     size_t len;
 
     while (elem) {
@@ -383,41 +384,86 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
             if (((struct lyd_node *)elem)->schema->nodetype == LYS_LIST) {
                 dlist = (struct lyd_node *)elem;
                 slist = (struct lys_node_list *)((struct lyd_node *)elem)->schema;
-                for (i = slist->keys_size - 1; i > -1; i--) {
-                    LY_TREE_FOR(dlist->child, diter) {
-                        if (diter->schema == (struct lys_node *)slist->keys[i]) {
-                            break;
+                if (slist->keys_size) {
+                    /* schema list with keys - use key values in predicates */
+                    for (i = slist->keys_size - 1; i > -1; i--) {
+                        LY_TREE_FOR(dlist->child, diter) {
+                            if (diter->schema == (struct lys_node *)slist->keys[i]) {
+                                break;
+                            }
                         }
-                    }
-                    if (diter && ((struct lyd_node_leaf_list *)diter)->value_str) {
-                        (*index) -= 2;
-                        memcpy(&path[(*index)], "']", 2);
-                        len = strlen(((struct lyd_node_leaf_list *)diter)->value_str);
-                        (*index) -= len;
-                        memcpy(&path[(*index)], ((struct lyd_node_leaf_list *)diter)->value_str, len);
-                        (*index) -= 2;
-                        memcpy(&path[(*index)], "='", 2);
-                        len = strlen(diter->schema->name);
-                        (*index) -= len;
-                        memcpy(&path[(*index)], diter->schema->name, len);
-                        if (dlist->schema->module != diter->schema->module) {
-                            path[--(*index)] = ':';
-                            len = strlen(diter->schema->module->name);
+                        if (diter && ((struct lyd_node_leaf_list *)diter)->value_str) {
+                            if (strchr(((struct lyd_node_leaf_list *)diter)->value_str, '\'')) {
+                                val_start = "=\"";
+                                val_end = "\"]";
+                            } else {
+                                val_start = "='";
+                                val_end = "']";
+                            }
+
+                            (*index) -= 2;
+                            memcpy(&path[(*index)], val_end, 2);
+                            len = strlen(((struct lyd_node_leaf_list *)diter)->value_str);
                             (*index) -= len;
-                            memcpy(&path[(*index)], diter->schema->module->name, len);
+                            memcpy(&path[(*index)], ((struct lyd_node_leaf_list *)diter)->value_str, len);
+                            (*index) -= 2;
+                            memcpy(&path[(*index)], val_start, 2);
+                            len = strlen(diter->schema->name);
+                            (*index) -= len;
+                            memcpy(&path[(*index)], diter->schema->name, len);
+                            if (dlist->schema->module != diter->schema->module) {
+                                path[--(*index)] = ':';
+                                len = strlen(diter->schema->module->name);
+                                (*index) -= len;
+                                memcpy(&path[(*index)], diter->schema->module->name, len);
+                            }
+                            path[--(*index)] = '[';
                         }
-                        path[--(*index)] = '[';
                     }
+                } else {
+                    /* schema list without keys - use instance position */
+                    --(*index);
+                    path[*index] = ']';
+
+                    i = j = lyd_list_pos(dlist);
+                    len = 1;
+                    while (j > 9) {
+                        ++len;
+                        j /= 10;
+                    }
+
+                    str = malloc(len + 1);
+                    if (!str) {
+                        LOGMEM;
+                        return;
+                    }
+                    sprintf(str, "%d", i);
+
+                    (*index) -= len;
+                    strncpy(&path[(*index)], str, len);
+
+                    free(str);
+
+                    --(*index);
+                    path[*index] = '[';
                 }
             } else if (((struct lyd_node *)elem)->schema->nodetype == LYS_LEAFLIST &&
                     ((struct lyd_node_leaf_list *)elem)->value_str) {
+                if (strchr(((struct lyd_node_leaf_list *)elem)->value_str, '\'')) {
+                    val_start = "[.=\"";
+                    val_end = "\"]";
+                } else {
+                    val_start = "[.='";
+                    val_end = "']";
+                }
+
                 (*index) -= 2;
-                memcpy(&path[(*index)], "']", 2);
+                memcpy(&path[(*index)], val_end, 2);
                 len = strlen(((struct lyd_node_leaf_list *)elem)->value_str);
                 (*index) -= len;
                 memcpy(&path[(*index)], ((struct lyd_node_leaf_list *)elem)->value_str, len);
                 (*index) -= 4;
-                memcpy(&path[(*index)], "[.='", 4);
+                memcpy(&path[(*index)], val_start, 4);
             }
 
             elem = ((struct lyd_node *)elem)->parent;
