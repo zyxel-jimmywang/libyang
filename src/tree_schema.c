@@ -138,7 +138,7 @@ lys_get_sibling(const struct lys_node *siblings, const char *mod_name, int mod_n
 
     /* try to find the node */
     node = NULL;
-    while ((node = lys_getnext(node, parent, mod, LYS_GETNEXT_WITHCHOICE | LYS_GETNEXT_WITHCASE))) {
+    while ((node = lys_getnext(node, parent, mod, LYS_GETNEXT_WITHCHOICE | LYS_GETNEXT_WITHCASE | LYS_GETNEXT_WITHINOUT))) {
         if (!type || (node->nodetype & type)) {
             /* module name comparison */
             node_mod_name = lys_node_module(node)->name;
@@ -160,8 +160,8 @@ lys_get_sibling(const struct lys_node *siblings, const char *mod_name, int mod_n
 }
 
 int
-lys_get_data_sibling(const struct lys_module *mod, const struct lys_node *siblings, const char *name, LYS_NODE type,
-                     const struct lys_node **ret)
+lys_get_data_sibling(const struct lys_module *mod, const struct lys_node *siblings, const char *name, int nam_len,
+                     LYS_NODE type, const struct lys_node **ret)
 {
     const struct lys_node *node;
 
@@ -187,7 +187,7 @@ lys_get_data_sibling(const struct lys_module *mod, const struct lys_node *siblin
             }
 
             /* direct name check */
-            if (ly_strequal(node->name, name, 0)) {
+            if (!strncmp(node->name, name, nam_len) && !node->name[nam_len]) {
                 if (ret) {
                     *ret = node;
                 }
@@ -706,7 +706,7 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
     case LYS_ANYXML:
     case LYS_ANYDATA:
         LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), strnodetype(parent->nodetype));
-        LOGVAL(LYE_SPEC, LY_VLOG_LYS, NULL, "The \"%s\" statement cannot have any data substatement.",
+        LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL, "The \"%s\" statement cannot have any data substatement.",
                strnodetype(parent->nodetype));
         return EXIT_FAILURE;
     case LYS_AUGMENT:
@@ -797,7 +797,7 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
         for (iter = child; iter && !(iter->nodetype & (LYS_NOTIF | LYS_INPUT | LYS_OUTPUT | LYS_RPC)); iter = iter->parent);
         if (!iter && (parent->flags & LYS_CONFIG_R) && (child->flags & LYS_CONFIG_W)) {
             LOGVAL(LYE_INARG, LY_VLOG_LYS, child, "true", "config");
-            LOGVAL(LYE_SPEC, LY_VLOG_LYS, child, "State nodes cannot have configuration nodes as children.");
+            LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL, "State nodes cannot have configuration nodes as children.");
             return EXIT_FAILURE;
         }
     }
@@ -1175,12 +1175,15 @@ type_dup(struct lys_module *mod, struct lys_node *parent, struct lys_type *new, 
             } else {
                 /* there can be several unresolved base identities, duplicate them all */
                 i = -1;
-                while ((i = unres_schema_find(unres, i, old, UNRES_TYPE_IDENTREF)) != -1) {
-                    if (unres_schema_add_str(mod, unres, new, UNRES_TYPE_IDENTREF, unres->str_snode[i]) == -1) {
-                        return -1;
+                do {
+                    i = unres_schema_find(unres, i, old, UNRES_TYPE_IDENTREF);
+                    if (i != -1) {
+                        if (unres_schema_add_str(mod, unres, new, UNRES_TYPE_IDENTREF, unres->str_snode[i]) == -1) {
+                            return -1;
+                        }
                     }
                     --i;
-                }
+                } while (i > -1);
             }
             break;
 
@@ -2364,7 +2367,7 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
                 /* skip nodes with an explicit config value */
                 if ((flags & LYS_CONFIG_R) && (retval->flags & LYS_CONFIG_W)) {
                     LOGVAL(LYE_INARG, LY_VLOG_LYS, retval, "true", "config");
-                    LOGVAL(LYE_SPEC, LY_VLOG_LYS, retval, "State nodes cannot have configuration nodes as children.");
+                    LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL, "State nodes cannot have configuration nodes as children.");
                     goto error;
                 }
                 break;
@@ -3078,12 +3081,20 @@ lys_features_list(const struct lys_module *module, uint8_t **states)
 API struct lys_module *
 lys_node_module(const struct lys_node *node)
 {
+    if (!node) {
+        return NULL;
+    }
+
     return node->module->type ? ((struct lys_submodule *)node->module)->belongsto : node->module;
 }
 
 API struct lys_module *
 lys_main_module(const struct lys_module *module)
 {
+    if (!module) {
+        return NULL;
+    }
+
     return (module->type ? ((struct lys_submodule *)module)->belongsto : (struct lys_module *)module);
 }
 
@@ -3640,7 +3651,7 @@ lys_sub_module_remove_devs_augs(struct lys_module *module)
     }
 
     /* remove deviation and augments defined in submodules */
-    for (v = 0; v < module->inc_size; ++v) {
+    for (v = 0; v < module->inc_size && module->inc[v].submodule; ++v) {
         for (u = 0; u < module->inc[v].submodule->deviation_size; ++u) {
             remove_dev(&module->inc[v].submodule->deviation[u], module);
         }
@@ -3766,10 +3777,7 @@ lys_set_implemented(const struct lys_module *module)
         goto error;
     }
     /* process augments in submodules */
-    for (i = 0; i < module->inc_size; ++i) {
-        if (!module->inc[i].submodule) {
-            continue;
-        }
+    for (i = 0; i < module->inc_size && module->inc[i].submodule; ++i) {
         for (j = 0; j < module->inc[i].submodule->augment_size; j++) {
             /* apply augment */
             if (!module->inc[i].submodule->augment[j].target
@@ -3849,7 +3857,7 @@ lys_path(const struct lys_node *node)
 
     /* build the path */
     buf[index] = '\0';
-    ly_vlog_build_path_reverse(LY_VLOG_LYS, node, buf, &index);
+    ly_vlog_build_path_reverse(LY_VLOG_LYS, node, buf, &index, 0);
     result = strdup(&buf[index]);
 
     /* restore the shared internal buffer */

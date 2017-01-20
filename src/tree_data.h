@@ -163,7 +163,7 @@ typedef union lyd_value_u {
 struct lyd_node {
     struct lys_node *schema;         /**< pointer to the schema definition of this node */
     uint8_t validity;                /**< [validity flags](@ref validityflags) */
-    uint8_t dflt:1;                  /**< flag for default node */
+    uint8_t dflt:1;                  /**< flag for implicit default node */
     uint8_t when_status:3;           /**< bit for checking if the when-stmt condition is resolved - internal use only,
                                           do not use this value! */
 
@@ -195,7 +195,7 @@ struct lyd_node_leaf_list {
     struct lys_node *schema;         /**< pointer to the schema definition of this node which is ::lys_node_leaflist
                                           structure */
     uint8_t validity;                /**< [validity flags](@ref validityflags) */
-    uint8_t dflt:1;                  /**< flag for default node */
+    uint8_t dflt:1;                  /**< flag for implicit default node */
     uint8_t when_status:3;           /**< bit for checking if the when-stmt condition is resolved - internal use only,
                                           do not use this value! */
 
@@ -229,7 +229,7 @@ struct lyd_node_anydata {
     struct lys_node *schema;         /**< pointer to the schema definition of this node which is ::lys_node_anydata
                                           structure */
     uint8_t validity;                /**< [validity flags](@ref validityflags) */
-    uint8_t dflt:1;                  /**< flag for default node */
+    uint8_t dflt:1;                  /**< flag for implicit default node */
     uint8_t when_status:3;           /**< bit for checking if the when-stmt condition is resolved - internal use only,
                                           do not use this value! */
 
@@ -380,7 +380,17 @@ struct lyd_difflist *lyd_diff(struct lyd_node *first, struct lyd_node *second, i
  * @return NULL on error, on success the buffer for the resulting path is allocated and caller is supposed to free it
  * with free().
  */
-char *lyd_path(struct lyd_node *node);
+char *lyd_path(const struct lyd_node *node);
+
+/**
+ * @brief Build path (usable as instance-identified) of the data node with all the nodes fully qualified (having their
+ * model as prefix).
+ * @param[in] node Data node to be processed. Note that the node should be from a complete data tree, having a subtree
+ *            (after using lyd_unlink()) can cause generating invalid paths.
+ * @return NULL on error, on success the buffer for the resulting path is allocated and caller is supposed to free it
+ * with free().
+ */
+char *lyd_qualified_path(const struct lyd_node *node);
 
 /**
  * @defgroup parseroptions Data parser options
@@ -459,6 +469,8 @@ char *lyd_path(struct lyd_node *node);
                                        applicable only in combination with LYD_OPT_DATA and LYD_OPT_CONFIG flags.
                                        If used, libyang generates validation error instead of silently removing the
                                        constrained subtree. */
+#define LYD_OPT_NOEXTDEPS  0x8000 /**< Allow external dependencies (external leafrefs, instance-identifiers, must,
+                                       and when) to not be resolved/satisfiedduring validation. */
 
 /**@} parseroptions */
 
@@ -849,7 +861,8 @@ int lyd_merge(struct lyd_node *target, const struct lyd_node *source, int option
  *
  * @param[in] trg Top-level (or an RPC output child) data tree to merge to. Must be valid. If its context
  *            differs from the specified \p ctx of the result, the provided data tree is freed and the new
- *            tree in the required context is returned on success.
+ *            tree in the required context is returned on success. To keep the \p trg tree, convert it to the
+ *            target context using lyd_dup_to_ctx() and then call lyd_merge() instead of lyd_merge_to_ctx().
  * @param[in] src Data tree to merge \p target with. Must be valid (at least as a subtree).
  * @param[in] options Bitmask of the following option flags:
  * - #LYD_OPT_DESTRUCT - spend \p source in the function, otherwise \p source is left untouched,

@@ -82,9 +82,6 @@ log_vprintf(LY_LOG_LEVEL level, uint8_t hide, const char *format, const char *pa
         if (!path) {
             /* erase previous path */
             e->path_index = LY_BUF_SIZE - 1;
-            if (e->path_obj != NULL + 1) {
-                e->path_obj = NULL;
-            }
         }
 
         /* if the error-app-tag should be set, do it after calling LOGVAL */
@@ -341,7 +338,7 @@ ly_vlog_hide(uint8_t hide)
 }
 
 void
-ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *path, uint16_t *index)
+ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *path, uint16_t *index, int prefix_all)
 {
     int i, j;
     struct lys_node_list *slist;
@@ -360,7 +357,7 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
             break;
         case LY_VLOG_LYS:
             name = ((struct lys_node *)elem)->name;
-            if (!(sparent = lys_parent((struct lys_node *)elem)) ||
+            if (prefix_all || !(sparent = lys_parent((struct lys_node *)elem)) ||
                     lys_node_module((struct lys_node *)elem) != lys_node_module(sparent)) {
                 prefix = lys_node_module((struct lys_node *)elem)->name;
             } else {
@@ -373,7 +370,7 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
             break;
         case LY_VLOG_LYD:
             name = ((struct lyd_node *)elem)->schema->name;
-            if (!((struct lyd_node *)elem)->parent ||
+            if (prefix_all || !((struct lyd_node *)elem)->parent ||
                     lyd_node_module((struct lyd_node *)elem) != lyd_node_module(((struct lyd_node *)elem)->parent)) {
                 prefix = lyd_node_module((struct lyd_node *)elem)->name;
             } else {
@@ -411,7 +408,7 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
                             len = strlen(diter->schema->name);
                             (*index) -= len;
                             memcpy(&path[(*index)], diter->schema->name, len);
-                            if (dlist->schema->module != diter->schema->module) {
+                            if (prefix_all || (dlist->schema->module != diter->schema->module)) {
                                 path[--(*index)] = ':';
                                 len = strlen(diter->schema->module->name);
                                 (*index) -= len;
@@ -523,14 +520,7 @@ ly_vlog(LY_ECODE code, enum LY_VLOG_ELEM elem_type, const void *elem, ...)
     /* resolve path */
     path = ((struct ly_err *)&ly_errno)->path;
     index = &((struct ly_err *)&ly_errno)->path_index;
-    if (elem_type) { /* != LY_VLOG_NONE */
-        /* check if the path is equal to the last one */
-        if (elem && elem_type == ((struct ly_err *)&ly_errno)->path_obj_type &&
-                (elem_type == LY_VLOG_LYD ? ((struct lyd_node *)elem)->schema : elem) == ((struct ly_err *)&ly_errno)->path_obj) {
-            /* path is up-to-date (same as the last one) */
-            goto log;
-        }
-
+    if ((elem_type != LY_VLOG_NONE) && (elem_type != LY_VLOG_PREV)) { /* != LY_VLOG_NONE */
         /* update path */
         (*index) = LY_BUF_SIZE - 1;
         path[(*index)] = '\0';
@@ -538,12 +528,9 @@ ly_vlog(LY_ECODE code, enum LY_VLOG_ELEM elem_type, const void *elem, ...)
             /* top-level */
             path[--(*index)] = '/';
         } else {
-            ly_vlog_build_path_reverse(elem_type, elem, path, index);
-            /* store the source of the path */
-            ((struct ly_err *)&ly_errno)->path_obj_type = elem_type;
-            ((struct ly_err *)&ly_errno)->path_obj = elem_type == LY_VLOG_LYD ? ((struct lyd_node *)elem)->schema : elem;
+            ly_vlog_build_path_reverse(elem_type, elem, path, index, 0);
         }
-    } else {
+    } else if (elem_type == LY_VLOG_NONE) {
         /* erase path, the rest will be erased by log_vprintf() since it will get NULL path parameter */
         path[(*index)] = '\0';
     }
