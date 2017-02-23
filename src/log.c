@@ -108,10 +108,7 @@ log_vprintf(LY_LOG_LEVEL level, uint8_t hide, const char *format, const char *pa
         }
     }
 
-    if (hide == 0xff && level == LY_LLERR && (LY_LLWRN <= ly_log_level)) {
-        /* change error to warning */
-        level = LY_LLWRN;
-    } else if (hide || (level > ly_log_level)) {
+    if (hide || (level > ly_log_level)) {
         /* do not print the message */
         goto clean;
     }
@@ -139,8 +136,30 @@ ly_log(LY_LOG_LEVEL level, const char *format, ...)
     va_list ap;
 
     va_start(ap, format);
-    log_vprintf(level, 0, format, NULL, ap);
+    log_vprintf(level, (*ly_vlog_hide_location()), format, NULL, ap);
     va_end(ap);
+}
+
+void
+lyext_log(LY_LOG_LEVEL level, const char *filename, const char *function, const char *format, ...)
+{
+    va_list ap;
+    char *plugin_msg, *plugin_name, *p;
+
+    if (ly_log_level < level) {
+        return;
+    }
+
+    plugin_name = strdup(filename);
+    p = strrchr(plugin_name, '.');
+    *p = '\0';
+    asprintf(&plugin_msg, "%s (extension plugin %s, %s())", format, plugin_name, function);
+
+    va_start(ap, format);
+    log_vprintf(level, (*ly_vlog_hide_location()), plugin_msg, NULL, ap);
+    va_end(ap);
+
+    free(plugin_msg);
 }
 
 const char *ly_errs[] = {
@@ -220,18 +239,18 @@ const char *ly_errs[] = {
 /* LYE_XPATH_INOP_1 */ "Cannot apply XPath operation %s on %s.",
 /* LYE_XPATH_INOP_2 */ "Cannot apply XPath operation %s on %s and %s.",
 /* LYE_XPATH_INCTX */  "Invalid context type %s in %s.",
-/* LYE_XPATH_INMOD */  "Unknown module \"%.*s\" relative to the context node \"%s\".",
+/* LYE_XPATH_INMOD */  "Unknown module \"%.*s\".",
 /* LYE_XPATH_INFUNC */ "Unknown XPath function \"%.*s\".",
 /* LYE_XPATH_INARGCOUNT */ "Invalid number of arguments (%d) for the XPath function %.*s.",
 /* LYE_XPATH_INARGTYPE */ "Wrong type of argument #%d (%s) for the XPath function %s.",
 /* LYE_XPATH_DUMMY */   "Accessing the value of the dummy node \"%s\".",
 
-/* LYE_PATH_INCHAR */  "Unexpected character(s) '%c' (%s).",
+/* LYE_PATH_INCHAR */  "Unexpected character(s) '%c' (\"%s\").",
 /* LYE_PATH_INMOD */   "Module not found.",
 /* LYE_PATH_MISSMOD */ "Missing module name.",
 /* LYE_PATH_INNODE */  "Schema node not found.",
-/* LYE_PATH_INKEY */   "List key not found or on incorrect position (%s).",
-/* LYE_PATH_MISSKEY */ "List keys or position missing (%s).",
+/* LYE_PATH_INKEY */   "List key not found or on incorrect position (\"%s\").",
+/* LYE_PATH_MISSKEY */ "List keys or position missing (\"%s\").",
 /* LYE_PATH_EXISTS */  "Node already exists.",
 /* LYE_PATH_MISSPAR */ "Parent does not exist.",
 };
@@ -356,12 +375,35 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
             elem = ((struct lyxml_elem *)elem)->parent;
             break;
         case LY_VLOG_LYS:
-            name = ((struct lys_node *)elem)->name;
+            if (((struct lys_node *)elem)->nodetype == LYS_AUGMENT) {
+                --(*index);
+                path[*index] = ']';
+
+                name = ((struct lys_node *)elem)->name;
+                len = strlen(name);
+                (*index) -= len;
+                memcpy(&path[*index], name, len);
+
+                name = "[";
+            } else if (((struct lys_node *)elem)->nodetype == LYS_EXT) {
+                name = ((struct lys_ext_instance *)elem)->def->name;
+            } else {
+                name = ((struct lys_node *)elem)->name;
+            }
             if (prefix_all || !(sparent = lys_parent((struct lys_node *)elem)) ||
                     lys_node_module((struct lys_node *)elem) != lys_node_module(sparent)) {
                 prefix = lys_node_module((struct lys_node *)elem)->name;
             } else {
                 prefix = NULL;
+            }
+            if (((struct lys_node *)elem)->nodetype == LYS_EXT) {
+                if (((struct lys_ext_instance*)elem)->parent_type == LYEXT_PAR_NODE) {
+                    elem = (struct lys_node*)((struct lys_ext_instance*)elem)->parent;
+                } else {
+                    sparent = NULL;
+                    elem = NULL;
+                }
+                break;
             }
             do {
                 sparent = ((struct lys_node *)elem)->parent;
@@ -419,8 +461,7 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
                     }
                 } else {
                     /* schema list without keys - use instance position */
-                    --(*index);
-                    path[*index] = ']';
+                    path[--(*index)] = ']';
 
                     i = j = lyd_list_pos(dlist);
                     len = 1;
@@ -479,8 +520,8 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
             return;
         }
         len = strlen(name);
-        (*index) = (*index) - len;
-        memcpy(&path[(*index)], name, len);
+        (*index) -= len;
+        memcpy(&path[*index], name, len);
         if (prefix) {
             path[--(*index)] = ':';
             len = strlen(prefix);

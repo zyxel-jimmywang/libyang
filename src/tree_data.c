@@ -38,8 +38,6 @@
 #include "validation.h"
 #include "xpath.h"
 
-static int lyd_unlink_internal(struct lyd_node *node, int permanent);
-
 /**
  * @brief get the list of \p data's siblings of the given schema
  */
@@ -503,7 +501,7 @@ static struct lyd_node *
 lyd_parse_fd_(struct ly_ctx *ctx, int fd, LYD_FORMAT format, int options, va_list ap)
 {
     struct lyd_node *ret;
-    struct stat sb;
+    size_t length;
     char *data;
 
     if (!ctx || (fd == -1)) {
@@ -511,25 +509,18 @@ lyd_parse_fd_(struct ly_ctx *ctx, int fd, LYD_FORMAT format, int options, va_lis
         return NULL;
     }
 
-    if (fstat(fd, &sb) == -1) {
-        LOGERR(LY_ESYS, "Failed to stat the file descriptor (%s).", strerror(errno));
-        return NULL;
-    }
-
-    if (!sb.st_size) {
-        ly_err_clean(1);
-        return NULL;
-    }
-
-    data = mmap(NULL, sb.st_size + 1, PROT_READ, MAP_PRIVATE, fd, 0);
+    data = lyp_mmap(fd, 0, &length);
     if (data == MAP_FAILED) {
-        LOGERR(LY_ESYS, "Mapping file descriptor into memory failed.");
+        LOGERR(LY_ESYS, "Mapping file descriptor into memory failed (%s()).", __func__);
+        return NULL;
+    } else if (!data) {
+        ly_err_clean(1);
         return NULL;
     }
 
     ret = lyd_parse_data_(ctx, data, format, options, ap);
 
-    munmap(data, sb.st_size + 1);
+    lyp_munmap(data, length);
 
     return ret;
 }
@@ -1095,7 +1086,7 @@ check_parsed_values:
         predicate += r;
 
         if (!value || strncmp(slist->keys[i]->name, name, nam_len) || slist->keys[i]->name[nam_len]) {
-            LOGVAL(LYE_PATH_INKEY, LY_VLOG_NONE, NULL, name[0], name);
+            LOGVAL(LYE_PATH_INKEY, LY_VLOG_NONE, NULL, name);
             return -1;
         }
 
@@ -2461,6 +2452,7 @@ struct diff_ordered_item {
 };
 struct diff_ordered {
     struct lys_node *schema;
+    struct lyd_node *parent;
     unsigned int count;
     struct diff_ordered_item *items; /* array */
     struct diff_ordered_dist *dist;  /* linked list (1-way, ring) */
@@ -2468,16 +2460,22 @@ struct diff_ordered {
 };
 
 static void
-diff_ordset_insert(struct lyd_node *node, struct ly_set *ordset_keys, struct ly_set *ordset)
+diff_ordset_insert(struct lyd_node *node, struct ly_set *ordset)
 {
     unsigned int i;
-    struct diff_ordered *new_ordered;
+    struct diff_ordered *new_ordered, *iter;
 
-    i = ly_set_add(ordset_keys, node->schema, 0);
+    for (i = 0; i < ordset->number; i++) {
+        iter = (struct diff_ordered *)ordset->set.g[i];
+        if (iter->schema == node->schema && iter->parent == node->parent) {
+            break;
+        }
+    }
     if (i == ordset->number) {
         /* not seen user-ordered list */
         new_ordered = calloc(1, sizeof *new_ordered);
         new_ordered->schema = node->schema;
+        new_ordered->parent = node->parent;
 
         ly_set_add(ordset, new_ordered, LY_SET_OPT_USEASLIST);
     }
@@ -2514,7 +2512,7 @@ diff_ordset_free(struct ly_set *set)
 static int
 lyd_diff_compare(struct lyd_node *first, struct lyd_node *second,
                  struct lyd_difflist *diff, unsigned int *size, unsigned int *i, struct ly_set *matchset,
-                 struct ly_set *ordset_keys, struct ly_set *ordset, int options)
+                 struct ly_set *ordset, int options)
 {
     int rc;
     char *str1 = NULL, *str2 = NULL;
@@ -2529,7 +2527,7 @@ lyd_diff_compare(struct lyd_node *first, struct lyd_node *second,
     switch (first->schema->nodetype) {
     case LYS_LEAFLIST:
     case LYS_LIST:
-        rc = lyd_list_equal(first, second, 0, 0);
+        rc = lyd_list_equal(first, second, 0, (options & LYD_DIFFOPT_WITHDEFAULTS ? 1 : 0), 0);
         if (rc == -1) {
             return -1;
         } else if (!rc) {
@@ -2539,7 +2537,7 @@ lyd_diff_compare(struct lyd_node *first, struct lyd_node *second,
 
         /* additional work for future move matching in case of user ordered lists */
         if (first->schema->flags & LYS_USERORDERED) {
-            diff_ordset_insert(first, ordset_keys, ordset);
+            diff_ordset_insert(first, ordset);
         }
 
         /* no break, fall through */
@@ -2554,7 +2552,8 @@ lyd_diff_compare(struct lyd_node *first, struct lyd_node *second,
     case LYS_LEAF:
         /* check for leaf's modification */
         if (!ly_strequal(((struct lyd_node_leaf_list * )first)->value_str,
-                         ((struct lyd_node_leaf_list * )second)->value_str, 1)) {
+                         ((struct lyd_node_leaf_list * )second)->value_str, 1)
+                || ((options & LYD_DIFFOPT_WITHDEFAULTS) && (first->dflt != second->dflt))) {
             if (lyd_difflist_add(diff, size, (*i)++, LYD_DIFF_CHANGED, first, second)) {
                return -1;
             }
@@ -2592,6 +2591,36 @@ lyd_diff_compare(struct lyd_node *first, struct lyd_node *second,
     first->validity |= LYD_VAL_INUSE;
 
     return 0;
+}
+
+/* @brief compare if the nodes are equivalent including checking the list's keys
+ * Go through the nodes and their parents and in the case of list, compare its keys.
+ *
+ * @return 0 different, 1 equivalent
+ */
+static int
+lyd_diff_equivnode(struct lyd_node *first, struct lyd_node *second)
+{
+    struct lyd_node *iter1, *iter2;
+
+    for (iter1 = first, iter2 = second; iter1 && iter2; iter1 = iter1->parent, iter2 = iter2->parent) {
+        if (iter1->schema != iter2->schema) {
+            return 0;
+        }
+        if (iter1->schema->nodetype == LYS_LIST) {
+            /* compare keys */
+            if (lyd_list_equal(iter1, iter2, 0, 0, 0) != 1) {
+                return 0;
+            }
+        }
+    }
+
+    if (iter1 != iter2) {
+        /* we are supposed to be in root (NULL) in both trees */
+        return 0;
+    }
+
+    return 1;
 }
 
 static int
@@ -2702,7 +2731,7 @@ lyd_diff(struct lyd_node *first, struct lyd_node *second, int options)
         struct ly_set *match;
         unsigned int i;
     } *matchlist = NULL, *mlaux;
-    struct ly_set *ordset_keys = NULL, *ordset = NULL;
+    struct ly_set *ordset = NULL;
     struct diff_ordered *ordered;
     struct diff_ordered_dist *dist_aux, *dist_iter;
     struct diff_ordered_item item_aux;
@@ -2795,7 +2824,6 @@ lyd_diff(struct lyd_node *first, struct lyd_node *second, int options)
     matchlist->prev = NULL;
 
     ordset = ly_set_new();
-    ordset_keys = ly_set_new();
 
     /*
      * compare trees
@@ -2818,7 +2846,7 @@ lyd_diff(struct lyd_node *first, struct lyd_node *second, int options)
             }
 
             /* elem2 instance found */
-            rc = lyd_diff_compare(iter, elem2, result, &size, &index, matchlist->match, ordset_keys, ordset, options);
+            rc = lyd_diff_compare(iter, elem2, result, &size, &index, matchlist->match, ordset, options);
             if (rc == -1) {
                 goto error;
             } else if (rc == 0) {
@@ -2912,7 +2940,7 @@ cmp_continue:
                 if ((iter->schema->nodetype & (LYS_LEAFLIST | LYS_LIST)) && (iter->schema->flags & LYS_USERORDERED)) {
                     for (j = ordset->number; j > 0; j--) {
                         ordered = (struct diff_ordered *)ordset->set.g[j - 1];
-                        if (ordered->schema != iter->schema) {
+                        if (ordered->schema != iter->schema || !lyd_diff_equivnode(ordered->parent, iter->parent)) {
                             continue;
                         }
 
@@ -2989,7 +3017,7 @@ cmp_continue:
                 if ((iter->schema->nodetype & (LYS_LEAFLIST | LYS_LIST)) && (iter->schema->flags & LYS_USERORDERED)) {
                     for (j = ordset->number ; j > 0; j--) {
                         ordered = (struct diff_ordered *)ordset->set.g[j - 1];
-                        if (ordered->schema != iter->schema) {
+                        if (ordered->schema != iter->schema || !lyd_diff_equivnode(ordered->parent, iter->parent)) {
                             continue;
                         }
 
@@ -3041,8 +3069,6 @@ cmp_continue:
     free(matchlist);
     matchlist = NULL;
 
-    ly_set_free(ordset_keys);
-    ordset_keys = NULL;
 
     /* 2) deleted nodes */
     LY_TREE_DFS_BEGIN(first, next1, elem1) {
@@ -3212,7 +3238,6 @@ error:
         free(mlaux);
 
     }
-    ly_set_free(ordset_keys);
     diff_ordset_free(ordset);
 
     lyd_free_diff(result);
@@ -3433,8 +3458,8 @@ finish:
     }
 }
 
-static int
-lyd_insert_common(struct lyd_node *parent, struct lyd_node **sibling, struct lyd_node *node)
+int
+lyd_insert_common(struct lyd_node *parent, struct lyd_node **sibling, struct lyd_node *node, int invalidate)
 {
     struct lys_node *par1, *par2;
     const struct lys_node *siter;
@@ -3488,11 +3513,13 @@ lyd_insert_common(struct lyd_node *parent, struct lyd_node **sibling, struct lyd
         return EXIT_FAILURE;
     }
 
-    invalid = isrpc = lyp_is_rpc_action(node->schema);
-    if (!parent || node->parent != parent || isrpc) {
-        /* it is not just moving under a parent node or it is in an RPC where
-         * nodes order matters, so the validation will be necessary */
-        invalid++;
+    if (invalidate) {
+        invalid = isrpc = lyp_is_rpc_action(node->schema);
+        if (!parent || node->parent != parent || isrpc) {
+            /* it is not just moving under a parent node or it is in an RPC where
+             * nodes order matters, so the validation will be necessary */
+            invalid++;
+        }
     }
 
     /* unlink only if it is not a list of siblings without a parent and node is not the first sibling */
@@ -3643,7 +3670,9 @@ lyd_insert_common(struct lyd_node *parent, struct lyd_node **sibling, struct lyd
         }
         ins->parent = parent;
 
-        check_leaf_list_backlinks(ins, 0);
+        if (invalidate) {
+            check_leaf_list_backlinks(ins, 0);
+        }
 
         if (invalid) {
             lyd_insert_setinvalid(ins);
@@ -3676,7 +3705,7 @@ lyd_insert(struct lyd_node *parent, struct lyd_node *node)
         return EXIT_FAILURE;
     }
 
-    return lyd_insert_common(parent, NULL, node);
+    return lyd_insert_common(parent, NULL, node, 1);
 }
 
 API int
@@ -3687,12 +3716,12 @@ lyd_insert_sibling(struct lyd_node **sibling, struct lyd_node *node)
         return EXIT_FAILURE;
     }
 
-    return lyd_insert_common((*sibling) ? (*sibling)->parent : NULL, sibling, node);
+    return lyd_insert_common((*sibling) ? (*sibling)->parent : NULL, sibling, node, 1);
 
 }
 
-static int
-lyd_insert_nextto(struct lyd_node *sibling, struct lyd_node *node, int before)
+int
+lyd_insert_nextto(struct lyd_node *sibling, struct lyd_node *node, int before, int invalidate)
 {
     struct lys_node *par1, *par2;
     struct lyd_node *iter, *start = NULL, *ins, *next1, *next2, *last;
@@ -3719,7 +3748,7 @@ lyd_insert_nextto(struct lyd_node *sibling, struct lyd_node *node, int before)
         return EXIT_FAILURE;
     }
 
-    if (node->parent != sibling->parent || (invalid = lyp_is_rpc_action(node->schema)) || !node->parent) {
+    if (invalidate && ((node->parent != sibling->parent) || (invalid = lyp_is_rpc_action(node->schema)) || !node->parent)) {
         /* a) it is not just moving under a parent node (invalid = 1) or
          * b) it is in an RPC where nodes order matters (invalid = 2) or
          * c) it is top-level where we don't know if it is the same tree (invalid = 1),
@@ -3852,10 +3881,12 @@ lyd_insert_nextto(struct lyd_node *sibling, struct lyd_node *node, int before)
         node->prev = sibling;
     }
 
-    LY_TREE_FOR(node, next1) {
-        check_leaf_list_backlinks(next1, 0);
-        if (next1 == last) {
-            break;
+    if (invalidate) {
+        LY_TREE_FOR(node, next1) {
+            check_leaf_list_backlinks(next1, 0);
+            if (next1 == last) {
+                break;
+            }
         }
     }
 
@@ -3879,7 +3910,7 @@ error:
 API int
 lyd_insert_before(struct lyd_node *sibling, struct lyd_node *node)
 {
-    if (!node || !sibling || lyd_insert_nextto(sibling, node, 1)) {
+    if (!node || !sibling || lyd_insert_nextto(sibling, node, 1, 1)) {
         ly_errno = LY_EINVAL;
         return EXIT_FAILURE;
     }
@@ -3890,7 +3921,7 @@ lyd_insert_before(struct lyd_node *sibling, struct lyd_node *node)
 API int
 lyd_insert_after(struct lyd_node *sibling, struct lyd_node *node)
 {
-    if (!node || !sibling || lyd_insert_nextto(sibling, node, 0)) {
+    if (!node || !sibling || lyd_insert_nextto(sibling, node, 0, 1)) {
         ly_errno = LY_EINVAL;
         return EXIT_FAILURE;
     }
@@ -4327,7 +4358,7 @@ lyd_dup_attr(struct ly_ctx *ctx, struct lyd_node *parent, struct lyd_attr *attr)
     return ret;
 }
 
-static int
+int
 lyd_unlink_internal(struct lyd_node *node, int permanent)
 {
     struct lyd_node *iter;
@@ -5055,9 +5086,13 @@ lyd_build_relative_data_path(const struct lyd_node *node, const char *schema_id,
  * -1 - compare keys and all uniques
  * 0  - compare only keys
  * n  - compare n-th unique
+ *
+ * withdefaults (only for leaf-list):
+ * 0 - treat default nodes are normal nodes
+ * 1 - only change is that if 2 nodes have the same value, but one is default, the other not, they are considered non-equal
  */
 int
-lyd_list_equal(struct lyd_node *first, struct lyd_node *second, int action, int printval)
+lyd_list_equal(struct lyd_node *first, struct lyd_node *second, int action, int withdefaults, int log)
 {
     struct lys_node_list *slist;
     const struct lys_node *snode = NULL;
@@ -5083,8 +5118,9 @@ lyd_list_equal(struct lyd_node *first, struct lyd_node *second, int action, int 
         }
         /* compare values */
         if (ly_strequal(((struct lyd_node_leaf_list *)first)->value_str,
-                        ((struct lyd_node_leaf_list *)second)->value_str, 1)) {
-            if (printval) {
+                        ((struct lyd_node_leaf_list *)second)->value_str, 1)
+                && (!withdefaults || (first->dflt == second->dflt))) {
+            if (log) {
                 LOGVAL(LYE_DUPLEAFLIST, LY_VLOG_LYD, second, second->schema->name,
                        ((struct lyd_node_leaf_list *)second)->value_str);
             }
@@ -5136,7 +5172,7 @@ uniquecheck:
                 }
                 if (j && (j == slist->unique[i].expr_size)) {
                     /* all unique leafs are the same in this set, create this nice error */
-                    if (!printval) {
+                    if (!log) {
                         return 1;
                     }
 
@@ -5212,7 +5248,7 @@ uniquecheck:
             }
         }
 
-        if (printval) {
+        if (log) {
             LOGVAL(LYE_DUPLIST, LY_VLOG_LYD, second, second->schema->name);
         }
         return 1;
@@ -6161,7 +6197,7 @@ lyd_defaults_add_unres(struct lyd_node **root, int options, struct ly_ctx *ctx, 
             LOGERR(LY_EINVAL, "Not valid RPC/action data.");
             return EXIT_FAILURE;
         }
-        if ((options & LYD_OPT_RPCREPLY) && (!act_notif || !act_notif->child) && ((*root)->schema->nodetype != LYS_RPC)) {
+        if ((options & LYD_OPT_RPCREPLY) && !act_notif && ((*root)->schema->nodetype != LYS_RPC)) {
             LOGERR(LY_EINVAL, "Not valid reply data.");
             return EXIT_FAILURE;
         }
@@ -6203,7 +6239,7 @@ lyd_defaults_add_unres(struct lyd_node **root, int options, struct ly_ctx *ctx, 
                     while (data_tree_sibling) {
                         if ((data_tree_sibling->schema == msg_sibling->schema)
                                 && ((msg_sibling->schema->nodetype != LYS_LIST)
-                                    || lyd_list_equal(data_tree_sibling, msg_sibling, 0, 0))) {
+                                    || lyd_list_equal(data_tree_sibling, msg_sibling, 0, 0, 0))) {
                             /* match */
                             break;
                         }

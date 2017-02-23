@@ -16,6 +16,7 @@
 #define _RESOLVE_H
 
 #include "libyang.h"
+#include "extensions.h"
 
 /**
  * @brief Type of an unresolved item (in either SCHEMA or DATA)
@@ -26,6 +27,7 @@ enum UNRES_ITEM {
     UNRES_IFFEAT,        /* unresolved if-feature */
     UNRES_TYPE_DER,      /* unresolved derived type defined in leaf/leaflist */
     UNRES_TYPE_DER_TPDF, /* unresolved derived type defined as typedef */
+    UNRES_TYPE_DER_EXT,
     UNRES_TYPE_LEAFREF,  /* check leafref value */
     UNRES_AUGMENT,       /* unresolved augment targets */
     UNRES_CHOICE_DFLT,   /* check choice default case */
@@ -36,6 +38,9 @@ enum UNRES_ITEM {
     UNRES_LIST_KEYS,     /* list keys */
     UNRES_LIST_UNIQ,     /* list uniques */
     UNRES_XPATH,         /* unchecked XPath expression */
+    UNRES_EXT,           /* extension instances */
+
+    UNRES_EXT_FINALIZE,  /* extension is already resolved, but needs to be finalized via plugin callbacks */
 
     /* DATA */
     UNRES_LEAFREF,       /* unresolved leafref reference */
@@ -49,6 +54,25 @@ enum UNRES_ITEM {
     /* generic */
     UNRES_RESOLVED,      /* a resolved item */
     UNRES_DELETE,        /* prepared for auto-delete */
+};
+
+/**
+ * @brief auxiliaty structure to hold all necessary information for UNRES_EXT
+ */
+struct unres_ext {
+    union {
+        struct lyxml_elem *yin;         /**< YIN content of the extension instance */
+        struct yang_ext_substmt *yang;  /**< YANG content of strings */
+    } data;
+    LYS_INFORMAT datatype;              /**< type of the data in data union */
+
+    /* data for lys_ext_instance structure */
+    void *parent;
+    struct lys_module *mod;
+    LYEXT_PAR parent_type;
+    LYEXT_SUBSTMT substmt;
+    uint8_t substmt_index;
+    uint8_t ext_index;
 };
 
 /**
@@ -132,6 +156,8 @@ void resolve_iffeature_getsizes(struct lys_iffeature *iffeat, unsigned int *expr
 int resolve_iffeature_compile(struct lys_iffeature *iffeat_expr, const char *value, struct lys_node *node,
                               int infeature, struct unres_schema *unres);
 uint8_t iff_getop(uint8_t *list, int pos);
+
+void resolve_identity_backlink_update(struct lys_ident *der, struct lys_ident *base);
 
 struct lyd_node *resolve_data_descendant_schema_nodeid(const char *nodeid, struct lyd_node *start);
 

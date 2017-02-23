@@ -125,6 +125,78 @@ static char *lyp_ublock2urange[][2] = {
     {NULL, NULL}
 };
 
+const char *ly_stmt_str[] = {
+    [LY_STMT_UNKNOWN] = "",
+    [LY_STMT_ARGUMENT] = "argument",
+    [LY_STMT_BASE] = "base",
+    [LY_STMT_BELONGSTO] = "belongs-to",
+    [LY_STMT_CONTACT] = "contact",
+    [LY_STMT_DEFAULT] = "default",
+    [LY_STMT_DESCRIPTION] = "description",
+    [LY_STMT_ERRTAG] = "error-app-tag",
+    [LY_STMT_ERRMSG] = "error-message",
+    [LY_STMT_KEY] = "key",
+    [LY_STMT_NAMESPACE] = "namespace",
+    [LY_STMT_ORGANIZATION] = "organization",
+    [LY_STMT_PATH] = "path",
+    [LY_STMT_PREFIX] = "prefix",
+    [LY_STMT_PRESENCE] = "presence",
+    [LY_STMT_REFERENCE] = "reference",
+    [LY_STMT_REVISIONDATE] = "revision-date",
+    [LY_STMT_UNITS] = "units",
+    [LY_STMT_VALUE] = "value",
+    [LY_STMT_VERSION] = "yang-version",
+    [LY_STMT_MODIFIER] = "modifier",
+    [LY_STMT_REQINSTANCE] = "require-instance",
+    [LY_STMT_YINELEM] = "yin-element",
+    [LY_STMT_CONFIG] = "config",
+    [LY_STMT_MANDATORY] = "mandatory",
+    [LY_STMT_ORDEREDBY] = "ordered-by",
+    [LY_STMT_STATUS] = "status",
+    [LY_STMT_DIGITS] = "fraction-digits",
+    [LY_STMT_MAX] = "max-elements",
+    [LY_STMT_MIN] = "min-elements",
+    [LY_STMT_POSITION] = "position",
+    [LY_STMT_UNIQUE] = "unique",
+    [LY_STMT_MODULE] = "module",
+    [LY_STMT_SUBMODULE] = "submodule",
+    [LY_STMT_ACTION] = "action",
+    [LY_STMT_ANYDATA] = "anydata",
+    [LY_STMT_ANYXML] = "anyxml",
+    [LY_STMT_CASE] = "case",
+    [LY_STMT_CHOICE] = "choice",
+    [LY_STMT_CONTAINER] = "container",
+    [LY_STMT_GROUPING] = "grouping",
+    [LY_STMT_INPUT] = "input",
+    [LY_STMT_LEAF] = "leaf",
+    [LY_STMT_LEAFLIST] = "leaf-list",
+    [LY_STMT_LIST] = "list",
+    [LY_STMT_NOTIFICATION] = "notification",
+    [LY_STMT_OUTPUT] = "output",
+    [LY_STMT_RPC] = "rpc",
+    [LY_STMT_USES] = "uses",
+    [LY_STMT_TYPEDEF] = "typedef",
+    [LY_STMT_TYPE] = "type",
+    [LY_STMT_BIT] = "bit",
+    [LY_STMT_ENUM] = "enum",
+    [LY_STMT_REFINE] = "refine",
+    [LY_STMT_AUGMENT] = "augment",
+    [LY_STMT_DEVIATE] = "deviate",
+    [LY_STMT_DEVIATION] = "deviation",
+    [LY_STMT_EXTENSION] = "extension",
+    [LY_STMT_FEATURE] = "feature",
+    [LY_STMT_IDENTITY] = "identity",
+    [LY_STMT_IFFEATURE] = "if-feature",
+    [LY_STMT_IMPORT] = "import",
+    [LY_STMT_INCLUDE] = "include",
+    [LY_STMT_LENGTH] = "length",
+    [LY_STMT_MUST] = "must",
+    [LY_STMT_PATTERN] = "pattern",
+    [LY_STMT_RANGE] = "range",
+    [LY_STMT_WHEN] = "when",
+    [LY_STMT_REVISION] = "revision"
+};
+
 int
 lyp_is_rpc_action(struct lys_node *node)
 {
@@ -160,6 +232,59 @@ lyp_check_options(int options)
     return x ? !(x && !(x & (x - 1))) : 0;
 }
 
+void *
+lyp_mmap(int fd, size_t addsize, size_t *length)
+{
+    struct stat sb;
+    long pagesize;
+    size_t m;
+    void *addr;
+
+    assert(fd >= 0);
+    ly_errno = LY_SUCCESS;
+
+    if (fstat(fd, &sb) == -1) {
+        LOGERR(LY_ESYS, "Failed to stat the file descriptor (%s) for the mmap().", strerror(errno));
+        return MAP_FAILED;
+    }
+    if (!S_ISREG(sb.st_mode)) {
+        LOGERR(LY_EINVAL, "File to mmap() is not a regular file");
+        return MAP_FAILED;
+    }
+    if (!sb.st_size) {
+        return NULL;
+    }
+    pagesize = sysconf(_SC_PAGESIZE);
+    ++addsize;                       /* at least one additional byte for terminating NULL byte */
+
+    m = sb.st_size % pagesize;
+    if (m && pagesize - m >= addsize) {
+        /* there will be enough space after the file content mapping to provide zeroed additional bytes */
+        *length = sb.st_size + addsize;
+        addr = mmap(NULL, *length, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    } else {
+        /* there will not be enough bytes after the file content mapping for the additional bytes and some of them
+         * would overflow into another page that would not be zerroed and any access into it would generate SIGBUS.
+         * Therefore we have to do the following hack with double mapping. First, the required number of bytes
+         * (including the additinal bytes) is required as anonymous and thus they will be really provided (actually more
+         * because of using whole pages) and also initialized by zeros. Then, the file is mapped to the same address
+         * where the anonymous mapping starts. */
+        *length = sb.st_size + pagesize;
+        addr = mmap(NULL, *length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        addr = mmap(addr, sb.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED, fd, 0);
+    }
+    if (addr == MAP_FAILED) {
+        LOGERR(LY_ESYS, "mmap() failed - %s", strerror(errno));
+    }
+    return addr;
+}
+
+int
+lyp_munmap(void *addr, size_t length)
+{
+    return munmap(addr, length);
+}
+
 /**
  * @brief Alternative for lys_read() + lys_parse() in case of import
  *
@@ -169,7 +294,7 @@ struct lys_module *
 lys_read_import(struct ly_ctx *ctx, int fd, LYS_INFORMAT format, const char *revision, int implement)
 {
     struct lys_module *module = NULL;
-    struct stat sb;
+    size_t length;
     char *addr;
 
     if (!ctx || fd < 0) {
@@ -177,34 +302,27 @@ lys_read_import(struct ly_ctx *ctx, int fd, LYS_INFORMAT format, const char *rev
         return NULL;
     }
 
-
-    if (fstat(fd, &sb) == -1) {
-        LOGERR(LY_ESYS, "Failed to stat the file descriptor (%s).", strerror(errno));
-        return NULL;
-    }
-
-    if (!sb.st_size) {
-        LOGERR(LY_EINVAL, "File empty.");
-        return NULL;
-    }
-
-    addr = mmap(NULL, sb.st_size + 2, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    addr = lyp_mmap(fd, 1, &length);
     if (addr == MAP_FAILED) {
-        LOGERR(LY_EMEM,"Map file into memory failed (%s()).",__func__);
+        LOGERR(LY_ESYS, "Mapping file descriptor into memory failed (%s()).", __func__);
+        return NULL;
+    } else if (!addr) {
+        LOGERR(LY_EINVAL, "Empty schema file.");
         return NULL;
     }
+
     switch (format) {
     case LYS_IN_YIN:
         module = yin_read_module(ctx, addr, revision, implement);
         break;
     case LYS_IN_YANG:
-        module = yang_read_module(ctx, addr, sb.st_size + 2, revision, implement);
+        module = yang_read_module(ctx, addr, length, revision, implement);
         break;
     default:
         LOGERR(LY_EINVAL, "%s: Invalid format parameter.", __func__);
         break;
     }
-    munmap(addr, sb.st_size + 2);
+    lyp_munmap(addr, length);
 
     return module;
 }
@@ -416,7 +534,7 @@ matched:
     }
 
     if (module) {
-        result = (struct lys_module *)lys_submodule_read(module, fd, match_format, unres);
+        result = (struct lys_module *)lys_sub_parse_fd(module, fd, match_format, unres);
     } else {
         result = lys_read_import(ctx, fd, match_format, revision, implement);
     }
@@ -1859,11 +1977,12 @@ dup_prefix_check(const char *prefix, struct lys_module *module)
 int
 lyp_check_identifier(const char *id, enum LY_IDENT type, struct lys_module *module, struct lys_node *parent)
 {
-    int i;
+    int i, j;
     int size;
     struct lys_tpdf *tpdf;
     struct lys_node *node;
     struct lys_module *mainmod;
+    struct lys_submodule *submod;
 
     assert(id);
 
@@ -1970,7 +2089,7 @@ lyp_check_identifier(const char *id, enum LY_IDENT type, struct lys_module *modu
         assert(module);
         mainmod = lys_main_module(module);
 
-        /* check feature name uniqness*/
+        /* check feature name uniqueness*/
         /* check features in the current module */
         if (dup_feature_check(id, module)) {
             LOGVAL(LYE_DUPID, LY_VLOG_NONE, NULL, "feature", id);
@@ -1984,6 +2103,31 @@ lyp_check_identifier(const char *id, enum LY_IDENT type, struct lys_module *modu
                 return EXIT_FAILURE;
             }
         }
+        break;
+
+    case LY_IDENT_EXTENSION:
+        assert(module);
+        mainmod = lys_main_module(module);
+
+        /* check extension name uniqueness in the main module ... */
+        for (i = 0; i < mainmod->extensions_size; i++) {
+            if (ly_strequal(id, mainmod->extensions[i].name, 1)) {
+                LOGVAL(LYE_DUPID, LY_VLOG_NONE, NULL, "extension", id);
+                return EXIT_FAILURE;
+            }
+        }
+
+        /* ... and all its submodules */
+        for (j = 0; j < mainmod->inc_size && mainmod->inc[j].submodule; j++) {
+            submod = mainmod->inc[j].submodule; /* shortcut */
+            for (i = 0; i < submod->extensions_size; i++) {
+                if (ly_strequal(id, submod->extensions[i].name, 1)) {
+                    LOGVAL(LYE_DUPID, LY_VLOG_NONE, NULL, "extension", id);
+                    return EXIT_FAILURE;
+                }
+            }
+        }
+
         break;
 
     default:
@@ -2148,67 +2292,92 @@ lyp_check_status(uint16_t flags1, struct lys_module *mod1, const char *name1,
     return EXIT_SUCCESS;
 }
 
-static void
-lyp_check_circmod_pop(struct lys_module *module)
+void
+lyp_del_includedup(struct lys_module *mod)
 {
-    struct ly_modules_list *models = &module->ctx->models;
+    struct ly_modules_list *models = &mod->ctx->models;
+    uint8_t i;
 
-    /* update the list of currently being parsed modules */
-    models->parsing_number--;
-    if (models->parsing_number == 1) {
-        free(models->parsing);
-        models->parsing = NULL;
-        models->parsing_number = models->parsing_size = 0;
-    } else {
-        models->parsing[models->parsing_number] = NULL;
+    assert(mod && !mod->type);
+
+    if (mod->inc_size && models->parsed_submodules_count) {
+        for (i = models->parsed_submodules_count - 1; models->parsed_submodules[i]->type; --i);
+        assert(models->parsed_submodules[i] == mod);
+
+        models->parsed_submodules_count = i;
+        if (!models->parsed_submodules_count) {
+            free(models->parsed_submodules);
+            models->parsed_submodules = NULL;
+        }
     }
+}
+
+static void
+lyp_add_includedup(struct lys_module *sub_mod, struct lys_submodule *parsed_submod)
+{
+    struct ly_modules_list *models = &sub_mod->ctx->models;
+    int16_t i;
+
+    /* store main module if first include */
+    if (models->parsed_submodules_count) {
+        for (i = models->parsed_submodules_count - 1; models->parsed_submodules[i]->type; --i);
+    } else {
+        i = -1;
+    }
+    if ((i == -1) || (models->parsed_submodules[i] != lys_main_module(sub_mod))) {
+        ++models->parsed_submodules_count;
+        models->parsed_submodules = ly_realloc(models->parsed_submodules,
+                                               models->parsed_submodules_count * sizeof *models->parsed_submodules);
+        if (!models->parsed_submodules) {
+            LOGMEM;
+            return;
+        }
+        models->parsed_submodules[models->parsed_submodules_count - 1] = lys_main_module(sub_mod);
+    }
+
+    /* store parsed submodule */
+    ++models->parsed_submodules_count;
+    models->parsed_submodules = ly_realloc(models->parsed_submodules,
+                                           models->parsed_submodules_count * sizeof *models->parsed_submodules);
+    if (!models->parsed_submodules) {
+        LOGMEM;
+        return;
+    }
+    models->parsed_submodules[models->parsed_submodules_count - 1] = (struct lys_module *)parsed_submod;
 }
 
 /*
  * types: 0 - include, 1 - import
  */
 static int
-lyp_check_circmod(struct lys_module *module, const char *value, int type)
+lyp_check_add_circmod(struct lys_module *module, const char *value, int type)
 {
     LY_ECODE code = type ? LYE_CIRC_IMPORTS : LYE_CIRC_INCLUDES;
     struct ly_modules_list *models = &module->ctx->models;
-    int i;
+    uint8_t i;
 
-    /* circular check */
-    if (!models->parsing_size) {
-        if (ly_strequal(module->name, value, 1)) {
+    /* include/import itself */
+    if (ly_strequal(module->name, value, 1)) {
+        LOGVAL(code, LY_VLOG_NONE, NULL, value);
+        return -1;
+    }
+
+    /* currently parsed modules */
+    for (i = 0; i < models->parsing_sub_modules_count; i++) {
+        if (ly_strequal(models->parsing_sub_modules[i], value, 1)) {
             LOGVAL(code, LY_VLOG_NONE, NULL, value);
             return -1;
         }
-
-        /* storing - first import, besides the module being imported, add also the starting module */
-        models->parsing_size = models->parsing_number = 2;
-        models->parsing = malloc(2 * sizeof *models->parsing);
-        if (!models->parsing) {
-            LOGMEM;
-            return -1;
-        }
-        models->parsing[0] = module->name;
-        models->parsing[1] = value;
-    } else {
-        for (i = 0; i < models->parsing_number; i++) {
-            if (ly_strequal(models->parsing[i], value, 1)) {
-                LOGVAL(code, LY_VLOG_NONE, NULL, value);
-                return -1;
-            }
-        }
-        /* storing - enlarge the list of modules being currently parsed */
-        models->parsing_number++;
-        if (models->parsing_number >= models->parsing_size) {
-            models->parsing_size++;
-            models->parsing = ly_realloc(models->parsing, models->parsing_size * sizeof *models->parsing);
-            if (!models->parsing) {
-                LOGMEM;
-                return -1;
-            }
-        }
-        models->parsing[models->parsing_number - 1] = value;
     }
+    /* storing - enlarge the list of modules being currently parsed */
+    ++models->parsing_sub_modules_count;
+    models->parsing_sub_modules = ly_realloc(models->parsing_sub_modules,
+                                             models->parsing_sub_modules_count * sizeof *models->parsing_sub_modules);
+    if (!models->parsing_sub_modules) {
+        LOGMEM;
+        return -1;
+    }
+    models->parsing_sub_modules[models->parsing_sub_modules_count - 1] = value;
 
     return 0;
 }
@@ -2218,46 +2387,48 @@ lyp_check_circmod(struct lys_module *module, const char *value, int type)
  *  0 - success, no duplicity
  *  1 - success, valid duplicity found and stored in *sub
  */
-int
-lyp_check_include_dup(struct lys_module *mod, const char *name, struct lys_include *inc, int top, struct lys_submodule **sub)
+static int
+lyp_check_includedup(struct lys_module *mod, const char *name, struct lys_include *inc, struct lys_submodule **sub)
 {
-    uint8_t i;
-    int rc;
+    struct lys_module **parsed_sub = mod->ctx->models.parsed_submodules;
+    uint8_t i, parsed_sub_count = mod->ctx->models.parsed_submodules_count;
 
     assert(sub);
 
-    for (i = 0; i < mod->inc_size; i++) {
+    for (i = 0; i < mod->inc_size; ++i) {
         if (ly_strequal(mod->inc[i].submodule->name, name, 1)) {
-            /* check revisions, including multiple revisions of a single module is error */
-            if (inc->rev[0] && (!mod->inc[i].submodule->rev_size || strcmp(mod->inc[i].submodule->rev[0].date, inc->rev))) {
-                /* the already included submodule has
-                 * - no revision, but here we require some
-                 * - different revision than the one required here */
-                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, name, "include");
-                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Including multiple revisions of submodule \"%s\".", name);
-                return -1;
-            } else if (top) {
-                /* the same module is already included in the same module - error */
-                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, name, "include");
-                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Submodule \"%s\" included twice in the same module \"%s\".",
-                       name, mod->name);
-                return -1;
-            } else {
+            /* the same module is already included in the same module - error */
+            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, name, "include");
+            LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Submodule \"%s\" included twice in the same module \"%s\".",
+                   name, mod->name);
+            return -1;
+        }
+    }
+
+    if (parsed_sub_count) {
+        for (i = parsed_sub_count - 1; parsed_sub[i]->type; --i) {
+            if (ly_strequal(parsed_sub[i]->name, name, 1)) {
+                /* check revisions, including multiple revisions of a single module is error */
+                if (inc->rev[0] && (!parsed_sub[i]->rev_size || strcmp(parsed_sub[i]->rev[0].date, inc->rev))) {
+                    /* the already included submodule has
+                     * - no revision, but here we require some
+                     * - different revision than the one required here */
+                    LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, name, "include");
+                    LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Including multiple revisions of submodule \"%s\".", name);
+                    return -1;
+                }
+
                 /* the same module is already included in some other submodule, return it */
-                (*sub) = mod->inc[i].submodule;
+                (*sub) = (struct lys_submodule *)parsed_sub[i];
                 return 1;
             }
         }
 
-        /* go recursively */
-        rc = lyp_check_include_dup((struct lys_module *)mod->inc[i].submodule, name, inc, 0, sub);
-        if (rc) {
-            /* error or found valid duplicity, do not continue with searching */
-            return rc;
-        }
+        /* if we are submodule, the last module must be our main */
+        assert(!mod->type || (parsed_sub[i] == ((struct lys_submodule *)mod)->belongsto));
     }
 
-    /* not duplicity found */
+    /* no duplicity found */
     return 0;
 }
 
@@ -2266,41 +2437,21 @@ lyp_check_include_dup(struct lys_module *mod, const char *name, struct lys_inclu
  * -1 - error
  */
 int
-lyp_check_include(struct lys_module *module, const char *value,
-                  struct lys_include *inc, struct unres_schema *unres)
+lyp_check_include(struct lys_module *module, const char *value, struct lys_include *inc, struct unres_schema *unres)
 {
     int i;
 
     /* check that the submodule was not included yet */
-    if (module->type) {
-        /* 1) in the same submodule and the submodules it already includes */
-        i = lyp_check_include_dup(module, value, inc, 1, &inc->submodule);
-        if (i == -1) {
-            return -1;
-        } else if (i == 1) {
-            return 0;
-        }
-
-        /* 2) in the main module and all the submodules it already includes */
-        i = lyp_check_include_dup(((struct lys_submodule *)module)->belongsto, value, inc, 0, &inc->submodule);
-        if (i == -1) {
-            return -1;
-        } else if (i == 1) {
-            return 0;
-        }
-    } else {
-        /* 3) in the main module itself and all the submodules it already includes */
-        i = lyp_check_include_dup(module, value, inc, 1, &inc->submodule);
-        if (i == -1) {
-            return -1;
-        } else if (i == 1) {
-            return 0;
-        }
+    i = lyp_check_includedup(module, value, inc, &inc->submodule);
+    if (i == -1) {
+        return -1;
+    } else if (i == 1) {
+        return 0;
     }
-    /* sobmodule is not yet loaded */
+    /* submodule is not yet loaded */
 
     /* circular include check */
-    if (lyp_check_circmod(module, value, 0)) {
+    if (lyp_check_add_circmod(module, value, 0)) {
         return -1;
     }
 
@@ -2309,7 +2460,11 @@ lyp_check_include(struct lys_module *module, const char *value,
                                                                     inc->rev[0] ? inc->rev : NULL, 1, unres);
 
     /* update the list of currently being parsed modules */
-    lyp_check_circmod_pop(module);
+    --module->ctx->models.parsing_sub_modules_count;
+    if (!module->ctx->models.parsing_sub_modules_count) {
+        free(module->ctx->models.parsing_sub_modules);
+        module->ctx->models.parsing_sub_modules = NULL;
+    }
 
     /* check the result */
     if (!inc->submodule) {
@@ -2319,6 +2474,9 @@ lyp_check_include(struct lys_module *module, const char *value,
         LOGERR(LY_EVALID, "Including \"%s\" module into \"%s\" failed.", value, module->name);
         return -1;
     }
+
+    /* store the submodule as successfully parsed */
+    lyp_add_includedup(module, inc->submodule);
 
     return 0;
 }
@@ -2410,7 +2568,6 @@ lyp_check_import(struct lys_module *module, const char *value, struct lys_import
     int i;
     struct lys_module *dup = NULL;
 
-
     /* check for importing a single module in multiple revisions */
     for (i = 0; i < module->imp_size; i++) {
         if (!module->imp[i].module) {
@@ -2442,7 +2599,7 @@ lyp_check_import(struct lys_module *module, const char *value, struct lys_import
     }
 
     /* circular import check */
-    if (lyp_check_circmod(module, value, 1)) {
+    if (lyp_check_add_circmod(module, value, 1)) {
         return -1;
     }
 
@@ -2450,7 +2607,11 @@ lyp_check_import(struct lys_module *module, const char *value, struct lys_import
     imp->module = (struct lys_module *)ly_ctx_load_sub_module(module->ctx, NULL, value, imp->rev[0] ? imp->rev : NULL, 0, NULL);
 
     /* update the list of currently being parsed modules */
-    lyp_check_circmod_pop(module);
+    --module->ctx->models.parsing_sub_modules_count;
+    if (!module->ctx->models.parsing_sub_modules_count) {
+        free(module->ctx->models.parsing_sub_modules);
+        module->ctx->models.parsing_sub_modules = NULL;
+    }
 
     /* check the result */
     if (!imp->module) {
@@ -2475,92 +2636,649 @@ lyp_check_import(struct lys_module *module, const char *value, struct lys_import
     return 0;
 }
 
-int
-lyp_ctx_add_module(struct lys_module **module)
+/*
+ * put the newest revision to the first position
+ */
+void
+lyp_sort_revisions(struct lys_module *module)
+{
+    uint8_t i, r;
+    struct lys_revision rev;
+
+    for (i = 1, r = 0; i < module->rev_size; i++) {
+        if (strcmp(module->rev[i].date, module->rev[r].date) > 0) {
+            r = i;
+        }
+    }
+
+    if (r) {
+        /* the newest revision is not on position 0, switch them */
+        memcpy(&rev, &module->rev[0], sizeof rev);
+        memcpy(&module->rev[0], &module->rev[r], sizeof rev);
+        memcpy(&module->rev[r], &rev, sizeof rev);
+    }
+}
+
+void
+lyp_ext_instance_rm(struct ly_ctx *ctx, struct lys_ext_instance ***ext, uint8_t *size, uint8_t index)
+{
+    uint8_t i;
+
+    lys_extension_instances_free(ctx, (*ext)[index]->ext, (*ext)[index]->ext_size);
+    lydict_remove(ctx, (*ext)[index]->arg_value);
+    free((*ext)[index]);
+
+    /* move the rest of the array */
+    for (i = index + 1; i < (*size); i++) {
+        (*ext)[i - 1] = (*ext)[i];
+    }
+    /* clean the last cell in the array structure */
+    (*ext)[(*size) - 1] = NULL;
+    /* the array is not reallocated here, just change its size */
+    (*size) = (*size) - 1;
+
+    if (!(*size)) {
+        /* ext array is empty */
+        free((*ext));
+        ext = NULL;
+    }
+}
+
+static int
+lyp_rfn_apply_ext_(struct lys_refine *rfn, struct lys_node *target, LYEXT_SUBSTMT substmt, struct lys_ext *extdef)
 {
     struct ly_ctx *ctx;
-    struct lys_module **newlist = NULL;
-    struct lys_module *mod;
+    int m, n;
+    struct lys_ext_instance *new;
+    void *reallocated;
+
+    ctx = target->module->ctx; /* shortcut */
+
+    m = n = -1;
+    while ((m = lys_ext_iter(rfn->ext, rfn->ext_size, m + 1, substmt)) != -1) {
+        /* refine's substatement includes extensions, copy them to the target, replacing the previous
+         * substatement's extensions if any. In case of refining the extension itself, we are going to
+         * replace only the same extension (pointing to the same definition) */
+        if (substmt == LYEXT_SUBSTMT_SELF && rfn->ext[m]->def != extdef) {
+            continue;
+        }
+
+        /* get the index of the extension to replace in the target node */
+        do {
+            n = lys_ext_iter(target->ext, target->ext_size, n + 1, substmt);
+        } while (n != -1 && substmt == LYEXT_SUBSTMT_SELF && target->ext[n]->def != extdef);
+
+        /* TODO cover complex extension instances
+           ((struct lys_ext_instance_complex*)(target->ext[n])->module = target->module;
+         */
+        if (n == -1) {
+            /* nothing to replace, we are going to add it - reallocate */
+            new = malloc(sizeof **target->ext);
+            if (!new) {
+                LOGMEM;
+                return EXIT_FAILURE;
+            }
+            reallocated = realloc(target->ext, (target->ext_size + 1) * sizeof *target->ext);
+            if (!reallocated) {
+                LOGMEM;
+                free(new);
+                return EXIT_FAILURE;
+            }
+            target->ext = reallocated;
+            target->ext_size++;
+
+            /* init */
+            n = target->ext_size - 1;
+            target->ext[n] = new;
+            target->ext[n]->parent = target;
+            target->ext[n]->parent_type = LYEXT_PAR_NODE;
+            target->ext[n]->flags = 0;
+            target->ext[n]->insubstmt = substmt;
+        } else {
+            /* replacing - first remove the allocated data from target */
+            lys_extension_instances_free(ctx, target->ext[n]->ext, target->ext[n]->ext_size);
+            lydict_remove(ctx, target->ext[n]->arg_value);
+        }
+        /* common part for adding and replacing */
+        target->ext[n]->def = rfn->ext[m]->def;
+        /* parent and parent_type do not change */
+        target->ext[n]->arg_value = lydict_insert(ctx, rfn->ext[m]->arg_value, 0);
+        /* flags do not change */
+        target->ext[n]->ext_size = rfn->ext[m]->ext_size;
+        lys_ext_dup(target->module, rfn->ext[m]->ext, rfn->ext[m]->ext_size, target, LYEXT_PAR_NODE,
+                    &target->ext[n]->ext, NULL);
+        /* substmt does not change, but the index must be taken from the refine */
+        target->ext[n]->insubstmt_index = rfn->ext[m]->insubstmt_index;
+    }
+
+    /* remove the rest of extensions belonging to the original substatement in the target node */
+    while ((n = lys_ext_iter(target->ext, target->ext_size, n + 1, substmt)) != -1) {
+        if (substmt == LYEXT_SUBSTMT_SELF && target->ext[n]->def != extdef) {
+            /* keep this extension */
+            continue;
+        }
+
+        /* remove the item */
+        lyp_ext_instance_rm(ctx, &target->ext, &target->ext_size, n);
+        --n;
+    }
+
+    return EXIT_SUCCESS;
+}
+
+/*
+ * apply extension instances defined under refine's substatements.
+ * It cannot be done immediately when applying the refine because there can be
+ * still unresolved data (e.g. type) and mainly the targeted extension instances.
+ */
+int
+lyp_rfn_apply_ext(struct lys_module *module)
+{
+    int i, k, a = 0;
+    struct lys_node *root, *nextroot, *next, *node;
+    struct lys_node *target;
+    struct lys_node_uses *uses;
+    struct lys_refine *rfn;
+    struct ly_set *extset;
+
+    /* refines in uses */
+    LY_TREE_FOR_SAFE(module->data, nextroot, root) {
+        /* go through the data tree of the module and all the defined augments */
+
+        LY_TREE_DFS_BEGIN(root, next, node) {
+            if (node->nodetype == LYS_USES) {
+                uses = (struct lys_node_uses *)node;
+
+                for (i = 0; i < uses->refine_size; i++) {
+                    if (!uses->refine[i].ext_size) {
+                        /* no extensions in refine */
+                        continue;
+                    }
+                    rfn = &uses->refine[i]; /* shortcut */
+
+                    /* get the target node */
+                    resolve_descendant_schema_nodeid(rfn->target_name, uses->child,
+                                                     LYS_NO_RPC_NOTIF_NODE | LYS_ACTION | LYS_NOTIF,
+                                                     1, 0, (const struct lys_node **)&target);
+
+                    /* extensions */
+                    extset = ly_set_new();
+                    k = -1;
+                    while ((k = lys_ext_iter(rfn->ext, rfn->ext_size, k + 1, LYEXT_SUBSTMT_SELF)) != -1) {
+                        ly_set_add(extset, rfn->ext[k]->def, 0);
+                    }
+                    for (k = 0; (unsigned int)k < extset->number; k++) {
+                        if (lyp_rfn_apply_ext_(rfn, target, LYEXT_SUBSTMT_SELF, (struct lys_ext *)extset->set.g[k])) {
+                            ly_set_free(extset);
+                            return EXIT_FAILURE;
+                        }
+                    }
+                    ly_set_free(extset);
+
+                    /* description */
+                    if (rfn->dsc && lyp_rfn_apply_ext_(rfn, target, LYEXT_SUBSTMT_DESCRIPTION, NULL)) {
+                        return EXIT_FAILURE;
+                    }
+                    /* reference */
+                    if (rfn->ref && lyp_rfn_apply_ext_(rfn, target, LYEXT_SUBSTMT_REFERENCE, NULL)) {
+                        return EXIT_FAILURE;
+                    }
+                    /* config, in case of notification or rpc/action{notif, the config is not applicable
+                     * (there is no config status) */
+                    if ((rfn->flags & LYS_CONFIG_MASK) && (target->flags & LYS_CONFIG_MASK)) {
+                        if (lyp_rfn_apply_ext_(rfn, target, LYEXT_SUBSTMT_CONFIG, NULL)) {
+                            return EXIT_FAILURE;
+                        }
+                    }
+                    /* default value */
+                    if (rfn->dflt_size && lyp_rfn_apply_ext_(rfn, target, LYEXT_SUBSTMT_DEFAULT, NULL)) {
+                        return EXIT_FAILURE;
+                    }
+                    /* mandatory */
+                    if (rfn->flags & LYS_MAND_MASK) {
+                        if (lyp_rfn_apply_ext_(rfn, target, LYEXT_SUBSTMT_MANDATORY, NULL)) {
+                            return EXIT_FAILURE;
+                        }
+                    }
+                    /* presence */
+                    if ((target->nodetype & LYS_CONTAINER) && rfn->mod.presence) {
+                        if (lyp_rfn_apply_ext_(rfn, target, LYEXT_SUBSTMT_PRESENCE, NULL)) {
+                            return EXIT_FAILURE;
+                        }
+                    }
+                    /* min/max */
+                    if (rfn->flags & LYS_RFN_MINSET) {
+                        if (lyp_rfn_apply_ext_(rfn, target, LYEXT_SUBSTMT_MIN, NULL)) {
+                            return EXIT_FAILURE;
+                        }
+                    }
+                    if (rfn->flags & LYS_RFN_MAXSET) {
+                        if (lyp_rfn_apply_ext_(rfn, target, LYEXT_SUBSTMT_MAX, NULL)) {
+                            return EXIT_FAILURE;
+                        }
+                    }
+                    /* must and if-feature contain extensions on their own, not needed to be solved here */
+
+                    if (target->ext_size) {
+                        /* the allocated target's extension array can be now longer than needed in case
+                         * there is less refine substatement's extensions than in original. Since we are
+                         * going to reduce or keep the same memory, it is not necessary to test realloc's result */
+                        target->ext = realloc(target->ext, target->ext_size * sizeof *target->ext);
+                    }
+                }
+            }
+            LY_TREE_DFS_END(root, next, node)
+        }
+
+        if (!nextroot && a < module->augment_size) {
+            nextroot = module->augment[a].child;
+            a++;
+        }
+    }
+
+    return EXIT_SUCCESS;
+}
+
+/*
+ * check mandatory substatements defined under extension instances.
+ */
+int
+lyp_mand_check_ext(struct lys_ext_instance_complex *ext, const char *ext_name)
+{
+    void *p;
+    int i;
+
+    /* check for mandatory substatements */
+    for (i = 0; ext->substmt[i].stmt; i++) {
+        if (ext->substmt[i].cardinality == LY_STMT_CARD_OPT || ext->substmt[i].cardinality == LY_STMT_CARD_ANY) {
+            /* not a mandatory */
+            continue;
+        } else if (ext->substmt[i].cardinality == LY_STMT_CARD_SOME) {
+            goto array;
+        }
+
+        /*
+         * LY_STMT_ORDEREDBY - not checked, has a default value which is the same as explicit system order
+         * LY_STMT_MODIFIER, LY_STMT_STATUS, LY_STMT_MANDATORY, LY_STMT_CONFIG - checked, but mandatory requirement
+         * does not make sense since there is also a default value specified
+         */
+        switch(ext->substmt[i].stmt) {
+        case LY_STMT_ORDEREDBY:
+            /* always ok */
+            break;
+        case LY_STMT_REQINSTANCE:
+        case LY_STMT_DIGITS:
+        case LY_STMT_MODIFIER:
+            p = lys_ext_complex_get_substmt(ext->substmt[i].stmt, ext, NULL);
+            if (!*(uint8_t*)p) {
+                LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, ly_stmt_str[ext->substmt[i].stmt], ext_name);
+                goto error;
+            }
+            break;
+        case LY_STMT_STATUS:
+            p = lys_ext_complex_get_substmt(ext->substmt[i].stmt, ext, NULL);
+            if (!(*(uint16_t*)p & LYS_STATUS_MASK)) {
+                LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, ly_stmt_str[ext->substmt[i].stmt], ext_name);
+                goto error;
+            }
+            break;
+        case LY_STMT_MANDATORY:
+            p = lys_ext_complex_get_substmt(ext->substmt[i].stmt, ext, NULL);
+            if (!(*(uint16_t*)p & LYS_MAND_MASK)) {
+                LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, ly_stmt_str[ext->substmt[i].stmt], ext_name);
+                goto error;
+            }
+            break;
+        case LY_STMT_CONFIG:
+            p = lys_ext_complex_get_substmt(ext->substmt[i].stmt, ext, NULL);
+            if (!(*(uint16_t*)p & LYS_CONFIG_MASK)) {
+                LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, ly_stmt_str[ext->substmt[i].stmt], ext_name);
+                goto error;
+            }
+            break;
+        default:
+array:
+            /* stored as a pointer */
+            p = lys_ext_complex_get_substmt(ext->substmt[i].stmt, ext, NULL);
+            if (!(*(void**)p)) {
+                LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, ly_stmt_str[ext->substmt[i].stmt], ext_name);
+                goto error;
+            }
+            break;
+        }
+    }
+
+    return EXIT_SUCCESS;
+error:
+    return EXIT_FAILURE;
+}
+
+static int
+lyp_deviate_del_ext(struct lys_node *target, struct lys_ext_instance *ext)
+{
+    int n = -1, found = 0;
+    char *path;
+
+    while ((n = lys_ext_iter(target->ext, target->ext_size, n + 1, ext->insubstmt)) != -1) {
+        if (target->ext[n]->def != ext->def) {
+            continue;
+        }
+
+        if (ext->def->argument) {
+            /* check matching arguments */
+            if (!ly_strequal(target->ext[n]->arg_value, ext->arg_value, 1)) {
+                continue;
+            }
+        }
+
+        /* we have the matching extension - remove it */
+        ++found;
+        lyp_ext_instance_rm(target->module->ctx, &target->ext, &target->ext_size, n);
+        --n;
+    }
+
+    if (!found) {
+        path = lys_path(target);
+        LOGERR(LY_EVALID, "Extension deviation: extension \"%s\" to delete not found in \"%s\".", ext->def->name, path)
+        free(path);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
+static int
+lyp_deviate_apply_ext(struct lys_deviate *dev, struct lys_node *target, LYEXT_SUBSTMT substmt, struct lys_ext *extdef)
+{
+    struct ly_ctx *ctx;
+    int m, n;
+    struct lys_ext_instance *new;
+    void *reallocated;
+
+    /* LY_DEVIATE_ADD and LY_DEVIATE_RPL are very similar so they are implement the same way - in replacing,
+     * there can be some extension instances in the target, in case of adding, there should not be any so we
+     * will be just adding. */
+
+    ctx = target->module->ctx; /* shortcut */
+    m = n = -1;
+
+    while ((m = lys_ext_iter(dev->ext, dev->ext_size, m + 1, substmt)) != -1) {
+        /* deviate and its substatements include extensions, copy them to the target, replacing the previous
+         * extensions if any. In case of deviating extension itself, we have to deviate only the same type
+         * of the extension as specified in the deviation */
+        if (substmt == LYEXT_SUBSTMT_SELF && dev->ext[m]->def != extdef) {
+            continue;
+        }
+
+        if (substmt == LYEXT_SUBSTMT_SELF && dev->mod == LY_DEVIATE_ADD) {
+            /* in case of adding extension, we will be replacing only the inherited extensions */
+            do {
+                n = lys_ext_iter(target->ext, target->ext_size, n + 1, substmt);
+            } while (n != -1 && (target->ext[n]->def != extdef || !(target->ext[n]->flags & LYEXT_OPT_INHERIT)));
+        } else {
+            /* get the index of the extension to replace in the target node */
+            do {
+                n = lys_ext_iter(target->ext, target->ext_size, n + 1, substmt);
+                /* if we are applying extension deviation, we have to deviate only the same type of the extension */
+            } while (n != -1 && substmt == LYEXT_SUBSTMT_SELF && target->ext[n]->def != extdef);
+        }
+
+        /* TODO cover complex extension instances
+           ((struct lys_ext_instance_complex*)(target->ext[n])->module = target->module;
+         */
+        if (n == -1) {
+            /* nothing to replace, we are going to add it - reallocate */
+            new = malloc(sizeof **target->ext);
+            if (!new) {
+                LOGMEM;
+                return EXIT_FAILURE;
+            }
+            reallocated = realloc(target->ext, (target->ext_size + 1) * sizeof *target->ext);
+            if (!reallocated) {
+                LOGMEM;
+                free(new);
+                return EXIT_FAILURE;
+            }
+            target->ext = reallocated;
+            target->ext_size++;
+
+            n = target->ext_size - 1;
+        } else {
+            /* replacing - the original set of extensions is actually backuped together with the
+             * node itself, so we are supposed only to free the allocated data here ... */
+            lys_extension_instances_free(ctx, target->ext[n]->ext, target->ext[n]->ext_size);
+            lydict_remove(ctx, target->ext[n]->arg_value);
+            free(target->ext[n]);
+
+            /* and prepare the new structure */
+            new = malloc(sizeof **target->ext);
+            if (!new) {
+                LOGMEM;
+                return EXIT_FAILURE;
+            }
+        }
+        /* common part for adding and replacing - fill the newly created / replaceing cell */
+        target->ext[n] = new;
+        target->ext[n]->def = dev->ext[m]->def;
+        target->ext[n]->arg_value = lydict_insert(ctx, dev->ext[m]->arg_value, 0);
+        target->ext[n]->flags = 0;
+        target->ext[n]->parent = target;
+        target->ext[n]->parent_type = LYEXT_PAR_NODE;
+        target->ext[n]->insubstmt = substmt;
+        target->ext[n]->insubstmt_index = dev->ext[m]->insubstmt_index;
+        target->ext[n]->ext_size = dev->ext[m]->ext_size;
+        lys_ext_dup(target->module, dev->ext[m]->ext, dev->ext[m]->ext_size, target, LYEXT_PAR_NODE,
+                    &target->ext[n]->ext, NULL);
+    }
+
+    /* remove the rest of extensions belonging to the original substatement in the target node,
+     * due to possible reverting of the deviation effect, they are actually not removed, just moved
+     * to the backup of the original node when the original node is backuped, here we just have to
+     * free the replaced / deleted originals */
+    while ((n = lys_ext_iter(target->ext, target->ext_size, n + 1, substmt)) != -1) {
+        if (substmt == LYEXT_SUBSTMT_SELF) {
+            /* if we are applying extension deviation, we are going to remove only
+             * - the same type of the extension in case of replacing
+             * - the same type of the extension which was inherited in case of adding
+             * note - delete deviation is covered in lyp_deviate_del_ext */
+            if (target->ext[n]->def != extdef ||
+                    (dev->mod == LY_DEVIATE_ADD && !(target->ext[n]->flags & LYEXT_OPT_INHERIT))) {
+                /* keep this extension */
+                continue;
+            }
+
+        }
+
+        /* remove the item */
+        lyp_ext_instance_rm(ctx, &target->ext, &target->ext_size, n);
+        --n;
+    }
+
+    return EXIT_SUCCESS;
+}
+
+/*
+ * not-supported deviations are not processed since they affect the complete node, not just their substatements
+ */
+int
+lyp_deviation_apply_ext(struct lys_module *module)
+{
+    int i, j, k;
+    struct lys_deviate *dev;
+    struct lys_node *target;
+    struct ly_set *extset;
+
+    for (i = 0; i < module->deviation_size; i++) {
+        resolve_augment_schema_nodeid(module->deviation[i].target_name, NULL, module, 0,
+                                      (const struct lys_node **)&target);
+        if (!target) {
+            /* LY_DEVIATE_NO */
+            continue;
+        }
+        for (j = 0; j < module->deviation[i].deviate_size; j++) {
+            dev = &module->deviation[i].deviate[j];
+            if (!dev->ext_size) {
+                /* no extensions in deviate and its substatement, nothing to do here */
+                continue;
+            }
+
+            /* extensions */
+            if (dev->mod == LY_DEVIATE_DEL) {
+                k = -1;
+                while ((k = lys_ext_iter(dev->ext, dev->ext_size, k + 1, LYEXT_SUBSTMT_SELF)) != -1) {
+                    if (lyp_deviate_del_ext(target, dev->ext[k])) {
+                        return EXIT_FAILURE;
+                    }
+                }
+
+                /* In case of LY_DEVIATE_DEL, we are applying only extension deviation, removing
+                 * of the substatement's extensions was already done when the substatement was applied.
+                 * Extension deviation could not be applied by the parser since the extension could be unresolved,
+                 * which is not the issue of the other substatements. */
+                continue;
+            } else {
+                extset = ly_set_new();
+                k = -1;
+                while ((k = lys_ext_iter(dev->ext, dev->ext_size, k + 1, LYEXT_SUBSTMT_SELF)) != -1) {
+                    ly_set_add(extset, dev->ext[k]->def, 0);
+                }
+                for (k = 0; (unsigned int)k < extset->number; k++) {
+                    if (lyp_deviate_apply_ext(dev, target, LYEXT_SUBSTMT_SELF, (struct lys_ext *)extset->set.g[k])) {
+                        ly_set_free(extset);
+                        return EXIT_FAILURE;
+                    }
+                }
+                ly_set_free(extset);
+            }
+
+            /* unique */
+            if (dev->unique_size && lyp_deviate_apply_ext(dev, target, LYEXT_SUBSTMT_UNIQUE, NULL)) {
+                return EXIT_FAILURE;
+            }
+            /* units */
+            if (dev->units && lyp_deviate_apply_ext(dev, target, LYEXT_SUBSTMT_UNITS, NULL)) {
+                return EXIT_FAILURE;
+            }
+            /* default */
+            if (dev->dflt_size && lyp_deviate_apply_ext(dev, target, LYEXT_SUBSTMT_DEFAULT, NULL)) {
+                return EXIT_FAILURE;
+            }
+            /* config */
+            if ((dev->flags & LYS_CONFIG_MASK) && lyp_deviate_apply_ext(dev, target, LYEXT_SUBSTMT_CONFIG, NULL)) {
+                return EXIT_FAILURE;
+            }
+            /* mandatory */
+            if ((dev->flags & LYS_MAND_MASK) && lyp_deviate_apply_ext(dev, target, LYEXT_SUBSTMT_MANDATORY, NULL)) {
+                return EXIT_FAILURE;
+            }
+            /* min/max */
+            if (dev->min_set && lyp_deviate_apply_ext(dev, target, LYEXT_SUBSTMT_MIN, NULL)) {
+                return EXIT_FAILURE;
+            }
+            if (dev->min_set && lyp_deviate_apply_ext(dev, target, LYEXT_SUBSTMT_MAX, NULL)) {
+                return EXIT_FAILURE;
+            }
+            /* type and must contain extension instances in their structures */
+        }
+    }
+
+    return EXIT_SUCCESS;
+}
+
+int
+lyp_ctx_check_module(struct lys_module *module)
+{
+    struct ly_ctx *ctx;
     int i, match_i = -1, to_implement;
-    int ret = EXIT_SUCCESS;
+    const char *last_rev = NULL;
 
     assert(module);
-    mod = (*module);
     to_implement = 0;
-    ctx = mod->ctx;
+    ctx = module->ctx;
+
+    /* find latest revision */
+    for (i = 0; i < module->rev_size; ++i) {
+        if (!last_rev || (strcmp(last_rev, module->rev[i].date) < 0)) {
+            last_rev = module->rev[i].date;
+        }
+    }
 
     for (i = 0; i < ctx->models.used; i++) {
         /* check name (name/revision) and namespace uniqueness */
-        if (!strcmp(ctx->models.list[i]->name, mod->name)) {
+        if (!strcmp(ctx->models.list[i]->name, module->name)) {
             if (to_implement) {
                 if (i == match_i) {
                     continue;
                 }
                 LOGERR(LY_EINVAL, "Module \"%s\" in another revision already implemented.", ctx->models.list[i]->name);
-                return EXIT_FAILURE;
-            } else if (!ctx->models.list[i]->rev_size && mod->rev_size) {
+                return -1;
+            } else if (!ctx->models.list[i]->rev_size && module->rev_size) {
                 LOGERR(LY_EINVAL, "Module \"%s\" without revision already in context.", ctx->models.list[i]->name);
-                return EXIT_FAILURE;
-            } else if (ctx->models.list[i]->rev_size && !mod->rev_size) {
+                return -1;
+            } else if (ctx->models.list[i]->rev_size && !module->rev_size) {
                 LOGERR(LY_EINVAL, "Module \"%s\" with revision already in context.", ctx->models.list[i]->name);
-                return EXIT_FAILURE;
-            } else if ((!mod->rev_size && !ctx->models.list[i]->rev_size)
-                    || !strcmp(ctx->models.list[i]->rev[0].date, mod->rev[0].date)) {
+                return -1;
+            } else if ((!module->rev_size && !ctx->models.list[i]->rev_size)
+                    || !strcmp(ctx->models.list[i]->rev[0].date, last_rev)) {
 
                 LOGVRB("Module \"%s\" already in context.", ctx->models.list[i]->name);
-                to_implement = mod->implemented;
+                to_implement = module->implemented;
                 match_i = i;
                 if (to_implement && !ctx->models.list[i]->implemented) {
                     /* check first that it is okay to change it to implemented */
                     i = -1;
                     continue;
                 }
-                goto already_in_context;
+                return 1;
 
-            } else if (mod->implemented && ctx->models.list[i]->implemented) {
+            } else if (module->implemented && ctx->models.list[i]->implemented) {
                 LOGERR(LY_EINVAL, "Module \"%s\" in another revision already implemented.", ctx->models.list[i]->name);
-                return EXIT_FAILURE;
+                return -1;
             }
             /* else keep searching, for now the caller is just adding
              * another revision of an already present schema
              */
-        } else if (!strcmp(ctx->models.list[i]->ns, mod->ns)) {
+        } else if (!strcmp(ctx->models.list[i]->ns, module->ns)) {
             LOGERR(LY_EINVAL, "Two different modules (\"%s\" and \"%s\") have the same namespace \"%s\".",
-                   ctx->models.list[i]->name, mod->name, mod->ns);
-            return EXIT_FAILURE;
+                   ctx->models.list[i]->name, module->name, module->ns);
+            return -1;
         }
     }
 
     if (to_implement) {
-        i = match_i;
-        if (lys_set_implemented(ctx->models.list[i])) {
-            ret = EXIT_FAILURE;
+        if (lys_set_implemented(ctx->models.list[match_i])) {
+            return -1;
         }
-        goto already_in_context;
+        return 1;
     }
+
+    return 0;
+}
+
+int
+lyp_ctx_add_module(struct lys_module *module)
+{
+    struct lys_module **newlist = NULL;
+    int i;
+
+    assert(!lyp_ctx_check_module(module));
 
     /* add to the context's list of modules */
-    if (ctx->models.used == ctx->models.size) {
-        newlist = realloc(ctx->models.list, (2 * ctx->models.size) * sizeof *newlist);
+    if (module->ctx->models.used == module->ctx->models.size) {
+        newlist = realloc(module->ctx->models.list, (2 * module->ctx->models.size) * sizeof *newlist);
         if (!newlist) {
             LOGMEM;
-            return EXIT_FAILURE;
+            return -1;
         }
-        for (i = ctx->models.size; i < ctx->models.size * 2; i++) {
+        for (i = module->ctx->models.size; i < module->ctx->models.size * 2; i++) {
             newlist[i] = NULL;
         }
-        ctx->models.size *= 2;
-        ctx->models.list = newlist;
+        module->ctx->models.size *= 2;
+        module->ctx->models.list = newlist;
     }
-    ctx->models.list[ctx->models.used++] = mod;
-    ctx->models.module_set_id++;
-    return EXIT_SUCCESS;
+    module->ctx->models.list[module->ctx->models.used++] = module;
+    module->ctx->models.module_set_id++;
 
-already_in_context:
-    lys_sub_module_remove_devs_augs(mod);
-    lys_free(mod, NULL, 1);
-    (*module) = ctx->models.list[i];
-    return ret;
+    return 0;
 }
 
 /**

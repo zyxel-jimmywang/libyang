@@ -48,7 +48,7 @@ typedef enum {
 typedef enum {
     LYD_ANYDATA_CONSTSTRING = 0x00, /**< value is constant string (const char *) which is internally duplicated for
                                          storing in the anydata structure; XML sensitive characters (such as & or \>)
-                                         are automatically escaped when the anydata is printed in XML format */
+                                         are automatically escaped when the anydata is printed in XML format. */
     LYD_ANYDATA_STRING = 0x01,      /**< value is dynamically allocated string (char*), so the data are used directly
                                          without duplication and caller is supposed to not manipulate with the data
                                          after a successful call (including calling free() on the provided data); XML
@@ -364,10 +364,11 @@ struct lyd_difflist *lyd_diff(struct lyd_node *first, struct lyd_node *second, i
 #define LYD_DIFFOPT_NOSIBLINGS   0x0800 /**< The both trees to diff have to instantiate the same schema node so only the
                                              single subtree is compared. */
 #define LYD_DIFFOPT_WITHDEFAULTS 0x0001 /**< Take default nodes with their values into account and handle them as part
-                                             of both trees. In this case, a node with defined default value cannot be
-                                             deleted, because when it is removed from a tree, it is implicitly replaced
-                                             by the default node, so the node is not #LYD_DIFF_DELETED, but
-                                             #LYD_DIFF_CHANGED. Note that in this case, applying the resulting
+                                             of both trees. Summary of the modified behavior:
+                                             - deleted node is replaced with implicit default node - #LYD_DIFF_CHANGED instead delete
+                                             - created node replaces an implicit default node - #LYD_DIFF_CHANGED instead create
+                                             - in both cases even if the values match - #LYD_DIFF_CHANGED is still returned, because dlft flag was changed
+                                             Note that in this case, applying the resulting
                                              transactions on the first tree does not result to the exact second tree,
                                              because instead of having implicit default nodes you are going to have
                                              explicit default nodes. */
@@ -444,8 +445,8 @@ char *lyd_qualified_path(const struct lyd_node *node);
                                      - mandatory nodes can be omitted
                                      - leafrefs and instance-identifier resolution is allowed to fail
                                      - status data are not allowed */
-#define LYD_OPT_RPC        0x10 /**< Data represents RPC's input parameters. */
-#define LYD_OPT_RPCREPLY   0x20 /**< Data represents RPC's output parameters (maps to NETCONF <rpc-reply> data). */
+#define LYD_OPT_RPC        0x10 /**< Data represents RPC or action input parameters. */
+#define LYD_OPT_RPCREPLY   0x20 /**< Data represents RPC or action output parameters (maps to NETCONF <rpc-reply> data). */
 #define LYD_OPT_NOTIF      0x40 /**< Data represents an event notification data. */
 #define LYD_OPT_NOTIF_FILTER 0x80 /**< Data represents a filtered event notification data.
                                        Validation modification:
@@ -466,7 +467,7 @@ char *lyd_qualified_path(const struct lyd_node *node);
                                        list instance uniqueness, etc.) are not performed. This option does not make
                                        sense for lyd_validate() so it is ignored by this function. */
 #define LYD_OPT_NOAUTODEL  0x4000 /**< Avoid automatic delete of subtrees with false when-stmt condition. The flag is
-                                       applicable only in combination with LYD_OPT_DATA and LYD_OPT_CONFIG flags.
+                                       applicable only in combination with #LYD_OPT_DATA and #LYD_OPT_CONFIG flags.
                                        If used, libyang generates validation error instead of silently removing the
                                        constrained subtree. */
 #define LYD_OPT_NOEXTDEPS  0x8000 /**< Allow external dependencies (external leafrefs, instance-identifiers, must,

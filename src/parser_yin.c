@@ -44,8 +44,8 @@
 #define OPT_CFG_INHERIT 0x04
 #define OPT_CFG_IGNORE  0x08
 #define OPT_MODULE      0x10
-#define OPT_NACMEXT     0x20
-static int read_yin_common(struct lys_module *, struct lys_node *, struct lys_node *, struct lyxml_elem *, int);
+static int read_yin_common(struct lys_module *, struct lys_node *, void *, LYEXT_PAR, struct lyxml_elem *, int,
+                           struct unres_schema *);
 
 static struct lys_node *read_yin_choice(struct lys_module *module, struct lys_node *parent, struct lyxml_elem *yin,
                                         int valid_config, struct unres_schema *unres);
@@ -69,7 +69,36 @@ static struct lys_node *read_yin_rpc_action(struct lys_module *module, struct ly
                                             struct unres_schema *unres);
 static struct lys_node *read_yin_notif(struct lys_module *module, struct lys_node *parent, struct lyxml_elem *yin,
                                        struct unres_schema *unres);
-static struct lys_when *read_yin_when(struct lys_module *module, struct lyxml_elem *yin);
+static struct lys_when *read_yin_when(struct lys_module *module, struct lyxml_elem *yin, struct unres_schema *unres);
+
+/*
+ * yin - the provided XML subtree is unlinked
+ * ext - pointer to the storage in the parent structure to be able to update its location after realloc
+ */
+int
+lyp_yin_fill_ext(void *parent, LYEXT_PAR parent_type, LYEXT_SUBSTMT substmt, uint8_t substmt_index,
+             struct lys_module *module, struct lyxml_elem *yin, struct lys_ext_instance ***ext,
+             uint8_t ext_index, struct unres_schema *unres)
+{
+    struct unres_ext *info;
+
+    info = malloc(sizeof *info);
+    lyxml_unlink(module->ctx, yin);
+    info->data.yin = yin;
+    info->datatype = LYS_IN_YIN;
+    info->parent = parent;
+    info->mod = module;
+    info->parent_type = parent_type;
+    info->substmt = substmt;
+    info->substmt_index = substmt_index;
+    info->ext_index = ext_index;
+
+    if (unres_schema_add_node(module, unres, ext, UNRES_EXT, (struct lys_node *)info) == -1) {
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
+}
 
 /* logs directly */
 static const char *
@@ -90,13 +119,142 @@ read_yin_subnode(struct ly_ctx *ctx, struct lyxml_elem *node, const char *name)
     }
 }
 
+int
+lyp_yin_parse_subnode_ext(struct lys_module *mod, void *elem, LYEXT_PAR elem_type,
+                     struct lyxml_elem *yin, LYEXT_SUBSTMT type, uint8_t i, struct unres_schema *unres)
+{
+    void *reallocated;
+    struct lyxml_elem *next, *child;
+    int r;
+    struct lys_ext_instance ***ext;
+    uint8_t *ext_size;
+
+    switch (elem_type) {
+    case LYEXT_PAR_MODULE:
+        ext_size = &((struct lys_module *)elem)->ext_size;
+        ext = &((struct lys_module *)elem)->ext;
+        break;
+    case LYEXT_PAR_IMPORT:
+        ext_size = &((struct lys_import *)elem)->ext_size;
+        ext = &((struct lys_import *)elem)->ext;
+        break;
+    case LYEXT_PAR_INCLUDE:
+        ext_size = &((struct lys_include *)elem)->ext_size;
+        ext = &((struct lys_include *)elem)->ext;
+        break;
+    case LYEXT_PAR_REVISION:
+        ext_size = &((struct lys_revision *)elem)->ext_size;
+        ext = &((struct lys_revision *)elem)->ext;
+        break;
+    case LYEXT_PAR_NODE:
+        ext_size = &((struct lys_node *)elem)->ext_size;
+        ext = &((struct lys_node *)elem)->ext;
+        break;
+    case LYEXT_PAR_IDENT:
+        ext_size = &((struct lys_ident *)elem)->ext_size;
+        ext = &((struct lys_ident *)elem)->ext;
+        break;
+    case LYEXT_PAR_TYPE:
+        ext_size = &((struct lys_type *)elem)->ext_size;
+        ext = &((struct lys_type *)elem)->ext;
+        break;
+    case LYEXT_PAR_TYPE_BIT:
+        ext_size = &((struct lys_type_bit *)elem)->ext_size;
+        ext = &((struct lys_type_bit *)elem)->ext;
+        break;
+    case LYEXT_PAR_TYPE_ENUM:
+        ext_size = &((struct lys_type_enum *)elem)->ext_size;
+        ext = &((struct lys_type_enum *)elem)->ext;
+        break;
+    case LYEXT_PAR_TPDF:
+        ext_size = &((struct lys_tpdf *)elem)->ext_size;
+        ext = &((struct lys_tpdf *)elem)->ext;
+        break;
+    case LYEXT_PAR_EXT:
+        ext_size = &((struct lys_ext *)elem)->ext_size;
+        ext = &((struct lys_ext *)elem)->ext;
+        break;
+    case LYEXT_PAR_EXTINST:
+        ext_size = &((struct lys_ext_instance *)elem)->ext_size;
+        ext = &((struct lys_ext_instance *)elem)->ext;
+        break;
+    case LYEXT_PAR_FEATURE:
+        ext_size = &((struct lys_feature *)elem)->ext_size;
+        ext = &((struct lys_feature *)elem)->ext;
+        break;
+    case LYEXT_PAR_REFINE:
+        ext_size = &((struct lys_refine *)elem)->ext_size;
+        ext = &((struct lys_refine *)elem)->ext;
+        break;
+    case LYEXT_PAR_RESTR:
+        ext_size = &((struct lys_restr *)elem)->ext_size;
+        ext = &((struct lys_restr *)elem)->ext;
+        break;
+    case LYEXT_PAR_WHEN:
+        ext_size = &((struct lys_when *)elem)->ext_size;
+        ext = &((struct lys_when *)elem)->ext;
+        break;
+    case LYEXT_PAR_DEVIATE:
+        ext_size = &((struct lys_deviate *)elem)->ext_size;
+        ext = &((struct lys_deviate *)elem)->ext;
+        break;
+    case LYEXT_PAR_DEVIATION:
+        ext_size = &((struct lys_deviation *)elem)->ext_size;
+        ext = &((struct lys_deviation *)elem)->ext;
+        break;
+    default:
+        LOGERR(LY_EINT, "parent type %d", elem_type);
+        return EXIT_FAILURE;
+    }
+
+    if (type == LYEXT_SUBSTMT_SELF) {
+        /* parse for the statement self, not for the substatement */
+        child = yin;
+        next = NULL;
+        goto parseext;
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, child) {
+        if (!strcmp(child->ns->value, LY_NSYIN)) {
+            /* skip the regular YIN nodes */
+            continue;
+        }
+
+        /* parse it as extension */
+parseext:
+
+        /* first, allocate a space for the extension instance in the parent elem */
+        reallocated = realloc(*ext, (1 + (*ext_size)) * sizeof **ext);
+        if (!reallocated) {
+            LOGMEM;
+            return EXIT_FAILURE;
+        }
+        (*ext) = reallocated;
+
+        /* init memory */
+        (*ext)[(*ext_size)] = NULL;
+
+        /* parse YIN data */
+        r = lyp_yin_fill_ext(elem, elem_type, type, i, mod, child, &(*ext), (*ext_size), unres);
+        (*ext_size)++;
+        if (r) {
+            return EXIT_FAILURE;
+        }
+
+        /* done - do not free the child, it is unlinked in lyp_yin_fill_ext */
+    }
+
+    return EXIT_SUCCESS;
+}
+
 /* logs directly */
 static int
 fill_yin_iffeature(struct lys_node *parent, int parent_is_feature, struct lyxml_elem *yin, struct lys_iffeature *iffeat,
                    struct unres_schema *unres)
 {
-    int r;
+    int r, c_ext = 0;
     const char *value;
+    struct lyxml_elem *node, *next;
 
     GETVAL(value, yin, "name");
 
@@ -116,6 +274,35 @@ error:
         return EXIT_FAILURE;
     }
 
+    LY_TREE_FOR_SAFE(yin->child, next, node) {
+        if (!node->ns) {
+            /* garbage */
+            lyxml_free(parent->module->ctx, node);
+        } else if (strcmp(node->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
+        } else {
+            LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, node->name, "if-feature");
+            return EXIT_FAILURE;
+        }
+    }
+    if (c_ext) {
+        iffeat->ext = calloc(c_ext, sizeof *iffeat->ext);
+        if (!iffeat->ext) {
+            LOGMEM;
+            return EXIT_FAILURE;
+        }
+        LY_TREE_FOR_SAFE(yin->child, next, node) {
+            /* extensions */
+            r = lyp_yin_fill_ext(iffeat, LYEXT_PAR_IDENT, 0, 0, parent->module, node,
+                                 &iffeat->ext, iffeat->ext_size, unres);
+            iffeat->ext_size++;
+            if (r) {
+                return EXIT_FAILURE;
+            }
+        }
+    }
+
     return EXIT_SUCCESS;
 }
 
@@ -126,30 +313,31 @@ fill_yin_identity(struct lys_module *module, struct lyxml_elem *yin, struct lys_
     struct lyxml_elem *node, *next;
     const char *value;
     int rc;
-    int c_ftrs = 0, c_base = 0;
+    int c_ftrs = 0, c_base = 0, c_ext = 0;
+    void *reallocated;
 
     GETVAL(value, yin, "name");
     ident->name = value;
 
-    if (read_yin_common(module, NULL, (struct lys_node *)ident, yin, OPT_IDENT | OPT_MODULE)) {
-        return EXIT_FAILURE;
+    if (read_yin_common(module, NULL, ident, LYEXT_PAR_IDENT, yin, OPT_IDENT | OPT_MODULE, unres)) {
+        goto error;
     }
 
     if (dup_identities_check(ident->name, module)) {
-        return EXIT_FAILURE;
+        goto error;
     }
 
-    LY_TREE_FOR_SAFE(yin->child, next, node) {
-        if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, node);
-            continue;
-        }
-
-        if (!strcmp(node->name, "base")) {
+    LY_TREE_FOR(yin->child, node) {
+        if (strcmp(node->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
+        } else if (!strcmp(node->name, "base")) {
             if (c_base && (module->version < 2)) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, "base", "identity");
-                return EXIT_FAILURE;
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(module, ident, LYEXT_PAR_IDENT, node, LYEXT_SUBSTMT_BASE, c_base, unres)) {
+                goto error;
             }
             c_base++;
 
@@ -158,7 +346,7 @@ fill_yin_identity(struct lys_module *module, struct lyxml_elem *yin, struct lys_
 
         } else {
             LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, node->name, "identity");
-            return EXIT_FAILURE;
+            goto error;
         }
     }
 
@@ -167,36 +355,54 @@ fill_yin_identity(struct lys_module *module, struct lyxml_elem *yin, struct lys_
         ident->base = calloc(c_base, sizeof *ident->base);
         if (!ident->base) {
             LOGMEM;
-            return EXIT_FAILURE;
+            goto error;
         }
     }
-
     if (c_ftrs) {
         ident->iffeature = calloc(c_ftrs, sizeof *ident->iffeature);
         if (!ident->iffeature) {
             LOGMEM;
-            return EXIT_FAILURE;
+            goto error;
         }
     }
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(ident->ext, (c_ext + ident->ext_size) * sizeof *ident->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        ident->ext = reallocated;
 
-    LY_TREE_FOR(yin->child, node) {
-        if (!strcmp(node->name, "base")) {
+        /* init memory */
+        memset(&ident->ext[ident->ext_size], 0, c_ext * sizeof *ident->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, node) {
+        if (strcmp(node->ns->value, LY_NSYIN)) {
+            /* extension */
+            rc = lyp_yin_fill_ext(ident, LYEXT_PAR_IDENT, 0, 0, module, node, &ident->ext, ident->ext_size, unres);
+            ident->ext_size++;
+            if (rc) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "base")) {
             GETVAL(value, node, "name");
             value = transform_schema2json(module, value);
             if (!value) {
-                return EXIT_FAILURE;
+                goto error;
             }
 
             if (unres_schema_add_str(module, unres, ident, UNRES_IDENT, value) == -1) {
                 lydict_remove(module->ctx, value);
-                return EXIT_FAILURE;
+                goto error;
             }
             lydict_remove(module->ctx, value);
         } else if (!strcmp(node->name, "if-feature")) {
             rc = fill_yin_iffeature((struct lys_node *)ident, 0, node, &ident->iffeature[ident->iffeature_size], unres);
             ident->iffeature_size++;
             if (rc) {
-                return EXIT_FAILURE;
+                goto error;
             }
         }
     }
@@ -209,23 +415,30 @@ error:
 
 /* logs directly */
 static int
-read_restr_substmt(struct ly_ctx *ctx, struct lys_restr *restr, struct lyxml_elem *yin)
+read_restr_substmt(struct lys_module *module, struct lys_restr *restr, struct lyxml_elem *yin,
+                   struct unres_schema *unres)
 {
-    struct lyxml_elem *child;
+    struct lyxml_elem *child, *next;
     const char *value;
 
-    LY_TREE_FOR(yin->child, child) {
-        if (!child->ns || strcmp(child->ns->value, LY_NSYIN)) {
+    LY_TREE_FOR_SAFE(yin->child, next, child) {
+        if (!child->ns) {
             /* garbage */
             continue;
-        }
-
-        if (!strcmp(child->name, "description")) {
+        } else if (strcmp(child->ns->value, LY_NSYIN)) {
+            /* extension */
+            if (lyp_yin_parse_subnode_ext(module, restr, LYEXT_PAR_RESTR, child, LYEXT_SUBSTMT_SELF, 0, unres)) {
+                return EXIT_FAILURE;
+            }
+        } else if (!strcmp(child->name, "description")) {
             if (restr->dsc) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
                 return EXIT_FAILURE;
             }
-            restr->dsc = read_yin_subnode(ctx, child, "text");
+            if (lyp_yin_parse_subnode_ext(module, restr, LYEXT_PAR_RESTR, child, LYEXT_SUBSTMT_DESCRIPTION, 0, unres)) {
+                return EXIT_FAILURE;
+            }
+            restr->dsc = read_yin_subnode(module->ctx, child, "text");
             if (!restr->dsc) {
                 return EXIT_FAILURE;
             }
@@ -234,7 +447,10 @@ read_restr_substmt(struct ly_ctx *ctx, struct lys_restr *restr, struct lyxml_ele
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
                 return EXIT_FAILURE;
             }
-            restr->ref = read_yin_subnode(ctx, child, "text");
+            if (lyp_yin_parse_subnode_ext(module, restr, LYEXT_PAR_RESTR, child, LYEXT_SUBSTMT_REFERENCE, 0, unres)) {
+                return EXIT_FAILURE;
+            }
+            restr->ref = read_yin_subnode(module->ctx, child, "text");
             if (!restr->ref) {
                 return EXIT_FAILURE;
             }
@@ -243,14 +459,20 @@ read_restr_substmt(struct ly_ctx *ctx, struct lys_restr *restr, struct lyxml_ele
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
                 return EXIT_FAILURE;
             }
+            if (lyp_yin_parse_subnode_ext(module, restr, LYEXT_PAR_RESTR, child, LYEXT_SUBSTMT_ERRTAG, 0, unres)) {
+                return EXIT_FAILURE;
+            }
             GETVAL(value, child, "value");
-            restr->eapptag = lydict_insert(ctx, value, 0);
+            restr->eapptag = lydict_insert(module->ctx, value, 0);
         } else if (!strcmp(child->name, "error-message")) {
             if (restr->emsg) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
                 return EXIT_FAILURE;
             }
-            restr->emsg = read_yin_subnode(ctx, child, "value");
+            if (lyp_yin_parse_subnode_ext(module, restr, LYEXT_PAR_RESTR, child, LYEXT_SUBSTMT_ERRMSG, 0, unres)) {
+                return EXIT_FAILURE;
+            }
+            restr->emsg = read_yin_subnode(module->ctx, child, "value");
             if (!restr->emsg) {
                 return EXIT_FAILURE;
             }
@@ -269,21 +491,24 @@ error:
 /* logs directly, returns EXIT_SUCCESS, EXIT_FAILURE, -1 */
 int
 fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_elem *yin, struct lys_type *type,
-              int tpdftype, struct unres_schema *unres)
+              int parenttype, struct unres_schema *unres)
 {
     const char *value, *name;
     struct lys_node *siter;
-    struct lyxml_elem *next, *next2, *node, *child;
-    struct lys_restr **restr;
+    struct lyxml_elem *next, *next2, *node, *child, exts;
+    struct lys_restr **restrs, *restr;
     struct lys_type_bit bit, *bits_sc = NULL;
     struct lys_type_enum *enms_sc = NULL; /* shortcut */
     struct lys_type *dertype;
-    int i, j, rc, val_set, c_ftrs;
+    int i, j, rc, val_set, c_ftrs, c_ext = 0;
     int ret = -1;
     int64_t v, v_;
     int64_t p, p_;
     size_t len;
     char *buf, modifier;
+
+    /* init */
+    memset(&exts, 0, sizeof exts);
 
     GETVAL(value, yin, "name");
     value = transform_schema2json(module, value);
@@ -331,11 +556,19 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
          * unresolved item left inside the grouping, LY_TYPE_ERR used as a flag for types inside a grouping. */
         for (siter = parent; siter && (siter->nodetype != LYS_GROUPING); siter = lys_parent(siter));
         if (siter) {
-            if (!((struct lys_node_grp *)siter)->nacm) {
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+            if (!((uint8_t*)&((struct lys_node_grp *)siter)->flags)[1]) {
                 LOGINT;
                 goto error;
             }
-            ((struct lys_node_grp *)siter)->nacm--;
+            ((uint8_t*)&((struct lys_node_grp *)siter)->flags)[1]--;
+#else
+            if (!((uint8_t*)&((struct lys_node_grp *)siter)->flags)[0]) {
+                LOGINT;
+                goto error;
+            }
+            ((uint8_t*)&((struct lys_node_grp *)siter)->flags)[0]--;
+#endif
         } else {
             LOGINT;
             goto error;
@@ -349,18 +582,42 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
         return -1;
     }
 
+    /* parse extension instances */
+    LY_TREE_FOR_SAFE(yin->child, next, node) {
+        if (!node->ns) {
+            /* garbage */
+            lyxml_free(module->ctx, node);
+            continue;
+        } else if (!strcmp(node->ns->value, LY_NSYIN)) {
+            /* YANG (YIN) statements - process later */
+            continue;
+        }
+
+        lyxml_unlink_elem(module->ctx, node, 2);
+        lyxml_add_child(module->ctx, &exts, node);
+        c_ext++;
+    }
+    if (c_ext) {
+        type->ext = calloc(c_ext, sizeof *type->ext);
+        if (!type->ext) {
+            LOGMEM;
+            goto error;
+        }
+        LY_TREE_FOR_SAFE(exts.child, next, node) {
+            rc = lyp_yin_fill_ext(type, LYEXT_PAR_TYPE, 0, 0, module, node, &type->ext, type->ext_size, unres);
+            type->ext_size++;
+            if (rc) {
+                goto error;
+            }
+        }
+    }
+
     switch (type->base) {
     case LY_TYPE_BITS:
         /* RFC 6020 9.7.4 - bit */
 
         /* get bit specifications, at least one must be present */
         LY_TREE_FOR_SAFE(yin->child, next, node) {
-            if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
-                /* garbage */
-                lyxml_free(module->ctx, node);
-                continue;
-            }
-
             if (!strcmp(node->name, "bit")) {
                 type->info.bits.count++;
             } else {
@@ -404,7 +661,7 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             }
 
             type->info.bits.bit[i].name = lydict_insert(module->ctx, value, strlen(value));
-            if (read_yin_common(module, NULL, (struct lys_node *)&type->info.bits.bit[i], next, 0)) {
+            if (read_yin_common(module, NULL, &type->info.bits.bit[i], LYEXT_PAR_TYPE_BIT, next, 0, unres)) {
                 type->info.bits.count = i + 1;
                 goto error;
             }
@@ -435,13 +692,17 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
 
 
             p_ = -1;
-            LY_TREE_FOR(next->child, node) {
-                if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
+            LY_TREE_FOR_SAFE(next->child, next2, node) {
+                if (!node->ns) {
                     /* garbage */
                     continue;
-                }
-
-                if (!strcmp(node->name, "position")) {
+                } else if (strcmp(node->ns->value, LY_NSYIN)) {
+                    /* extension */
+                    if (lyp_yin_parse_subnode_ext(module, &type->info.bits.bit[i], LYEXT_PAR_TYPE_BIT, node,
+                                             LYEXT_SUBSTMT_SELF, 0, unres)) {
+                        goto error;
+                    }
+                } else if (!strcmp(node->name, "position")) {
                     if (p_ != -1) {
                         LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, next->name);
                         type->info.bits.count = i + 1;
@@ -478,6 +739,10 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                         }
                     }
 
+                    if (lyp_yin_parse_subnode_ext(module, &type->info.bits.bit[i], LYEXT_PAR_TYPE_BIT, node,
+                                             LYEXT_SUBSTMT_POSITION, 0, unres)) {
+                        goto error;
+                    }
                 } else if ((module->version >= 2) && !strcmp(node->name, "if-feature")) {
                     c_ftrs++;
                 } else {
@@ -555,10 +820,6 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     case LY_TYPE_DEC64:
         /* RFC 6020 9.2.4 - range and 9.3.4 - fraction-digits */
         LY_TREE_FOR(yin->child, node) {
-            if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
-                /* garbage */
-                continue;
-            }
 
             if (!strcmp(node->name, "range")) {
                 if (type->info.dec64.range) {
@@ -575,7 +836,7 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 type->info.dec64.range->expr = lydict_insert(module->ctx, value, 0);
 
                 /* get possible substatements */
-                if (read_restr_substmt(module->ctx, type->info.dec64.range, node)) {
+                if (read_restr_substmt(module, type->info.dec64.range, node, unres)) {
                     goto error;
                 }
             } else if (!strcmp(node->name, "fraction-digits")) {
@@ -595,6 +856,11 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 type->info.dec64.div = 10;
                 for (i = 1; i < v; i++) {
                     type->info.dec64.div *= 10;
+                }
+
+                /* extensions */
+                if (lyp_yin_parse_subnode_ext(module, type, LYEXT_PAR_TYPE, node, LYEXT_SUBSTMT_DIGITS, 0, unres)) {
+                    goto error;
                 }
             } else {
                 LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, node->name);
@@ -631,11 +897,6 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
 
         /* get enum specifications, at least one must be present */
         LY_TREE_FOR_SAFE(yin->child, next, node) {
-            if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
-                /* garbage */
-                lyxml_free(module->ctx, node);
-                continue;
-            }
 
             if (!strcmp(node->name, "enum")) {
                 type->info.enums.count++;
@@ -682,7 +943,7 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 goto error;
             }
             type->info.enums.enm[i].name = lydict_insert(module->ctx, value, strlen(value));
-            if (read_yin_common(module, NULL, (struct lys_node *)&type->info.enums.enm[i], next, 0)) {
+            if (read_yin_common(module, NULL, &type->info.enums.enm[i], LYEXT_PAR_TYPE_ENUM, next, 0, unres)) {
                 type->info.enums.count = i + 1;
                 goto error;
             }
@@ -720,13 +981,17 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             }
 
             val_set = 0;
-            LY_TREE_FOR(next->child, node) {
-                if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
+            LY_TREE_FOR_SAFE(next->child, next2, node) {
+                if (!node->ns) {
                     /* garbage */
                     continue;
-                }
-
-                if (!strcmp(node->name, "value")) {
+                } else if (strcmp(node->ns->value, LY_NSYIN)) {
+                    /* extensions */
+                    if (lyp_yin_parse_subnode_ext(module, &type->info.enums.enm[i], LYEXT_PAR_TYPE_ENUM, node,
+                                             LYEXT_SUBSTMT_SELF, 0, unres)) {
+                        goto error;
+                    }
+                } else if (!strcmp(node->name, "value")) {
                     if (val_set) {
                         LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, next->name);
                         type->info.enums.count = i + 1;
@@ -770,6 +1035,10 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                     }
                     val_set = 1;
 
+                    if (lyp_yin_parse_subnode_ext(module, &type->info.enums.enm[i], LYEXT_PAR_TYPE_ENUM, node,
+                                             LYEXT_SUBSTMT_VALUE, 0, unres)) {
+                        goto error;
+                    }
                 } else if ((module->version >= 2) && !strcmp(node->name, "if-feature")) {
                     c_ftrs++;
 
@@ -841,11 +1110,6 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
 
         /* get base specification, at least one must be present */
         LY_TREE_FOR_SAFE(yin->child, next, node) {
-            if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
-                /* garbage */
-                lyxml_free(module->ctx, node);
-                continue;
-            }
 
             if (strcmp(node->name, "base")) {
                 LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, node->name);
@@ -860,8 +1124,11 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             }
             rc = unres_schema_add_str(module, unres, type, UNRES_TYPE_IDENTREF, value);
             lydict_remove(module->ctx, value);
-
             if (rc == -1) {
+                goto error;
+            }
+
+            if (lyp_yin_parse_subnode_ext(module, type, LYEXT_PAR_TYPE, node, LYEXT_SUBSTMT_BASE, 0, unres)) {
                 goto error;
             }
         }
@@ -888,10 +1155,6 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     case LY_TYPE_INST:
         /* RFC 6020 9.13.2 - require-instance */
         LY_TREE_FOR(yin->child, node) {
-            if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
-                /* garbage */
-                continue;
-            }
 
             if (!strcmp(node->name, "require-instance")) {
                 if (type->info.inst.req) {
@@ -905,6 +1168,11 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                     type->info.inst.req = -1;
                 } else {
                     LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, node->name);
+                    goto error;
+                }
+
+                /* extensions */
+                if (lyp_yin_parse_subnode_ext(module, type, LYEXT_PAR_TYPE, node, LYEXT_SUBSTMT_REQINSTANCE, 0, unres)) {
                     goto error;
                 }
             } else {
@@ -932,21 +1200,17 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
          * structure where the information will be stored
          */
         if (type->base == LY_TYPE_BINARY) {
-            restr = &type->info.binary.length;
+            restrs = &type->info.binary.length;
             name = "length";
         } else {
-            restr = &type->info.num.range;
+            restrs = &type->info.num.range;
             name = "range";
         }
 
         LY_TREE_FOR(yin->child, node) {
-            if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
-                /* garbage */
-                continue;
-            }
 
             if (!strcmp(node->name, name)) {
-                if (*restr) {
+                if (*restrs) {
                     LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, yin->name);
                     goto error;
                 }
@@ -956,15 +1220,15 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                     LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, name);
                     goto error;
                 }
-                *restr = calloc(1, sizeof **restr);
-                if (!(*restr)) {
+                *restrs = calloc(1, sizeof **restrs);
+                if (!(*restrs)) {
                     LOGMEM;
                     goto error;
                 }
-                (*restr)->expr = lydict_insert(module->ctx, value, 0);
+                (*restrs)->expr = lydict_insert(module->ctx, value, 0);
 
                 /* get possible substatements */
-                if (read_restr_substmt(module->ctx, *restr, node)) {
+                if (read_restr_substmt(module, *restrs, node, unres)) {
                     goto error;
                 }
             } else {
@@ -976,20 +1240,16 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
 
     case LY_TYPE_LEAFREF:
         /* flag resolving for later use */
-        if (!tpdftype) {
+        if (!parenttype) {
             for (siter = parent; siter && siter->nodetype != LYS_GROUPING; siter = lys_parent(siter));
             if (siter) {
                 /* just a flag - do not resolve */
-                tpdftype = 1;
+                parenttype = 1;
             }
         }
 
         /* RFC 6020 9.9.2 - path */
         LY_TREE_FOR(yin->child, node) {
-            if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
-                /* garbage */
-                continue;
-            }
 
             if (!strcmp(node->name, "path") && !type->der->type.der) {
                 if (type->info.lref.path) {
@@ -1011,7 +1271,12 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                  * - just instantiated in a grouping definition,
                  * because in those cases the nodes referenced in path might not be present
                  * and it is not a bug.  */
-                if (!tpdftype && unres_schema_add_node(module, unres, type, UNRES_TYPE_LEAFREF, parent) == -1) {
+                if (!parenttype && unres_schema_add_node(module, unres, type, UNRES_TYPE_LEAFREF, parent) == -1) {
+                    goto error;
+                }
+
+                /* extensions */
+                if (lyp_yin_parse_subnode_ext(module, type, LYEXT_PAR_TYPE, node, LYEXT_SUBSTMT_PATH, 0, unres)) {
                     goto error;
                 }
             } else if (module->version >= 2 && !strcmp(node->name, "require-instance")) {
@@ -1028,6 +1293,11 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                     LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, node->name);
                     goto error;
                 }
+
+                /* extensions */
+                if (lyp_yin_parse_subnode_ext(module, type, LYEXT_PAR_TYPE, node, LYEXT_SUBSTMT_REQINSTANCE, 0, unres)) {
+                    goto error;
+                }
             } else {
                 LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, node->name);
                 goto error;
@@ -1042,12 +1312,7 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 /* copy leafref definition into the derived type */
                 type->info.lref.path = lydict_insert(module->ctx, type->der->type.info.lref.path, 0);
                 /* and resolve the path at the place we are (if not in grouping/typedef) */
-                if (!tpdftype && unres_schema_add_node(module, unres, type, UNRES_TYPE_LEAFREF, parent) == -1) {
-                    goto error;
-                }
-
-                /* add pointer to leafref target, only on leaves (not in typedefs) */
-                if (type->info.lref.target && lys_leaf_add_leafref_target(type->info.lref.target, (struct lys_node *)type->parent)) {
+                if (!parenttype && unres_schema_add_node(module, unres, type, UNRES_TYPE_LEAFREF, parent) == -1) {
                     goto error;
                 }
             }
@@ -1060,11 +1325,6 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
         /* RFC 6020 9.4.6 - pattern */
         i = 0;
         LY_TREE_FOR_SAFE(yin->child, next, node) {
-            if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
-                /* garbage */
-                lyxml_free(module->ctx, node);
-                continue;
-            }
 
             if (!strcmp(node->name, "length")) {
                 if (type->info.str.length) {
@@ -1085,7 +1345,7 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 type->info.str.length->expr = lydict_insert(module->ctx, value, 0);
 
                 /* get possible sub-statements */
-                if (read_restr_substmt(module->ctx, type->info.str.length, node)) {
+                if (read_restr_substmt(module, type->info.str.length, node, unres)) {
                     goto error;
                 }
                 lyxml_free(module->ctx, node);
@@ -1110,30 +1370,33 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                     type->info.str.patterns = NULL;
                     goto error;
                 }
+                restr = &type->info.str.patterns[type->info.str.pat_count]; /* shortcut */
 
                 modifier = 0x06; /* ACK */
                 name = NULL;
-                LY_TREE_FOR_SAFE(node->child, next2, child) {
-                    if (!child->ns || strcmp(child->ns->value, LY_NSYIN)) {
-                        /* garbage */
-                        lyxml_free(module->ctx, child);
-                        continue;
-                    }
+                if (module->version >= 2) {
+                    LY_TREE_FOR_SAFE(node->child, next2, child) {
+                        if (child->ns && !strcmp(child->ns->value, LY_NSYIN) && !strcmp(child->name, "modifier")) {
+                            if (name) {
+                                LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, "modifier", node->name);
+                                goto error;
+                            }
 
-                    if (module->version >= 2 && !strcmp(child->name, "modifier")) {
-                        if (name) {
-                            LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, "modifier", node->name);
-                            goto error;
-                        }
+                            GETVAL(name, child, "value");
+                            if (!strcmp(name, "invert-match")) {
+                                modifier = 0x15; /* NACK */
+                            } else {
+                                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, name, "modifier");
+                                goto error;
+                            }
+                            /* get extensions of the modifier */
+                            if (lyp_yin_parse_subnode_ext(module, restr, LYEXT_PAR_RESTR, child,
+                                                          LYEXT_SUBSTMT_MODIFIER, 0, unres)) {
+                                goto error;
+                            }
 
-                        GETVAL(name, child, "value");
-                        if (!strcmp(name, "invert-match")) {
-                            modifier = 0x15; /* NACK */
-                        } else {
-                            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, name, "modifier");
-                            goto error;
+                            lyxml_free(module->ctx, child);
                         }
-                        lyxml_free(module->ctx, child);
                     }
                 }
 
@@ -1142,10 +1405,10 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 buf[0] = modifier;
                 strcpy(&buf[1], value);
 
-                type->info.str.patterns[type->info.str.pat_count].expr = lydict_insert_zc(module->ctx, buf);
+                restr->expr = lydict_insert_zc(module->ctx, buf);
 
                 /* get possible sub-statements */
-                if (read_restr_substmt(module->ctx, &type->info.str.patterns[type->info.str.pat_count], node)) {
+                if (read_restr_substmt(module, restr, node, unres)) {
                     free(type->info.str.patterns);
                     type->info.str.patterns = NULL;
                     goto error;
@@ -1160,11 +1423,6 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
         /* count number of types in union */
         i = 0;
         LY_TREE_FOR_SAFE(yin->child, next, node) {
-            if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
-                /* garbage */
-                lyxml_free(module->ctx, node);
-                continue;
-            }
 
             if (!strcmp(node->name, "type")) {
                 if (type->der->type.der) {
@@ -1198,7 +1456,7 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
         /* ... and fill the structures */
         LY_TREE_FOR(yin->child, node) {
             type->info.uni.types[type->info.uni.count].parent = type->parent;
-            rc = fill_yin_type(module, parent, node, &type->info.uni.types[type->info.uni.count], tpdftype, unres);
+            rc = fill_yin_type(module, parent, node, &type->info.uni.types[type->info.uni.count], parenttype, unres);
             if (!rc) {
                 type->info.uni.count++;
 
@@ -1241,11 +1499,9 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     case LY_TYPE_BOOL:
     case LY_TYPE_EMPTY:
         /* no sub-statement allowed */
-        LY_TREE_FOR(yin->child, node) {
-            if (node->ns && !strcmp(node->ns->value, LY_NSYIN)) {
-                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, node->name);
-                goto error;
-            }
+        if (yin->child) {
+            LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, yin->child->name);
+            goto error;
         }
         break;
 
@@ -1261,16 +1517,20 @@ error:
         lydict_remove(module->ctx, type->module_name);
         type->module_name = NULL;
     }
+    lyxml_free_withsiblings(module->ctx, exts.child);
+
     return ret;
 }
 
 /* logs directly */
 static int
-fill_yin_typedef(struct lys_module *module, struct lys_node *parent, struct lyxml_elem *yin, struct lys_tpdf *tpdf, struct unres_schema *unres)
+fill_yin_typedef(struct lys_module *module, struct lys_node *parent, struct lyxml_elem *yin, struct lys_tpdf *tpdf,
+                 struct unres_schema *unres)
 {
     const char *value;
     struct lyxml_elem *node, *next;
-    int has_type = 0;
+    int rc, has_type = 0, c_ext = 0;
+    void *reallocated;
 
     GETVAL(value, yin, "name");
     if (lyp_check_identifier(value, LY_IDENT_TYPE, module, parent)) {
@@ -1279,17 +1539,16 @@ fill_yin_typedef(struct lys_module *module, struct lys_node *parent, struct lyxm
     tpdf->name = lydict_insert(module->ctx, value, strlen(value));
 
     /* generic part - status, description, reference */
-    if (read_yin_common(module, NULL, (struct lys_node *)tpdf, yin, OPT_MODULE)) {
+    if (read_yin_common(module, NULL, tpdf, LYEXT_PAR_TPDF, yin, OPT_MODULE, unres)) {
         goto error;
     }
 
     LY_TREE_FOR_SAFE(yin->child, next, node) {
-        if (!node->ns || strcmp(node->ns->value, LY_NSYIN)) {
-            /* garbage */
+        if (strcmp(node->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
             continue;
-        }
-
-        if (!strcmp(node->name, "type")) {
+        } else if (!strcmp(node->name, "type")) {
             if (has_type) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, yin->name);
                 goto error;
@@ -1301,6 +1560,9 @@ fill_yin_typedef(struct lys_module *module, struct lys_node *parent, struct lyxm
                 goto error;
             }
             has_type = 1;
+
+            /* skip lyxml_free() at the end of the loop, node was freed or at least unlinked in unres processing */
+            continue;
         } else if (!strcmp(node->name, "default")) {
             if (tpdf->dflt) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, yin->name);
@@ -1308,6 +1570,10 @@ fill_yin_typedef(struct lys_module *module, struct lys_node *parent, struct lyxm
             }
             GETVAL(value, node, "value");
             tpdf->dflt = lydict_insert(module->ctx, value, strlen(value));
+
+            if (lyp_yin_parse_subnode_ext(module, tpdf, LYEXT_PAR_TPDF, node, LYEXT_SUBSTMT_DEFAULT, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(node->name, "units")) {
             if (tpdf->units) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, yin->name);
@@ -1315,10 +1581,16 @@ fill_yin_typedef(struct lys_module *module, struct lys_node *parent, struct lyxm
             }
             GETVAL(value, node, "name");
             tpdf->units = lydict_insert(module->ctx, value, strlen(value));
+
+            if (lyp_yin_parse_subnode_ext(module, tpdf, LYEXT_PAR_TPDF, node, LYEXT_SUBSTMT_UNITS, 0, unres)) {
+                goto error;
+            }
         } else {
             LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, value);
             goto error;
         }
+
+        lyxml_free(module->ctx, node);
     }
 
     /* check mandatory value */
@@ -1333,10 +1605,120 @@ fill_yin_typedef(struct lys_module *module, struct lys_node *parent, struct lyxm
         goto error;
     }
 
+    /* finish extensions parsing */
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(tpdf->ext, (c_ext + tpdf->ext_size) * sizeof *tpdf->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        tpdf->ext = reallocated;
+
+        /* init memory */
+        memset(&tpdf->ext[tpdf->ext_size], 0, c_ext * sizeof *tpdf->ext);
+
+        LY_TREE_FOR_SAFE(yin->child, next, node) {
+            rc = lyp_yin_fill_ext(tpdf, LYEXT_PAR_TYPE, 0, 0, module, node, &tpdf->ext, tpdf->ext_size, unres);
+            tpdf->ext_size++;
+            if (rc) {
+                goto error;
+            }
+        }
+    }
+
     return EXIT_SUCCESS;
 
 error:
 
+    return EXIT_FAILURE;
+}
+
+static int
+fill_yin_extension(struct lys_module *module, struct lyxml_elem *yin, struct lys_ext *ext, struct unres_schema *unres)
+{
+    const char *value;
+    struct lyxml_elem *child, *node, *next, *next2;
+    int c_ext = 0, rc;
+    void *reallocated;
+
+    GETVAL(value, yin, "name");
+
+    if (lyp_check_identifier(value, LY_IDENT_EXTENSION, module, NULL)) {
+        goto error;
+    }
+    ext->name = lydict_insert(module->ctx, value, strlen(value));
+
+    if (read_yin_common(module, NULL, ext, LYEXT_PAR_EXT, yin, OPT_MODULE, unres)) {
+        goto error;
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, node) {
+        if (strcmp(node->ns->value, LY_NSYIN)) {
+            /* possible extension instance */
+            c_ext++;
+        } else if (!strcmp(node->name, "argument")) {
+            /* argument */
+            GETVAL(value, node, "name");
+            ext->argument = lydict_insert(module->ctx, value, strlen(value));
+            if (lyp_yin_parse_subnode_ext(module, ext, LYEXT_PAR_EXT, node, LYEXT_SUBSTMT_ARGUMENT, 0, unres)) {
+                goto error;
+            }
+
+            /* yin-element */
+            LY_TREE_FOR_SAFE(node->child, next2, child) {
+                if (child->ns == node->ns && !strcmp(child->name, "yin-element")) {
+                    GETVAL(value, child, "value");
+                    if (ly_strequal(value, "true", 0)) {
+                        ext->flags |= LYS_YINELEM;
+                    }
+
+                    if (lyp_yin_parse_subnode_ext(module, ext, LYEXT_PAR_EXT, child, LYEXT_SUBSTMT_YINELEM, 0, unres)) {
+                        goto error;
+                    }
+                } else if (child->ns) {
+                    /* unexpected YANG statement */
+                    LOGVAL(LYE_INCHILDSTMT, LY_VLOG_NONE, NULL, child->name, child->name);
+                    goto error;
+                } /* else garbage, but save resource needed for unlinking */
+            }
+
+            lyxml_free(module->ctx, node);
+        } else {
+            /* unexpected YANG statement */
+            LOGVAL(LYE_INCHILDSTMT, LY_VLOG_NONE, NULL, node->name, node->name);
+            goto error;
+        }
+    }
+
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(ext->ext, (c_ext + ext->ext_size) * sizeof *ext->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        ext->ext = reallocated;
+
+        /* init memory */
+        memset(&ext->ext[ext->ext_size], 0, c_ext * sizeof *ext->ext);
+
+        /* process the extension instances of the extension itself */
+        LY_TREE_FOR_SAFE(yin->child, next, node) {
+            rc = lyp_yin_fill_ext(ext, LYEXT_PAR_EXT, 0, 0, module, node, &ext->ext, ext->ext_size, unres);
+            ext->ext_size++;
+            if (rc) {
+                goto error;
+            }
+        }
+    }
+
+    /* search for plugin */
+    ext->plugin = ext_get_plugin(ext->name, ext->module->name, ext->module->rev ? ext->module->rev[0].date : NULL);
+
+    return EXIT_SUCCESS;
+
+error:
     return EXIT_FAILURE;
 }
 
@@ -1346,7 +1728,8 @@ fill_yin_feature(struct lys_module *module, struct lyxml_elem *yin, struct lys_f
 {
     const char *value;
     struct lyxml_elem *child, *next;
-    int c = 0, ret;
+    int c_ftrs = 0, c_ext = 0, ret;
+    void *reallocated;
 
     GETVAL(value, yin, "name");
     if (lyp_check_identifier(value, LY_IDENT_FEATURE, module, NULL)) {
@@ -1355,37 +1738,56 @@ fill_yin_feature(struct lys_module *module, struct lyxml_elem *yin, struct lys_f
     f->name = lydict_insert(module->ctx, value, strlen(value));
     f->module = module;
 
-    if (read_yin_common(module, NULL, (struct lys_node *)f, yin, 0)) {
+    if (read_yin_common(module, NULL, f, LYEXT_PAR_FEATURE, yin, 0, unres)) {
         goto error;
     }
 
-    LY_TREE_FOR_SAFE(yin->child, next, child) {
-        if (!child->ns || strcmp(child->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, child);
-            continue;
-        }
-
-        if (!strcmp(child->name, "if-feature")) {
-            c++;
+    LY_TREE_FOR(yin->child, child) {
+        if (strcmp(child->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
+        } else if (!strcmp(child->name, "if-feature")) {
+            c_ftrs++;
         } else {
             LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
             goto error;
         }
     }
 
-    if (c) {
-        f->iffeature = calloc(c, sizeof *f->iffeature);
+    if (c_ftrs) {
+        f->iffeature = calloc(c_ftrs, sizeof *f->iffeature);
         if (!f->iffeature) {
             LOGMEM;
             goto error;
         }
     }
-    LY_TREE_FOR(yin->child, child) {
-        ret = fill_yin_iffeature((struct lys_node *)f, 1, child, &f->iffeature[f->iffeature_size], unres);
-        f->iffeature_size++;
-        if (ret) {
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(f->ext, (c_ext + f->ext_size) * sizeof *f->ext);
+        if (!reallocated) {
+            LOGMEM;
             goto error;
+        }
+        f->ext = reallocated;
+
+        /* init memory */
+        memset(&f->ext[f->ext_size], 0, c_ext * sizeof *f->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, child) {
+        if (strcmp(child->ns->value, LY_NSYIN)) {
+            /* extension */
+            ret = lyp_yin_fill_ext(f, LYEXT_PAR_FEATURE, 0, 0, module, child, &f->ext, f->ext_size, unres);
+            f->ext_size++;
+            if (ret) {
+                goto error;
+            }
+        } else { /* if-feature */
+            ret = fill_yin_iffeature((struct lys_node *)f, 1, child, &f->iffeature[f->iffeature_size], unres);
+            f->iffeature_size++;
+            if (ret) {
+                goto error;
+            }
         }
     }
 
@@ -1405,7 +1807,7 @@ error:
 
 /* logs directly */
 static int
-fill_yin_must(struct lys_module *module, struct lyxml_elem *yin, struct lys_restr *must)
+fill_yin_must(struct lys_module *module, struct lyxml_elem *yin, struct lys_restr *must, struct unres_schema *unres)
 {
     const char *value;
 
@@ -1415,7 +1817,68 @@ fill_yin_must(struct lys_module *module, struct lyxml_elem *yin, struct lys_rest
         goto error;
     }
 
-    return read_restr_substmt(module->ctx, must, yin);
+    return read_restr_substmt(module, must, yin, unres);
+
+error:
+    return EXIT_FAILURE;
+}
+
+static int
+fill_yin_revision(struct lys_module *module, struct lyxml_elem *yin, struct lys_revision *rev,
+                  struct unres_schema *unres)
+{
+    struct lyxml_elem *next, *child;
+    const char *value;
+
+    GETVAL(value, yin, "date");
+    if (lyp_check_date(value)) {
+        goto error;
+    }
+    memcpy(rev->date, value, LY_REV_SIZE - 1);
+
+    LY_TREE_FOR_SAFE(yin->child, next, child) {
+        if (!child->ns) {
+            /* garbage */
+            continue;
+        } else if (strcmp(child->ns->value, LY_NSYIN)) {
+            /* possible extension instance */
+            if (lyp_yin_parse_subnode_ext(module, rev, LYEXT_PAR_REVISION,
+                                          child, LYEXT_SUBSTMT_SELF, 0, unres)) {
+                goto error;
+            }
+        } else if (!strcmp(child->name, "description")) {
+            if (rev->dsc) {
+                LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(module, rev, LYEXT_PAR_REVISION,
+                                          child, LYEXT_SUBSTMT_DESCRIPTION, 0, unres)) {
+                goto error;
+            }
+            rev->dsc = read_yin_subnode(module->ctx, child, "text");
+            if (!rev->dsc) {
+                goto error;
+            }
+        } else if (!strcmp(child->name, "reference")) {
+            if (rev->ref) {
+                LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(module, rev, LYEXT_PAR_REVISION,
+                                          child, LYEXT_SUBSTMT_REFERENCE, 0, unres)) {
+                goto error;
+            }
+            rev->ref = read_yin_subnode(module->ctx, child, "text");
+            if (!rev->ref) {
+                goto error;
+            }
+        } else {
+            LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+            goto error;
+        }
+    }
+
+    return EXIT_SUCCESS;
 
 error:
     return EXIT_FAILURE;
@@ -1595,10 +2058,10 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                    struct unres_schema *unres)
 {
     const char *value, **stritem;
-    struct lyxml_elem *next, *child, *develem;
-    int c_dev = 0, c_must, c_uniq, c_dflt;
+    struct lyxml_elem *next, *next2, *child, *develem;
+    int c_dev = 0, c_must, c_uniq, c_dflt, c_ext = 0;
     int f_min = 0, f_max = 0; /* flags */
-    int i, j, rc;
+    int i, j, k, rc;
     unsigned int u;
     struct ly_ctx *ctx;
     struct lys_deviate *d = NULL;
@@ -1613,6 +2076,7 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
     struct lys_restr **trg_must = NULL;
     struct unres_schema tmp_unres;
     struct lys_module *mod;
+    void *reallocated;
 
     ctx = module->ctx;
 
@@ -1635,15 +2099,20 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
     }
 
     LY_TREE_FOR_SAFE(yin->child, next, child) {
-        if (!child->ns || strcmp(child->ns->value, LY_NSYIN)) {
+        if (!child->ns ) {
             /* garbage */
             lyxml_free(ctx, child);
             continue;
-        }
-
-        if (!strcmp(child->name, "description")) {
+        } else if (strcmp(child->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
+            continue;
+        } else if (!strcmp(child->name, "description")) {
             if (dev->dsc) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(module, dev, LYEXT_PAR_DEVIATION, child, LYEXT_SUBSTMT_DESCRIPTION, 0, unres)) {
                 goto error;
             }
             dev->dsc = read_yin_subnode(ctx, child, "text");
@@ -1653,6 +2122,9 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
         } else if (!strcmp(child->name, "reference")) {
             if (dev->ref) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(module, dev, LYEXT_PAR_DEVIATION, child, LYEXT_SUBSTMT_REFERENCE, 0, unres)) {
                 goto error;
             }
             dev->ref = read_yin_subnode(ctx, child, "text");
@@ -1685,26 +2157,44 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
         LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "deviate", "deviation");
         goto error;
     }
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(dev->ext, (c_ext + dev->ext_size) * sizeof *dev->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        dev->ext = reallocated;
 
-    LY_TREE_FOR(yin->child, develem) {
+        /* init memory */
+        memset(&dev->ext[dev->ext_size], 0, c_ext * sizeof *dev->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, develem) {
+        if (strcmp(develem->ns->value, LY_NSYIN)) {
+            /* deviation's extension */
+            rc = lyp_yin_fill_ext(dev, LYEXT_PAR_DEVIATION, 0, 0, module, develem, &dev->ext, dev->ext_size, unres);
+            dev->ext_size++;
+            if (rc) {
+                goto error;
+            }
+            continue;
+        }
+
+        /* deviate */
         /* init */
         f_min = 0;
         f_max = 0;
         c_must = 0;
         c_uniq = 0;
         c_dflt = 0;
+        c_ext = 0;
 
         /* get deviation type */
         GETVAL(value, develem, "value");
         if (!strcmp(value, "not-supported")) {
             dev->deviate[dev->deviate_size].mod = LY_DEVIATE_NO;
-            /* no property expected in this case */
-            if (develem->child) {
-                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, develem->child->name);
-                goto error;
-            }
-
-            /* and neither any other deviate statement is expected,
+            /* no other deviate statement is expected,
              * not-supported deviation must be the only deviation of the target
              */
             if (dev->deviate_size || develem->next) {
@@ -1725,12 +2215,16 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
             }
 
             /* unlink and store the original node */
+            parent = dev_target->parent;
             lys_node_unlink(dev_target);
+            if (parent && parent->nodetype == LYS_AUGMENT) {
+                /* hack for augment, because when the original will be sometime reconnected back, we actually need
+                 * to reconnect it to both - the augment and its target (which is deduced from the deviations target
+                 * path), so we need to remember the augment as an addition */
+                dev_target->parent = parent;
+            }
             dev->orig_node = dev_target;
 
-            dev->deviate_size = 1;
-            ly_set_free(dflt_check);
-            return EXIT_SUCCESS;
         } else if (!strcmp(value, "add")) {
             dev->deviate[dev->deviate_size].mod = LY_DEVIATE_ADD;
         } else if (!strcmp(value, "replace")) {
@@ -1747,7 +2241,7 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
         /* store a shallow copy of the original node */
         if (!dev->orig_node) {
             memset(&tmp_unres, 0, sizeof tmp_unres);
-            dev->orig_node = lys_node_dup(dev_target->module, NULL, dev_target, 0, &tmp_unres, 1);
+            dev->orig_node = lys_node_dup(dev_target->module, NULL, dev_target, &tmp_unres, 1);
             /* just to be safe */
             if (tmp_unres.count) {
                 LOGINT;
@@ -1756,14 +2250,19 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
         }
 
         /* process deviation properties */
-        LY_TREE_FOR_SAFE(develem->child, next, child) {
-            if (!child->ns || strcmp(child->ns->value, LY_NSYIN)) {
+        LY_TREE_FOR_SAFE(develem->child, next2, child) {
+            if (!child->ns) {
                 /* garbage */
                 lyxml_free(ctx, child);
                 continue;
-            }
-
-            if (!strcmp(child->name, "config")) {
+            } else if  (strcmp(child->ns->value, LY_NSYIN)) {
+                /* extensions */
+                c_ext++;
+            } else if (d->mod == LY_DEVIATE_NO) {
+                /* no YIN substatement expected in this case */
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                goto error;
+            } else if (!strcmp(child->name, "config")) {
                 if (d->flags & LYS_CONFIG_MASK) {
                     LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
                     goto error;
@@ -1795,7 +2294,14 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                     /* ... and replace it with the value specified in deviation */
                     dev_target->flags |= d->flags & LYS_CONFIG_MASK;
                 }
+
+                if (lyp_yin_parse_subnode_ext(module, d, LYEXT_PAR_DEVIATE, child, LYEXT_SUBSTMT_CONFIG, 0, unres)) {
+                    goto error;
+                }
             } else if (!strcmp(child->name, "default")) {
+                if (lyp_yin_parse_subnode_ext(module, d, LYEXT_PAR_DEVIATE, child, LYEXT_SUBSTMT_DEFAULT, c_dflt, unres)) {
+                    goto error;
+                }
                 c_dflt++;
 
                 /* check target node type */
@@ -1898,6 +2404,10 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                         goto error;
                     }
                 }
+
+                if (lyp_yin_parse_subnode_ext(module, d, LYEXT_PAR_DEVIATE, child, LYEXT_SUBSTMT_MANDATORY, 0, unres)) {
+                    goto error;
+                }
             } else if (!strcmp(child->name, "min-elements")) {
                 if (f_min) {
                     LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
@@ -1908,6 +2418,9 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                 if (deviate_minmax(dev_target, child, d, 0)) {
                     goto error;
                 }
+                if (lyp_yin_parse_subnode_ext(module, d, LYEXT_PAR_DEVIATE, child, LYEXT_SUBSTMT_MIN, 0, unres)) {
+                    goto error;
+                }
             } else if (!strcmp(child->name, "max-elements")) {
                 if (f_max) {
                     LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
@@ -1916,6 +2429,9 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                 f_max = 1;
 
                 if (deviate_minmax(dev_target, child, d, 1)) {
+                    goto error;
+                }
+                if (lyp_yin_parse_subnode_ext(module, d, LYEXT_PAR_DEVIATE, child, LYEXT_SUBSTMT_MAX, 0, unres)) {
                     goto error;
                 }
             } else if (!strcmp(child->name, "must")) {
@@ -1963,6 +2479,9 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                 }
                 d->type = t;
             } else if (!strcmp(child->name, "unique")) {
+                if (lyp_yin_parse_subnode_ext(module, d, LYEXT_PAR_DEVIATE, child, LYEXT_SUBSTMT_UNIQUE, c_uniq, unres)) {
+                    goto error;
+                }
                 c_uniq++;
                 /* skip lyxml_free() at the end of the loop, this node will be processed later */
                 continue;
@@ -2016,6 +2535,18 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                     }
                     /* remove current units value of the target */
                     lydict_remove(ctx, *stritem);
+                    (*stritem) = NULL;
+
+                    /* remove its extensions */
+                    j = -1;
+                    while ((j = lys_ext_iter(dev_target->ext, dev_target->ext_size, j + 1, LYEXT_SUBSTMT_UNITS)) != -1) {
+                        lyp_ext_instance_rm(ctx, &dev_target->ext, &dev_target->ext_size, j);
+                        --j;
+                    }
+                }
+
+                if (lyp_yin_parse_subnode_ext(module, d, LYEXT_PAR_DEVIATE, child, LYEXT_SUBSTMT_UNITS, 0, unres)) {
+                    goto error;
                 }
             } else {
                 LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
@@ -2158,12 +2689,30 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                 goto error;
             }
         }
+        if (c_ext) {
+            /* some extensions may be already present from the substatements */
+            reallocated = realloc(d->ext, (c_ext + d->ext_size) * sizeof *d->ext);
+            if (!reallocated) {
+                LOGMEM;
+                goto error;
+            }
+            d->ext = reallocated;
+
+            /* init memory */
+            memset(&d->ext[d->ext_size], 0, c_ext * sizeof *d->ext);
+        }
 
         /* process deviation properties with 0..n cardinality */
-        LY_TREE_FOR(develem->child, child) {
-            if (!strcmp(child->name, "must")) {
+        LY_TREE_FOR_SAFE(develem->child, next2, child) {
+            if (strcmp(child->ns->value, LY_NSYIN)) {
+                /* extension */
+                if (lyp_yin_fill_ext(d, LYEXT_PAR_DEVIATE, 0, 0, module, child, &d->ext, d->ext_size, unres)) {
+                    goto error;
+                }
+                d->ext_size++;
+            } else if (!strcmp(child->name, "must")) {
                 if (d->mod == LY_DEVIATE_DEL) {
-                    if (fill_yin_must(module, child, &d->must[d->must_size])) {
+                    if (fill_yin_must(module, child, &d->must[d->must_size], unres)) {
                         goto error;
                     }
 
@@ -2206,7 +2755,7 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                     }
                 } else { /* replace or add */
                     memset(&((*trg_must)[*trg_must_size]), 0, sizeof **trg_must);
-                    if (fill_yin_must(module, child, &((*trg_must)[*trg_must_size]))) {
+                    if (fill_yin_must(module, child, &((*trg_must)[*trg_must_size]), unres)) {
                         goto error;
                     }
                     (*trg_must_size)++;
@@ -2257,6 +2806,7 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                                 list->unique[list->unique_size].expr = NULL;
                             }
 
+                            k = i; /* remember index for removing extensions */
                             i = -1; /* set match flag */
                             break;
                         }
@@ -2268,6 +2818,18 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                         LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, lyxml_get_attr(child, "tag", NULL), child->name);
                         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Value differs from the target being deleted.");
                         goto error;
+                    }
+
+                    /* remove extensions of this unique instance from the target node */
+                    j = -1;
+                    while ((j = lys_ext_iter(dev_target->ext, dev_target->ext_size, j + 1, LYEXT_SUBSTMT_UNIQUE)) != -1) {
+                        if (dev_target->ext[j]->insubstmt_index == k) {
+                            lyp_ext_instance_rm(ctx, &dev_target->ext, &dev_target->ext_size, j);
+                            --j;
+                        } else if (dev_target->ext[j]->insubstmt_index > k) {
+                            /* decrease the substatement index of the extension because of the changed array of uniques */
+                            dev_target->ext[j]->insubstmt_index--;
+                        }
                     }
                 } else { /* replace or add */
                     memset(&list->unique[list->unique_size], 0, sizeof *list->unique);
@@ -2295,6 +2857,13 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                             LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Value differs from the target being deleted.");
                             goto error;
                         }
+                        choice->dflt = NULL;
+                        /* remove extensions of this default instance from the target node */
+                        j = -1;
+                        while ((j = lys_ext_iter(dev_target->ext, dev_target->ext_size, j + 1, LYEXT_SUBSTMT_DEFAULT)) != -1) {
+                            lyp_ext_instance_rm(ctx, &dev_target->ext, &dev_target->ext_size, j);
+                            --j;
+                        }
                     } else { /* add or replace */
                         choice->dflt = node;
                         if (!choice->dflt) {
@@ -2315,6 +2884,13 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                         lydict_remove(ctx, leaf->dflt);
                         leaf->dflt = NULL;
                         leaf->flags &= ~LYS_DFLTJSON;
+
+                        /* remove extensions of this default instance from the target node */
+                        j = -1;
+                        while ((j = lys_ext_iter(dev_target->ext, dev_target->ext_size, j + 1, LYEXT_SUBSTMT_DEFAULT)) != -1) {
+                            lyp_ext_instance_rm(ctx, &dev_target->ext, &dev_target->ext_size, j);
+                            --j;
+                        }
                     } else { /* add (already checked) and replace */
                         /* remove value */
                         lydict_remove(ctx, leaf->dflt);
@@ -2335,6 +2911,18 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
                                 /* match, remove the value */
                                 lydict_remove(llist->module->ctx, llist->dflt[i]);
                                 llist->dflt[i] = NULL;
+
+                                /* remove extensions of this default instance from the target node */
+                                j = -1;
+                                while ((j = lys_ext_iter(dev_target->ext, dev_target->ext_size, j + 1, LYEXT_SUBSTMT_DEFAULT)) != -1) {
+                                    if (dev_target->ext[j]->insubstmt_index == i) {
+                                        lyp_ext_instance_rm(ctx, &dev_target->ext, &dev_target->ext_size, j);
+                                        --j;
+                                    } else if (dev_target->ext[j]->insubstmt_index > i) {
+                                        /* decrease the substatement index of the extension because of the changed array of defaults */
+                                        dev_target->ext[j]->insubstmt_index--;
+                                    }
+                                }
                                 break;
                             }
                         }
@@ -2359,7 +2947,7 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
 
                         /* remember to check it later (it may not fit now, but the type can be deviated too) */
                         ly_set_add(dflt_check, dev_target, 0);
-                        leaf->flags &= ~LYS_DFLTJSON;
+                        llist->flags &= ~LYS_DFLTJSON;
                     }
                 }
             }
@@ -2430,9 +3018,10 @@ fill_yin_augment(struct lys_module *module, struct lys_node *parent, struct lyxm
                  struct unres_schema *unres)
 {
     const char *value;
-    struct lyxml_elem *child, *next;
+    struct lyxml_elem *sub, *next;
     struct lys_node *node;
-    int c = 0, ret;
+    int ret, c_ftrs = 0, c_ext = 0;
+    void *reallocated;
 
     aug->nodetype = LYS_AUGMENT;
     GETVAL(value, yin, "target-node");
@@ -2442,59 +3031,57 @@ fill_yin_augment(struct lys_module *module, struct lys_node *parent, struct lyxm
     }
     aug->parent = parent;
 
-    if (read_yin_common(module, NULL, (struct lys_node *)aug, yin, OPT_MODULE | OPT_NACMEXT)) {
+    if (read_yin_common(module, NULL, aug, LYEXT_PAR_NODE, yin, OPT_MODULE, unres)) {
         goto error;
     }
 
-    LY_TREE_FOR_SAFE(yin->child, next, child) {
-        if (!child->ns || strcmp(child->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, child);
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
             continue;
-        }
-
-        if (!strcmp(child->name, "if-feature")) {
-            c++;
+        } else if (!strcmp(sub->name, "if-feature")) {
+            c_ftrs++;
             continue;
-        } else if (!strcmp(child->name, "when")) {
+        } else if (!strcmp(sub->name, "when")) {
             if (aug->when) {
-                LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, sub->name, yin->name);
                 goto error;
             }
 
-            aug->when = read_yin_when(module, child);
+            aug->when = read_yin_when(module, sub, unres);
             if (!aug->when) {
-                lyxml_free(module->ctx, child);
+                lyxml_free(module->ctx, sub);
                 goto error;
             }
-            lyxml_free(module->ctx, child);
+            lyxml_free(module->ctx, sub);
             continue;
 
         /* check allowed data sub-statements */
-        } else if (!strcmp(child->name, "container")) {
-            node = read_yin_container(module, (struct lys_node *)aug, child, 1, unres);
-        } else if (!strcmp(child->name, "leaf-list")) {
-            node = read_yin_leaflist(module, (struct lys_node *)aug, child, 1, unres);
-        } else if (!strcmp(child->name, "leaf")) {
-            node = read_yin_leaf(module, (struct lys_node *)aug, child, 1, unres);
-        } else if (!strcmp(child->name, "list")) {
-            node = read_yin_list(module, (struct lys_node *)aug, child, 1, unres);
-        } else if (!strcmp(child->name, "uses")) {
-            node = read_yin_uses(module, (struct lys_node *)aug, child, unres);
-        } else if (!strcmp(child->name, "choice")) {
-            node = read_yin_choice(module, (struct lys_node *)aug, child, 1, unres);
-        } else if (!strcmp(child->name, "case")) {
-            node = read_yin_case(module, (struct lys_node *)aug, child, 1, unres);
-        } else if (!strcmp(child->name, "anyxml")) {
-            node = read_yin_anydata(module, (struct lys_node *)aug, child, LYS_ANYXML, 1, unres);
-        } else if (!strcmp(child->name, "anydata")) {
-            node = read_yin_anydata(module, (struct lys_node *)aug, child, LYS_ANYDATA, 1, unres);
-        } else if (!strcmp(child->name, "action")) {
-            node = read_yin_rpc_action(module, (struct lys_node *)aug, child, unres);
-        } else if (!strcmp(child->name, "notification")) {
-            node = read_yin_notif(module, (struct lys_node *)aug, child, unres);
+        } else if (!strcmp(sub->name, "container")) {
+            node = read_yin_container(module, (struct lys_node *)aug, sub, 1, unres);
+        } else if (!strcmp(sub->name, "leaf-list")) {
+            node = read_yin_leaflist(module, (struct lys_node *)aug, sub, 1, unres);
+        } else if (!strcmp(sub->name, "leaf")) {
+            node = read_yin_leaf(module, (struct lys_node *)aug, sub, 1, unres);
+        } else if (!strcmp(sub->name, "list")) {
+            node = read_yin_list(module, (struct lys_node *)aug, sub, 1, unres);
+        } else if (!strcmp(sub->name, "uses")) {
+            node = read_yin_uses(module, (struct lys_node *)aug, sub, unres);
+        } else if (!strcmp(sub->name, "choice")) {
+            node = read_yin_choice(module, (struct lys_node *)aug, sub, 1, unres);
+        } else if (!strcmp(sub->name, "case")) {
+            node = read_yin_case(module, (struct lys_node *)aug, sub, 1, unres);
+        } else if (!strcmp(sub->name, "anyxml")) {
+            node = read_yin_anydata(module, (struct lys_node *)aug, sub, LYS_ANYXML, 1, unres);
+        } else if (!strcmp(sub->name, "anydata")) {
+            node = read_yin_anydata(module, (struct lys_node *)aug, sub, LYS_ANYDATA, 1, unres);
+        } else if (!strcmp(sub->name, "action")) {
+            node = read_yin_rpc_action(module, (struct lys_node *)aug, sub, unres);
+        } else if (!strcmp(sub->name, "notification")) {
+            node = read_yin_notif(module, (struct lys_node *)aug, sub, unres);
         } else {
-            LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+            LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, sub->name);
             goto error;
         }
 
@@ -2503,25 +3090,44 @@ fill_yin_augment(struct lys_module *module, struct lys_node *parent, struct lyxm
         }
 
         node = NULL;
-        lyxml_free(module->ctx, child);
+        lyxml_free(module->ctx, sub);
     }
 
-    if (c) {
-        aug->iffeature = calloc(c, sizeof *aug->iffeature);
+    if (c_ftrs) {
+        aug->iffeature = calloc(c_ftrs, sizeof *aug->iffeature);
         if (!aug->iffeature) {
             LOGMEM;
             goto error;
         }
     }
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(aug->ext, (c_ext + aug->ext_size) * sizeof *aug->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        aug->ext = reallocated;
 
-    LY_TREE_FOR_SAFE(yin->child, next, child) {
-        if (!strcmp(child->name, "if-feature")) {
-            ret = fill_yin_iffeature((struct lys_node *)aug, 0, child, &aug->iffeature[aug->iffeature_size], unres);
+        /* init memory */
+        memset(&aug->ext[aug->ext_size], 0, c_ext * sizeof *aug->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            ret = lyp_yin_fill_ext(aug, LYEXT_PAR_NODE, 0, 0, module, sub, &aug->ext, aug->ext_size, unres);
+            aug->ext_size++;
+            if (ret) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "if-feature")) {
+            ret = fill_yin_iffeature((struct lys_node *)aug, 0, sub, &aug->iffeature[aug->iffeature_size], unres);
             aug->iffeature_size++;
             if (ret) {
                 goto error;
             }
-            lyxml_free(module->ctx, child);
+            lyxml_free(module->ctx, sub);
         }
     }
 
@@ -2558,16 +3164,13 @@ fill_yin_refine(struct lys_node *uses, struct lyxml_elem *yin, struct lys_refine
     const char *value;
     char *endptr;
     int f_mand = 0, f_min = 0, f_max = 0;
-    int c_must = 0, c_ftrs = 0, c_dflt = 0;
+    int c_must = 0, c_ftrs = 0, c_dflt = 0, c_ext = 0;
     int r;
     unsigned long int val;
+    void *reallocated;
 
     assert(uses);
     module = uses->module; /* shorthand */
-
-    if (read_yin_common(module, NULL, (struct lys_node *)rfn, yin, OPT_CFG_PARSE)) {
-        goto error;
-    }
 
     GETVAL(value, yin, "target-node");
     rfn->target_name = transform_schema2json(module, value);
@@ -2576,14 +3179,61 @@ fill_yin_refine(struct lys_node *uses, struct lyxml_elem *yin, struct lys_refine
     }
 
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
+        if (!sub->ns) {
             /* garbage */
-            lyxml_free(module->ctx, sub);
+        } else if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
             continue;
-        }
 
-        /* limited applicability */
-        if (!strcmp(sub->name, "default")) {
+        } else if (!strcmp(sub->name, "description")) {
+            if (rfn->dsc) {
+                LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, sub->name, yin->name);
+                goto error;
+            }
+
+            if (lyp_yin_parse_subnode_ext(module, rfn, LYEXT_PAR_REFINE, sub, LYEXT_SUBSTMT_DESCRIPTION, 0, unres)) {
+                goto error;
+            }
+
+            rfn->dsc = read_yin_subnode(module->ctx, sub, "text");
+            if (!rfn->dsc) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "reference")) {
+            if (rfn->ref) {
+                LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, sub->name, yin->name);
+                goto error;
+            }
+
+            if (lyp_yin_parse_subnode_ext(module, rfn, LYEXT_PAR_REFINE, sub, LYEXT_SUBSTMT_REFERENCE, 0, unres)) {
+                goto error;
+            }
+
+            rfn->ref = read_yin_subnode(module->ctx, sub, "text");
+            if (!rfn->ref) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "config")) {
+            if (rfn->flags & LYS_CONFIG_MASK) {
+                LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, sub->name, yin->name);
+                goto error;
+            }
+            GETVAL(value, sub, "value");
+            if (!strcmp(value, "false")) {
+                rfn->flags |= LYS_CONFIG_R;
+            } else if (!strcmp(value, "true")) {
+                rfn->flags |= LYS_CONFIG_W;
+            } else {
+                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, sub->name);
+                goto error;
+            }
+            rfn->flags |= LYS_CONFIG_SET;
+
+            if (lyp_yin_parse_subnode_ext(module, rfn, LYEXT_PAR_REFINE, sub, LYEXT_SUBSTMT_CONFIG, 0, unres)) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "default")) {
             /* leaf, leaf-list or choice */
 
             /* check possibility of statements combination */
@@ -2617,6 +3267,9 @@ fill_yin_refine(struct lys_node *uses, struct lyxml_elem *yin, struct lys_refine
                 }
             }
 
+            if (lyp_yin_parse_subnode_ext(module, rfn, LYEXT_PAR_REFINE, sub, LYEXT_SUBSTMT_DEFAULT, c_dflt, unres)) {
+                goto error;
+            }
             c_dflt++;
             continue;
         } else if (!strcmp(sub->name, "mandatory")) {
@@ -2649,6 +3302,9 @@ fill_yin_refine(struct lys_node *uses, struct lyxml_elem *yin, struct lys_refine
                 rfn->flags |= LYS_MAND_FALSE;
             } else {
                 LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, sub->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(module, rfn, LYEXT_PAR_REFINE, sub, LYEXT_SUBSTMT_MANDATORY, 0, unres)) {
                 goto error;
             }
         } else if (!strcmp(sub->name, "min-elements")) {
@@ -2686,6 +3342,10 @@ fill_yin_refine(struct lys_node *uses, struct lyxml_elem *yin, struct lys_refine
             }
             rfn->mod.list.min = (uint32_t) val;
             rfn->flags |= LYS_RFN_MINSET;
+
+            if (lyp_yin_parse_subnode_ext(module, rfn, LYEXT_PAR_REFINE, sub, LYEXT_SUBSTMT_MIN, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(sub->name, "max-elements")) {
             /* list or leaf-list */
             if (f_max) {
@@ -2725,6 +3385,10 @@ fill_yin_refine(struct lys_node *uses, struct lyxml_elem *yin, struct lys_refine
                 rfn->mod.list.max = (uint32_t) val;
             }
             rfn->flags |= LYS_RFN_MAXSET;
+
+            if (lyp_yin_parse_subnode_ext(module, rfn, LYEXT_PAR_REFINE, sub, LYEXT_SUBSTMT_MAX, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(sub->name, "presence")) {
             /* container */
             if (rfn->mod.presence) {
@@ -2746,6 +3410,10 @@ fill_yin_refine(struct lys_node *uses, struct lyxml_elem *yin, struct lys_refine
 
             GETVAL(value, sub, "value");
             rfn->mod.presence = lydict_insert(module->ctx, value, strlen(value));
+
+            if (lyp_yin_parse_subnode_ext(module, rfn, LYEXT_PAR_REFINE, sub, LYEXT_SUBSTMT_PRESENCE, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(sub->name, "must")) {
             /* leafm leaf-list, list, container or anyxml */
             /* check possibility of statements combination */
@@ -2809,16 +3477,35 @@ fill_yin_refine(struct lys_node *uses, struct lyxml_elem *yin, struct lys_refine
             goto error;
         }
     }
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(rfn->ext, (c_ext + rfn->ext_size) * sizeof *rfn->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        rfn->ext = reallocated;
 
-    LY_TREE_FOR(yin->child, sub) {
-        if (!strcmp(sub->name, "if-feature")) {
+        /* init memory */
+        memset(&rfn->ext[rfn->ext_size], 0, c_ext * sizeof *rfn->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            r = lyp_yin_fill_ext(rfn, LYEXT_PAR_REFINE, 0, 0, module, sub, &rfn->ext, rfn->ext_size, unres);
+            rfn->ext_size++;
+            if (r) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "if-feature")) {
             r = fill_yin_iffeature(uses, 0, sub, &rfn->iffeature[rfn->iffeature_size], unres);
             rfn->iffeature_size++;
             if (r) {
                 goto error;
             }
         } else if (!strcmp(sub->name, "must")) {
-            r = fill_yin_must(module, sub, &rfn->must[rfn->must_size]);
+            r = fill_yin_must(module, sub, &rfn->must[rfn->must_size], unres);
             rfn->must_size++;
             if (r) {
                 goto error;
@@ -2847,23 +3534,35 @@ error:
 
 /* logs directly */
 static int
-fill_yin_import(struct lys_module *module, struct lyxml_elem *yin, struct lys_import *imp)
+fill_yin_import(struct lys_module *module, struct lyxml_elem *yin, struct lys_import *imp, struct unres_schema *unres)
 {
-    struct lyxml_elem *child;
+    struct lyxml_elem *child, *next, exts;
     const char *value;
+    int r, c_ext = 0;
+    void *reallocated;
 
-    LY_TREE_FOR(yin->child, child) {
-        if (!child->ns || strcmp(child->ns->value, LY_NSYIN)) {
+    /* init */
+    memset(&exts, 0, sizeof exts);
+
+    LY_TREE_FOR_SAFE(yin->child, next, child) {
+        if (!child->ns) {
             /* garbage */
             continue;
-        }
-
-        if (!strcmp(child->name, "prefix")) {
+        } else if (strcmp(child->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
+            lyxml_unlink_elem(module->ctx, child, 2);
+            lyxml_add_child(module->ctx, &exts, child);
+        } else if (!strcmp(child->name, "prefix")) {
             GETVAL(value, child, "value");
             if (lyp_check_identifier(value, LY_IDENT_PREFIX, module, NULL)) {
                 goto error;
             }
             imp->prefix = lydict_insert(module->ctx, value, strlen(value));
+
+            if (lyp_yin_parse_subnode_ext(module, imp, LYEXT_PAR_IMPORT, child, LYEXT_SUBSTMT_PREFIX, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(child->name, "revision-date")) {
             if (imp->rev[0]) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
@@ -2874,9 +3573,16 @@ fill_yin_import(struct lys_module *module, struct lyxml_elem *yin, struct lys_im
                 goto error;
             }
             memcpy(imp->rev, value, LY_REV_SIZE - 1);
+
+            if (lyp_yin_parse_subnode_ext(module, imp, LYEXT_PAR_IMPORT, child, LYEXT_SUBSTMT_REVISIONDATE, 0, unres)) {
+                goto error;
+            }
         } else if ((module->version >= 2) && !strcmp(child->name, "description")) {
             if (imp->dsc) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(module, imp, LYEXT_PAR_IMPORT, child, LYEXT_SUBSTMT_DESCRIPTION, 0, unres)) {
                 goto error;
             }
             imp->dsc = read_yin_subnode(module->ctx, child, "text");
@@ -2886,6 +3592,9 @@ fill_yin_import(struct lys_module *module, struct lyxml_elem *yin, struct lys_im
         } else if ((module->version >= 2) && !strcmp(child->name, "reference")) {
             if (imp->ref) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(module, imp, LYEXT_PAR_IMPORT, child, LYEXT_SUBSTMT_REFERENCE, 0, unres)) {
                 goto error;
             }
             imp->ref = read_yin_subnode(module->ctx, child, "text");
@@ -2904,12 +3613,37 @@ fill_yin_import(struct lys_module *module, struct lyxml_elem *yin, struct lys_im
         goto error;
     }
 
-    GETVAL(value, yin, "module");
+    /* process extensions */
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(imp->ext, (c_ext + imp->ext_size) * sizeof *imp->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        imp->ext = reallocated;
 
+        /* init memory */
+        memset(&imp->ext[imp->ext_size], 0, c_ext * sizeof *imp->ext);
+
+        LY_TREE_FOR_SAFE(exts.child, next, child) {
+            /* extension */
+            r = lyp_yin_fill_ext(imp, LYEXT_PAR_IMPORT, 0, 0, module, child, &imp->ext, imp->ext_size, unres);
+            imp->ext_size++;
+            if (r) {
+                goto error;
+            }
+        }
+    }
+
+    GETVAL(value, yin, "module");
     return lyp_check_import(module, value, imp);
 
 error:
 
+    while (exts.child) {
+        lyxml_free(module->ctx, exts.child);
+    }
     return EXIT_FAILURE;
 }
 
@@ -2922,15 +3656,24 @@ static int
 fill_yin_include(struct lys_module *module, struct lys_submodule *submodule, struct lyxml_elem *yin,
                  struct lys_include *inc, struct unres_schema *unres)
 {
-    struct lyxml_elem *child;
+    struct lyxml_elem *child, *next, exts;
     const char *value;
+    int r, c_ext = 0;
+    void *reallocated;
 
-    LY_TREE_FOR(yin->child, child) {
-        if (!child->ns || strcmp(child->ns->value, LY_NSYIN)) {
+    /* init */
+    memset(&exts, 0, sizeof exts);
+
+    LY_TREE_FOR_SAFE(yin->child, next, child) {
+        if (!child->ns) {
             /* garbage */
             continue;
-        }
-        if (!strcmp(child->name, "revision-date")) {
+        } else if (strcmp(child->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
+            lyxml_unlink_elem(module->ctx, child, 2);
+            lyxml_add_child(module->ctx, &exts, child);
+        } else if (!strcmp(child->name, "revision-date")) {
             if (inc->rev[0]) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, "revision-date", yin->name);
                 goto error;
@@ -2940,9 +3683,16 @@ fill_yin_include(struct lys_module *module, struct lys_submodule *submodule, str
                 goto error;
             }
             memcpy(inc->rev, value, LY_REV_SIZE - 1);
+
+            if (lyp_yin_parse_subnode_ext(module, inc, LYEXT_PAR_INCLUDE, child, LYEXT_SUBSTMT_REVISIONDATE, 0, unres)) {
+                goto error;
+            }
         } else if ((module->version >= 2) && !strcmp(child->name, "description")) {
             if (inc->dsc) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(module, inc, LYEXT_PAR_INCLUDE, child, LYEXT_SUBSTMT_DESCRIPTION, 0, unres)) {
                 goto error;
             }
             inc->dsc = read_yin_subnode(module->ctx, child, "text");
@@ -2952,6 +3702,9 @@ fill_yin_include(struct lys_module *module, struct lys_submodule *submodule, str
         } else if ((module->version >= 2) && !strcmp(child->name, "reference")) {
             if (inc->ref) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(module, inc, LYEXT_PAR_INCLUDE, child, LYEXT_SUBSTMT_REFERENCE, 0, unres)) {
                 goto error;
             }
             inc->ref = read_yin_subnode(module->ctx, child, "text");
@@ -2964,8 +3717,30 @@ fill_yin_include(struct lys_module *module, struct lys_submodule *submodule, str
         }
     }
 
-    GETVAL(value, yin, "module");
+    /* process extensions */
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(inc->ext, (c_ext + inc->ext_size) * sizeof *inc->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        inc->ext = reallocated;
 
+        /* init memory */
+        memset(&inc->ext[inc->ext_size], 0, c_ext * sizeof *inc->ext);
+
+        LY_TREE_FOR_SAFE(exts.child, next, child) {
+            /* extension */
+            r = lyp_yin_fill_ext(inc, LYEXT_PAR_INCLUDE, 0, 0, module, child, &inc->ext, inc->ext_size, unres);
+            inc->ext_size++;
+            if (r) {
+                goto error;
+            }
+        }
+    }
+
+    GETVAL(value, yin, "module");
     return lyp_check_include(submodule ? (struct lys_module *)submodule : module, value, inc, unres);
 
 error:
@@ -2980,9 +3755,10 @@ error:
  *
  */
 static int
-read_yin_common(struct lys_module *module, struct lys_node *parent,
-                struct lys_node *node, struct lyxml_elem *xmlnode, int opt)
+read_yin_common(struct lys_module *module, struct lys_node *parent, void *stmt, LYEXT_PAR stmt_type,
+                struct lyxml_elem *xmlnode, int opt, struct unres_schema *unres)
 {
+    struct lys_node *node = stmt;
     const char *value;
     struct lyxml_elem *sub, *next;
     struct ly_ctx *const ctx = module->ctx;
@@ -2999,11 +3775,6 @@ read_yin_common(struct lys_module *module, struct lys_node *parent,
         node->name = lydict_insert(ctx, value, strlen(value));
     }
 
-    /* inherit NACM flags */
-    if ((opt & OPT_NACMEXT) && parent) {
-        node->nacm = parent->nacm;
-    }
-
     /* process local parameters */
     LY_TREE_FOR_SAFE(xmlnode->child, next, sub) {
         if (!sub->ns) {
@@ -3012,20 +3783,7 @@ read_yin_common(struct lys_module *module, struct lys_node *parent,
             continue;
         }
         if  (strcmp(sub->ns->value, LY_NSYIN)) {
-            /* NACM extensions */
-            if ((opt & OPT_NACMEXT) && !strcmp(sub->ns->value, LY_NSNACM)) {
-                if (!strcmp(sub->name, "default-deny-write")) {
-                    node->nacm |= LYS_NACM_DENYW;
-                } else if (!strcmp(sub->name, "default-deny-all")) {
-                    node->nacm |= LYS_NACM_DENYA;
-                } else {
-                    LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, sub->name);
-                    goto error;
-                }
-            }
-
-            /* else garbage */
-            lyxml_free(ctx, sub);
+            /* possibly an extension, keep the node for later processing, so skipping lyxml_free() */
             continue;
         }
 
@@ -3034,6 +3792,11 @@ read_yin_common(struct lys_module *module, struct lys_node *parent,
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, sub->name, xmlnode->name);
                 goto error;
             }
+
+            if (lyp_yin_parse_subnode_ext(module, stmt, stmt_type, sub, LYEXT_SUBSTMT_DESCRIPTION, 0, unres)) {
+                goto error;
+            }
+
             node->dsc = read_yin_subnode(ctx, sub, "text");
             if (!node->dsc) {
                 goto error;
@@ -3043,6 +3806,11 @@ read_yin_common(struct lys_module *module, struct lys_node *parent,
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, sub->name, xmlnode->name);
                 goto error;
             }
+
+            if (lyp_yin_parse_subnode_ext(module, stmt, stmt_type, sub, LYEXT_SUBSTMT_REFERENCE, 0, unres)) {
+                goto error;
+            }
+
             node->ref = read_yin_subnode(ctx, sub, "text");
             if (!node->ref) {
                 goto error;
@@ -3063,6 +3831,10 @@ read_yin_common(struct lys_module *module, struct lys_node *parent,
                 LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, sub->name);
                 goto error;
             }
+
+            if (lyp_yin_parse_subnode_ext(module, stmt, stmt_type, sub, LYEXT_SUBSTMT_STATUS, 0, unres)) {
+                goto error;
+            }
         } else if ((opt & (OPT_CFG_PARSE | OPT_CFG_IGNORE)) && !strcmp(sub->name, "config")) {
             if (opt & OPT_CFG_PARSE) {
                 if (node->flags & LYS_CONFIG_MASK) {
@@ -3079,6 +3851,10 @@ read_yin_common(struct lys_module *module, struct lys_node *parent,
                     goto error;
                 }
                 node->flags |= LYS_CONFIG_SET;
+
+                if (lyp_yin_parse_subnode_ext(module, stmt, stmt_type, sub, LYEXT_SUBSTMT_CONFIG, 0, unres)) {
+                    goto error;
+                }
             }
         } else {
             /* skip the lyxml_free */
@@ -3106,10 +3882,10 @@ error:
 
 /* logs directly */
 static struct lys_when *
-read_yin_when(struct lys_module *module, struct lyxml_elem *yin)
+read_yin_when(struct lys_module *module, struct lyxml_elem *yin, struct unres_schema *unres)
 {
     struct lys_when *retval = NULL;
-    struct lyxml_elem *child;
+    struct lyxml_elem *child, *next;
     const char *value;
 
     retval = calloc(1, sizeof *retval);
@@ -3124,17 +3900,25 @@ read_yin_when(struct lys_module *module, struct lyxml_elem *yin)
         goto error;
     }
 
-    LY_TREE_FOR(yin->child, child) {
-        if (!child->ns || strcmp(child->ns->value, LY_NSYIN)) {
+    LY_TREE_FOR_SAFE(yin->child, next, child) {
+        if (!child->ns) {
             /* garbage */
             continue;
-        }
-
-        if (!strcmp(child->name, "description")) {
+        } else if (strcmp(child->ns->value, LY_NSYIN)) {
+            /* extensions */
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_WHEN, child, LYEXT_SUBSTMT_SELF, 0, unres)) {
+                goto error;
+            }
+        } else if (!strcmp(child->name, "description")) {
             if (retval->dsc) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
                 goto error;
             }
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_WHEN, child, LYEXT_SUBSTMT_DESCRIPTION, 0, unres)) {
+                goto error;
+            }
+
             retval->dsc = read_yin_subnode(module->ctx, child, "text");
             if (!retval->dsc) {
                 goto error;
@@ -3144,6 +3928,11 @@ read_yin_when(struct lys_module *module, struct lyxml_elem *yin)
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
                 goto error;
             }
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_WHEN, child, LYEXT_SUBSTMT_REFERENCE, 0, unres)) {
+                goto error;
+            }
+
             retval->ref = read_yin_subnode(module->ctx, child, "text");
             if (!retval->ref) {
                 goto error;
@@ -3170,7 +3959,8 @@ read_yin_case(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     struct lyxml_elem *sub, *next, root;
     struct lys_node_case *cs;
     struct lys_node *retval, *node = NULL;
-    int c_ftrs = 0, ret;
+    int c_ftrs = 0, c_ext = 0, ret;
+    void *reallocated;
 
     /* init */
     memset(&root, 0, sizeof root);
@@ -3184,8 +3974,8 @@ read_yin_case(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     cs->prev = (struct lys_node *)cs;
     retval = (struct lys_node *)cs;
 
-    if (read_yin_common(module, parent, retval, yin,
-            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_INHERIT : 0) | OPT_NACMEXT)) {
+    if (read_yin_common(module, parent, retval, LYEXT_PAR_NODE, yin,
+            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_INHERIT : 0), unres)) {
         goto error;
     }
 
@@ -3198,33 +3988,29 @@ read_yin_case(struct lys_module *module, struct lys_node *parent, struct lyxml_e
 
     /* process choice's specific children */
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, sub);
-            continue;
-        }
-
-        if (!strcmp(sub->name, "container") ||
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
+        } else if (!strcmp(sub->name, "container") ||
                 !strcmp(sub->name, "leaf-list") ||
                 !strcmp(sub->name, "leaf") ||
                 !strcmp(sub->name, "list") ||
                 !strcmp(sub->name, "uses") ||
                 !strcmp(sub->name, "choice") ||
-                !strcmp(sub->name, "anyxml")) {
+                !strcmp(sub->name, "anyxml") ||
+                !strcmp(sub->name, "anydata")) {
 
             lyxml_unlink_elem(module->ctx, sub, 2);
             lyxml_add_child(module->ctx, &root, sub);
         } else if (!strcmp(sub->name, "if-feature")) {
             c_ftrs++;
-            /* skip lyxml_free() at the end of the loop, sub is processed later */
-            continue;
         } else if (!strcmp(sub->name, "when")) {
             if (cs->when) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
                 goto error;
             }
 
-            cs->when = read_yin_when(module, sub);
+            cs->when = read_yin_when(module, sub, unres);
             if (!cs->when) {
                 goto error;
             }
@@ -3243,11 +4029,34 @@ read_yin_case(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             goto error;
         }
     }
-    LY_TREE_FOR(yin->child, sub) {
-        ret = fill_yin_iffeature(retval, 0, sub, &cs->iffeature[cs->iffeature_size], unres);
-        cs->iffeature_size++;
-        if (ret) {
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(retval->ext, (c_ext + retval->ext_size) * sizeof *retval->ext);
+        if (!reallocated) {
+            LOGMEM;
             goto error;
+        }
+        retval->ext = reallocated;
+
+        /* init memory */
+        memset(&retval->ext[retval->ext_size], 0, c_ext * sizeof *retval->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            ret = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (ret) {
+                goto error;
+            }
+        } else {
+            /* if-feature */
+            ret = fill_yin_iffeature(retval, 0, sub, &cs->iffeature[cs->iffeature_size], unres);
+            cs->iffeature_size++;
+            if (ret) {
+                goto error;
+            }
         }
     }
 
@@ -3304,7 +4113,8 @@ read_yin_choice(struct lys_module *module, struct lys_node *parent, struct lyxml
     struct lys_node *retval, *node = NULL;
     struct lys_node_choice *choice;
     const char *value;
-    int f_mand = 0, c_ftrs = 0, ret;
+    int f_mand = 0, c_ftrs = 0, c_ext = 0, ret;
+    void *reallocated;
 
     choice = calloc(1, sizeof *choice);
     if (!choice) {
@@ -3315,9 +4125,8 @@ read_yin_choice(struct lys_module *module, struct lys_node *parent, struct lyxml
     choice->prev = (struct lys_node *)choice;
     retval = (struct lys_node *)choice;
 
-    if (read_yin_common(module, parent, retval, yin,
-            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE)
-            | (parent && (parent->nodetype == LYS_GROUPING) ? 0 : OPT_NACMEXT))) {
+    if (read_yin_common(module, parent, retval, LYEXT_PAR_NODE, yin,
+            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE), unres)) {
         goto error;
     }
 
@@ -3330,13 +4139,12 @@ read_yin_choice(struct lys_module *module, struct lys_node *parent, struct lyxml
 
     /* process choice's specific children */
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, sub);
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
+            /* keep it for later processing, skip lyxml_free() */
             continue;
-        }
-
-        if (!strcmp(sub->name, "container")) {
+        } else if (!strcmp(sub->name, "container")) {
             if (!(node = read_yin_container(module, retval, sub, valid_config, unres))) {
                 goto error;
             }
@@ -3369,9 +4177,13 @@ read_yin_choice(struct lys_module *module, struct lys_node *parent, struct lyxml
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
                 goto error;
             }
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_DEFAULT, 0, unres)) {
+                goto error;
+            }
+
             dflt = sub;
             lyxml_unlink_elem(ctx, dflt, 0);
-
             continue;
             /* skip lyxml_free() at the end of the loop, the sub node is processed later as dflt */
 
@@ -3394,13 +4206,17 @@ read_yin_choice(struct lys_module *module, struct lys_node *parent, struct lyxml
                 LOGVAL(LYE_INARG, LY_VLOG_LYS, retval, value, sub->name);
                 goto error;
             }                   /* else false is the default value, so we can ignore it */
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_MANDATORY, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(sub->name, "when")) {
             if (choice->when) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
                 goto error;
             }
 
-            choice->when = read_yin_when(module, sub);
+            choice->when = read_yin_when(module, sub, unres);
             if (!choice->when) {
                 goto error;
             }
@@ -3429,12 +4245,33 @@ read_yin_choice(struct lys_module *module, struct lys_node *parent, struct lyxml
             goto error;
         }
     }
-
-    LY_TREE_FOR(yin->child, sub) {
-        ret = fill_yin_iffeature(retval, 0, sub, &choice->iffeature[choice->iffeature_size], unres);
-        choice->iffeature_size++;
-        if (ret) {
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(retval->ext, (c_ext + retval->ext_size) * sizeof *retval->ext);
+        if (!reallocated) {
+            LOGMEM;
             goto error;
+        }
+        retval->ext = reallocated;
+
+        /* init memory */
+        memset(&retval->ext[retval->ext_size], 0, c_ext * sizeof *retval->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            ret = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (ret) {
+                goto error;
+            }
+        } else {
+            ret = fill_yin_iffeature(retval, 0, sub, &choice->iffeature[choice->iffeature_size], unres);
+            choice->iffeature_size++;
+            if (ret) {
+                goto error;
+            }
         }
     }
 
@@ -3480,7 +4317,8 @@ read_yin_anydata(struct lys_module *module, struct lys_node *parent, struct lyxm
     const char *value;
     int r;
     int f_mand = 0;
-    int c_must = 0, c_ftrs = 0;
+    int c_must = 0, c_ftrs = 0, c_ext = 0;
+    void *reallocated;
 
     anyxml = calloc(1, sizeof *anyxml);
     if (!anyxml) {
@@ -3491,9 +4329,8 @@ read_yin_anydata(struct lys_module *module, struct lys_node *parent, struct lyxm
     anyxml->prev = (struct lys_node *)anyxml;
     retval = (struct lys_node *)anyxml;
 
-    if (read_yin_common(module, parent, retval, yin,
-            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE)
-            | (parent && (parent->nodetype == LYS_GROUPING) ? 0 : OPT_NACMEXT))) {
+    if (read_yin_common(module, parent, retval, LYEXT_PAR_NODE, yin,
+            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE), unres)) {
         goto error;
     }
 
@@ -3505,13 +4342,10 @@ read_yin_anydata(struct lys_module *module, struct lys_node *parent, struct lyxm
     }
 
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, sub);
-            continue;
-        }
-
-        if (!strcmp(sub->name, "mandatory")) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
+        } else if (!strcmp(sub->name, "mandatory")) {
             if (f_mand) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
                 goto error;
@@ -3531,6 +4365,10 @@ read_yin_anydata(struct lys_module *module, struct lys_node *parent, struct lyxm
                 goto error;
             }
             /* else false is the default value, so we can ignore it */
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_MANDATORY, 0, unres)) {
+                goto error;
+            }
             lyxml_free(module->ctx, sub);
         } else if (!strcmp(sub->name, "when")) {
             if (anyxml->when) {
@@ -3538,7 +4376,7 @@ read_yin_anydata(struct lys_module *module, struct lys_node *parent, struct lyxm
                 goto error;
             }
 
-            anyxml->when = read_yin_when(module, sub);
+            anyxml->when = read_yin_when(module, sub, unres);
             if (!anyxml->when) {
                 lyxml_free(module->ctx, sub);
                 goto error;
@@ -3570,10 +4408,29 @@ read_yin_anydata(struct lys_module *module, struct lys_node *parent, struct lyxm
             goto error;
         }
     }
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(retval->ext, (c_ext + retval->ext_size) * sizeof *retval->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        retval->ext = reallocated;
 
-    LY_TREE_FOR(yin->child, sub) {
-        if (!strcmp(sub->name, "must")) {
-            r = fill_yin_must(module, sub, &anyxml->must[anyxml->must_size]);
+        /* init memory */
+        memset(&retval->ext[retval->ext_size], 0, c_ext * sizeof *retval->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            r = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (r) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "must")) {
+            r = fill_yin_must(module, sub, &anyxml->must[anyxml->must_size], unres);
             anyxml->must_size++;
             if (r) {
                 goto error;
@@ -3611,7 +4468,8 @@ read_yin_leaf(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     struct lyxml_elem *sub, *next;
     const char *value;
     int r, has_type = 0;
-    int c_must = 0, c_ftrs = 0, f_mand = 0;
+    int c_must = 0, c_ftrs = 0, f_mand = 0, c_ext = 0;
+    void *reallocated;
 
     leaf = calloc(1, sizeof *leaf);
     if (!leaf) {
@@ -3622,9 +4480,8 @@ read_yin_leaf(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     leaf->prev = (struct lys_node *)leaf;
     retval = (struct lys_node *)leaf;
 
-    if (read_yin_common(module, parent, retval, yin,
-            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE)
-            | (parent && (parent->nodetype == LYS_GROUPING) ? 0 : OPT_NACMEXT))) {
+    if (read_yin_common(module, parent, retval, LYEXT_PAR_NODE, yin,
+            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE), unres)) {
         goto error;
     }
 
@@ -3636,13 +4493,11 @@ read_yin_leaf(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     }
 
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, sub);
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
             continue;
-        }
-
-        if (!strcmp(sub->name, "type")) {
+        } else if (!strcmp(sub->name, "type")) {
             if (has_type) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
                 goto error;
@@ -3660,6 +4515,10 @@ read_yin_leaf(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             }
             GETVAL(value, sub, "value");
             leaf->dflt = lydict_insert(module->ctx, value, strlen(value));
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_DEFAULT, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(sub->name, "units")) {
             if (leaf->units) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
@@ -3667,6 +4526,10 @@ read_yin_leaf(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             }
             GETVAL(value, sub, "name");
             leaf->units = lydict_insert(module->ctx, value, strlen(value));
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_UNITS, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(sub->name, "mandatory")) {
             if (f_mand) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
@@ -3686,13 +4549,17 @@ read_yin_leaf(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 LOGVAL(LYE_INARG, LY_VLOG_LYS, retval, value, sub->name);
                 goto error;
             }                   /* else false is the default value, so we can ignore it */
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_MANDATORY, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(sub->name, "when")) {
             if (leaf->when) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
                 goto error;
             }
 
-            leaf->when = read_yin_when(module, sub);
+            leaf->when = read_yin_when(module, sub, unres);
             if (!leaf->when) {
                 goto error;
             }
@@ -3739,10 +4606,29 @@ read_yin_leaf(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             goto error;
         }
     }
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(retval->ext, (c_ext + retval->ext_size) * sizeof *retval->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        retval->ext = reallocated;
 
-    LY_TREE_FOR(yin->child, sub) {
-        if (!strcmp(sub->name, "must")) {
-            r = fill_yin_must(module, sub, &leaf->must[leaf->must_size]);
+        /* init memory */
+        memset(&retval->ext[retval->ext_size], 0, c_ext * sizeof *retval->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            r = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (r) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "must")) {
+            r = fill_yin_must(module, sub, &leaf->must[leaf->must_size], unres);
             leaf->must_size++;
             if (r) {
                 goto error;
@@ -3794,8 +4680,9 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
     char *endptr;
     unsigned long val;
     int r, has_type = 0;
-    int c_must = 0, c_ftrs = 0, c_dflt = 0;
+    int c_must = 0, c_ftrs = 0, c_dflt = 0, c_ext = 0;
     int f_ordr = 0, f_min = 0, f_max = 0;
+    void *reallocated;
 
     llist = calloc(1, sizeof *llist);
     if (!llist) {
@@ -3806,9 +4693,8 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
     llist->prev = (struct lys_node *)llist;
     retval = (struct lys_node *)llist;
 
-    if (read_yin_common(module, parent, retval, yin,
-            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE)
-            | (parent && (parent->nodetype == LYS_GROUPING) ? 0 : OPT_NACMEXT))) {
+    if (read_yin_common(module, parent, retval, LYEXT_PAR_NODE, yin,
+            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE), unres)) {
         goto error;
     }
 
@@ -3820,13 +4706,11 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
     }
 
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, sub);
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
             continue;
-        }
-
-        if (!strcmp(sub->name, "type")) {
+        } else if (!strcmp(sub->name, "type")) {
             if (has_type) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
                 goto error;
@@ -3844,6 +4728,10 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
             }
             GETVAL(value, sub, "name");
             llist->units = lydict_insert(module->ctx, value, strlen(value));
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_UNITS, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(sub->name, "ordered-by")) {
             if (f_ordr) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
@@ -3870,6 +4758,9 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
                 goto error;
             } /* else system is the default value, so we can ignore it */
 
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_ORDEREDBY, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(sub->name, "must")) {
             c_must++;
             continue;
@@ -3877,6 +4768,11 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
             c_ftrs++;
             continue;
         } else if ((module->version >= 2) && !strcmp(sub->name, "default")) {
+            /* read the default's extension instances */
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_DEFAULT, c_dflt, unres)) {
+                goto error;
+            }
+
             c_dflt++;
             continue;
 
@@ -3904,6 +4800,10 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
             if (llist->max && (llist->min > llist->max)) {
                 LOGVAL(LYE_INARG, LY_VLOG_LYS, retval, value, sub->name);
                 LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL, "\"min-elements\" is bigger than \"max-elements\".");
+                goto error;
+            }
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_MIN, 0, unres)) {
                 goto error;
             }
         } else if (!strcmp(sub->name, "max-elements")) {
@@ -3936,13 +4836,17 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
                     goto error;
                 }
             }
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_MAX, 0, unres)) {
+                goto error;
+            }
         } else if (!strcmp(sub->name, "when")) {
             if (llist->when) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
                 goto error;
             }
 
-            llist->when = read_yin_when(module, sub);
+            llist->when = read_yin_when(module, sub, unres);
             if (!llist->when) {
                 goto error;
             }
@@ -3982,10 +4886,29 @@ read_yin_leaflist(struct lys_module *module, struct lys_node *parent, struct lyx
             goto error;
         }
     }
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(retval->ext, (c_ext + retval->ext_size) * sizeof *retval->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        retval->ext = reallocated;
 
-    LY_TREE_FOR(yin->child, sub) {
-        if (!strcmp(sub->name, "must")) {
-            r = fill_yin_must(module, sub, &llist->must[llist->must_size]);
+        /* init memory */
+        memset(&retval->ext[retval->ext_size], 0, c_ext * sizeof *retval->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            r = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (r) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "must")) {
+            r = fill_yin_must(module, sub, &llist->must[llist->must_size], unres);
             llist->must_size++;
             if (r) {
                 goto error;
@@ -4059,11 +4982,12 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     struct lys_node_list *list;
     struct lyxml_elem *sub, *next, root, uniq;
     int r;
-    int c_tpdf = 0, c_must = 0, c_uniq = 0, c_ftrs = 0;
+    int c_tpdf = 0, c_must = 0, c_uniq = 0, c_ftrs = 0, c_ext = 0;
     int f_ordr = 0, f_max = 0, f_min = 0;
     const char *value;
     char *auxs;
     unsigned long val;
+    void *reallocated;
 
     /* init */
     memset(&root, 0, sizeof root);
@@ -4078,9 +5002,8 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     list->prev = (struct lys_node *)list;
     retval = (struct lys_node *)list;
 
-    if (read_yin_common(module, parent, retval, yin,
-            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE)
-            | (parent && (parent->nodetype == LYS_GROUPING) ? 0 : OPT_NACMEXT))) {
+    if (read_yin_common(module, parent, retval, LYEXT_PAR_NODE, yin,
+            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE), unres)) {
         goto error;
     }
 
@@ -4093,14 +5016,13 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
 
     /* process list's specific children */
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, sub);
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
             continue;
-        }
 
         /* data statements */
-        if (!strcmp(sub->name, "container") ||
+        } else if (!strcmp(sub->name, "container") ||
                 !strcmp(sub->name, "leaf-list") ||
                 !strcmp(sub->name, "leaf") ||
                 !strcmp(sub->name, "list") ||
@@ -4108,6 +5030,7 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 !strcmp(sub->name, "uses") ||
                 !strcmp(sub->name, "grouping") ||
                 !strcmp(sub->name, "anyxml") ||
+                !strcmp(sub->name, "anydata") ||
                 !strcmp(sub->name, "action") ||
                 !strcmp(sub->name, "notification")) {
             lyxml_unlink_elem(module->ctx, sub, 2);
@@ -4136,6 +5059,11 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 LOGMEM;
                 goto error;
             }
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_KEY, 0, unres)) {
+                goto error;
+            }
+            lyxml_free(module->ctx, sub);
         } else if (!strcmp(sub->name, "unique")) {
             c_uniq++;
             lyxml_unlink_elem(module->ctx, sub, 2);
@@ -4172,8 +5100,11 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             } else if (strcmp(value, "system")) {
                 LOGVAL(LYE_INARG, LY_VLOG_LYS, retval, value, sub->name);
                 goto error;
+            } /* else system is the default value, so we can ignore it */
+
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_ORDEREDBY, 0, unres)) {
+                goto error;
             }
-            /* else system is the default value, so we can ignore it */
             lyxml_free(module->ctx, sub);
         } else if (!strcmp(sub->name, "min-elements")) {
             if (f_min) {
@@ -4200,6 +5131,9 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 LOGVAL(LYE_INARG, LY_VLOG_LYS, retval, value, sub->name);
                 LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL, "\"min-elements\" is bigger than \"max-elements\".");
                 lyxml_free(module->ctx, sub);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_MIN, 0, unres)) {
                 goto error;
             }
             lyxml_free(module->ctx, sub);
@@ -4233,6 +5167,9 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                     goto error;
                 }
             }
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_MAX, 0, unres)) {
+                goto error;
+            }
             lyxml_free(module->ctx, sub);
         } else if (!strcmp(sub->name, "when")) {
             if (list->when) {
@@ -4240,7 +5177,7 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 goto error;
             }
 
-            list->when = read_yin_when(module, sub);
+            list->when = read_yin_when(module, sub, unres);
             if (!list->when) {
                 lyxml_free(module->ctx, sub);
                 goto error;
@@ -4254,7 +5191,7 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
 
     /* check - if list is configuration, key statement is mandatory
      * (but only if we are not in a grouping or augment, then the check is deferred) */
-    for (node = retval; node && !(node->nodetype & (LYS_GROUPING | LYS_AUGMENT)); node = node->parent);
+    for (node = retval; node && !(node->nodetype & (LYS_GROUPING | LYS_AUGMENT | LYS_EXT)); node = node->parent);
     if (!node && (list->flags & LYS_CONFIG_W) && !list->keys_str) {
         LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_LYS, retval, "key", "list");
         goto error;
@@ -4282,8 +5219,28 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             goto error;
         }
     }
-    LY_TREE_FOR(yin->child, sub) {
-        if (!strcmp(sub->name, "typedef")) {
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(retval->ext, (c_ext + retval->ext_size) * sizeof *retval->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        retval->ext = reallocated;
+
+        /* init memory */
+        memset(&retval->ext[retval->ext_size], 0, c_ext * sizeof *retval->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            r = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (r) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "typedef")) {
             r = fill_yin_typedef(module, retval, sub, &list->tpdf[list->tpdf_size], unres);
             list->tpdf_size++;
             if (r) {
@@ -4296,7 +5253,7 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 goto error;
             }
         } else if (!strcmp(sub->name, "must")) {
-            r = fill_yin_must(module, sub, &list->must[list->must_size]);
+            r = fill_yin_must(module, sub, &list->must[list->must_size], unres);
             list->must_size++;
             if (r) {
                 goto error;
@@ -4362,6 +5319,10 @@ read_yin_list(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 goto error;
             }
 
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub,
+                                     LYEXT_SUBSTMT_UNIQUE, list->unique_size - 1, unres)) {
+                goto error;
+            }
             lyxml_free(module->ctx, sub);
         }
     }
@@ -4396,8 +5357,9 @@ read_yin_container(struct lys_module *module, struct lys_node *parent, struct ly
     struct lys_node *retval;
     struct lys_node_container *cont;
     const char *value;
+    void *reallocated;
     int r;
-    int c_tpdf = 0, c_must = 0, c_ftrs = 0;
+    int c_tpdf = 0, c_must = 0, c_ftrs = 0, c_ext = 0;
 
     /* init */
     memset(&root, 0, sizeof root);
@@ -4411,9 +5373,8 @@ read_yin_container(struct lys_module *module, struct lys_node *parent, struct ly
     cont->prev = (struct lys_node *)cont;
     retval = (struct lys_node *)cont;
 
-    if (read_yin_common(module, parent, retval, yin,
-            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE)
-            | (parent && (parent->nodetype == LYS_GROUPING) ? 0 : OPT_NACMEXT))) {
+    if (read_yin_common(module, parent, retval, LYEXT_PAR_NODE, yin,
+            OPT_IDENT | OPT_MODULE | (valid_config ? OPT_CFG_PARSE | OPT_CFG_INHERIT : OPT_CFG_IGNORE), unres)) {
         goto error;
     }
 
@@ -4426,13 +5387,10 @@ read_yin_container(struct lys_module *module, struct lys_node *parent, struct ly
 
     /* process container's specific children */
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns) {
-            /* garbage */
-            lyxml_free(module->ctx, sub);
-            continue;
-        }
-
-        if (!strcmp(sub->name, "presence")) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
+        } else if (!strcmp(sub->name, "presence")) {
             if (cont->presence) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
                 goto error;
@@ -4440,6 +5398,9 @@ read_yin_container(struct lys_module *module, struct lys_node *parent, struct ly
             GETVAL(value, sub, "value");
             cont->presence = lydict_insert(module->ctx, value, strlen(value));
 
+            if (lyp_yin_parse_subnode_ext(module, retval, LYEXT_PAR_NODE, sub, LYEXT_SUBSTMT_PRESENCE, 0, unres)) {
+                goto error;
+            }
             lyxml_free(module->ctx, sub);
         } else if (!strcmp(sub->name, "when")) {
             if (cont->when) {
@@ -4447,7 +5408,7 @@ read_yin_container(struct lys_module *module, struct lys_node *parent, struct ly
                 goto error;
             }
 
-            cont->when = read_yin_when(module, sub);
+            cont->when = read_yin_when(module, sub, unres);
             if (!cont->when) {
                 lyxml_free(module->ctx, sub);
                 goto error;
@@ -4463,6 +5424,7 @@ read_yin_container(struct lys_module *module, struct lys_node *parent, struct ly
                 !strcmp(sub->name, "uses") ||
                 !strcmp(sub->name, "grouping") ||
                 !strcmp(sub->name, "anyxml") ||
+                !strcmp(sub->name, "anydata") ||
                 !strcmp(sub->name, "action") ||
                 !strcmp(sub->name, "notification")) {
             lyxml_unlink_elem(module->ctx, sub, 2);
@@ -4503,16 +5465,35 @@ read_yin_container(struct lys_module *module, struct lys_node *parent, struct ly
             goto error;
         }
     }
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(retval->ext, (c_ext + retval->ext_size) * sizeof *retval->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        retval->ext = reallocated;
 
-    LY_TREE_FOR(yin->child, sub) {
-        if (!strcmp(sub->name, "typedef")) {
+        /* init memory */
+        memset(&retval->ext[retval->ext_size], 0, c_ext * sizeof *retval->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            r = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (r) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "typedef")) {
             r = fill_yin_typedef(module, retval, sub, &cont->tpdf[cont->tpdf_size], unres);
             cont->tpdf_size++;
             if (r) {
                 goto error;
             }
         } else if (!strcmp(sub->name, "must")) {
-            r = fill_yin_must(module, sub, &cont->must[cont->must_size]);
+            r = fill_yin_must(module, sub, &cont->must[cont->must_size], unres);
             cont->must_size++;
             if (r) {
                 goto error;
@@ -4585,7 +5566,8 @@ read_yin_grouping(struct lys_module *module, struct lys_node *parent, struct lyx
     struct lys_node *retval;
     struct lys_node_grp *grp;
     int r;
-    int c_tpdf = 0;
+    int c_tpdf = 0, c_ext = 0;
+    void *reallocated;
 
     /* init */
     memset(&root, 0, sizeof root);
@@ -4599,7 +5581,7 @@ read_yin_grouping(struct lys_module *module, struct lys_node *parent, struct lyx
     grp->prev = (struct lys_node *)grp;
     retval = (struct lys_node *)grp;
 
-    if (read_yin_common(module, parent, retval, yin, OPT_IDENT | OPT_MODULE )) {
+    if (read_yin_common(module, parent, retval, LYEXT_PAR_NODE, yin, OPT_IDENT | OPT_MODULE , unres)) {
         goto error;
     }
 
@@ -4611,14 +5593,12 @@ read_yin_grouping(struct lys_module *module, struct lys_node *parent, struct lyx
     }
 
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, sub);
-            continue;
-        }
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
 
         /* data statements */
-        if (!strcmp(sub->name, "container") ||
+        } else if (!strcmp(sub->name, "container") ||
                 !strcmp(sub->name, "leaf-list") ||
                 !strcmp(sub->name, "leaf") ||
                 !strcmp(sub->name, "list") ||
@@ -4626,6 +5606,7 @@ read_yin_grouping(struct lys_module *module, struct lys_node *parent, struct lyx
                 !strcmp(sub->name, "uses") ||
                 !strcmp(sub->name, "grouping") ||
                 !strcmp(sub->name, "anyxml") ||
+                !strcmp(sub->name, "anydata") ||
                 !strcmp(sub->name, "action") ||
                 !strcmp(sub->name, "notification")) {
             lyxml_unlink_elem(module->ctx, sub, 2);
@@ -4648,11 +5629,33 @@ read_yin_grouping(struct lys_module *module, struct lys_node *parent, struct lyx
             goto error;
         }
     }
-    LY_TREE_FOR(yin->child, sub) {
-        r = fill_yin_typedef(module, retval, sub, &grp->tpdf[grp->tpdf_size], unres);
-        grp->tpdf_size++;
-        if (r) {
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(retval->ext, (c_ext + retval->ext_size) * sizeof *retval->ext);
+        if (!reallocated) {
+            LOGMEM;
             goto error;
+        }
+        retval->ext = reallocated;
+
+        /* init memory */
+        memset(&retval->ext[retval->ext_size], 0, c_ext * sizeof *retval->ext);
+    }
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            r = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (r) {
+                goto error;
+            }
+        } else {
+            /* typedef */
+            r = fill_yin_typedef(module, retval, sub, &grp->tpdf[grp->tpdf_size], unres);
+            grp->tpdf_size++;
+            if (r) {
+                goto error;
+            }
         }
     }
 
@@ -4713,7 +5716,7 @@ read_yin_input_output(struct lys_module *module, struct lys_node *parent, struct
     struct lys_node *retval = NULL;
     struct lys_node_inout *inout;
     int r;
-    int c_tpdf = 0, c_must = 0;
+    int c_tpdf = 0, c_must = 0, c_ext = 0;
 
     /* init */
     memset(&root, 0, sizeof root);
@@ -4738,10 +5741,7 @@ read_yin_input_output(struct lys_module *module, struct lys_node *parent, struct
     }
 
     retval = (struct lys_node *)inout;
-
-    if (read_yin_common(module, parent, retval, yin, OPT_MODULE | OPT_NACMEXT)) {
-        goto error;
-    }
+    retval->module = module;
 
     LOGDBG("YIN: parsing %s statement \"%s\"", yin->name, retval->name);
 
@@ -4752,20 +5752,21 @@ read_yin_input_output(struct lys_module *module, struct lys_node *parent, struct
 
     /* data statements */
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
+        if (!sub->ns) {
             /* garbage */
             lyxml_free(module->ctx, sub);
-            continue;
-        }
-
-        if (!strcmp(sub->name, "container") ||
+        } else if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
+        } else if (!strcmp(sub->name, "container") ||
                 !strcmp(sub->name, "leaf-list") ||
                 !strcmp(sub->name, "leaf") ||
                 !strcmp(sub->name, "list") ||
                 !strcmp(sub->name, "choice") ||
                 !strcmp(sub->name, "uses") ||
                 !strcmp(sub->name, "grouping") ||
-                !strcmp(sub->name, "anyxml")) {
+                !strcmp(sub->name, "anyxml") ||
+                !strcmp(sub->name, "anydata")) {
             lyxml_unlink_elem(module->ctx, sub, 2);
             lyxml_add_child(module->ctx, &root, sub);
 
@@ -4797,10 +5798,24 @@ read_yin_input_output(struct lys_module *module, struct lys_node *parent, struct
             goto error;
         }
     }
+    if (c_ext) {
+        inout->ext = calloc(c_ext, sizeof *inout->ext);
+        if (!inout->ext) {
+            LOGMEM;
+            goto error;
+        }
+    }
 
-    LY_TREE_FOR(yin->child, sub) {
-        if (!strcmp(sub->name, "must")) {
-            r = fill_yin_must(module, sub, &inout->must[inout->must_size]);
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            r = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (r) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "must")) {
+            r = fill_yin_must(module, sub, &inout->must[inout->must_size], unres);
             inout->must_size++;
             if (r) {
                 goto error;
@@ -4869,7 +5884,8 @@ read_yin_notif(struct lys_module *module, struct lys_node *parent, struct lyxml_
     struct lys_node *retval;
     struct lys_node_notif *notif;
     int r;
-    int c_tpdf = 0, c_ftrs = 0, c_must = 0;
+    int c_tpdf = 0, c_ftrs = 0, c_must = 0, c_ext = 0;
+    void *reallocated;
 
     if (parent && (module->version < 2)) {
         LOGVAL(LYE_INSTMT, LY_VLOG_LYS, parent, "notification");
@@ -4887,7 +5903,7 @@ read_yin_notif(struct lys_module *module, struct lys_node *parent, struct lyxml_
     notif->prev = (struct lys_node *)notif;
     retval = (struct lys_node *)notif;
 
-    if (read_yin_common(module, parent, retval, yin, OPT_IDENT | OPT_MODULE | OPT_NACMEXT)) {
+    if (read_yin_common(module, parent, retval, LYEXT_PAR_NODE, yin, OPT_IDENT | OPT_MODULE, unres)) {
         goto error;
     }
 
@@ -4900,21 +5916,21 @@ read_yin_notif(struct lys_module *module, struct lys_node *parent, struct lyxml_
 
     /* process rpc's specific children */
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, sub);
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
             continue;
-        }
 
         /* data statements */
-        if (!strcmp(sub->name, "container") ||
+        } else if (!strcmp(sub->name, "container") ||
                 !strcmp(sub->name, "leaf-list") ||
                 !strcmp(sub->name, "leaf") ||
                 !strcmp(sub->name, "list") ||
                 !strcmp(sub->name, "choice") ||
                 !strcmp(sub->name, "uses") ||
                 !strcmp(sub->name, "grouping") ||
-                !strcmp(sub->name, "anyxml")) {
+                !strcmp(sub->name, "anyxml") ||
+                !strcmp(sub->name, "anydata")) {
             lyxml_unlink_elem(module->ctx, sub, 2);
             lyxml_add_child(module->ctx, &root, sub);
 
@@ -4953,9 +5969,28 @@ read_yin_notif(struct lys_module *module, struct lys_node *parent, struct lyxml_
             goto error;
         }
     }
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(retval->ext, (c_ext + retval->ext_size) * sizeof *retval->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        retval->ext = reallocated;
 
-    LY_TREE_FOR(yin->child, sub) {
-        if (!strcmp(sub->name, "typedef")) {
+        /* init memory */
+        memset(&retval->ext[retval->ext_size], 0, c_ext * sizeof *retval->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            r = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (r) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "typedef")) {
             r = fill_yin_typedef(module, retval, sub, &notif->tpdf[notif->tpdf_size], unres);
             notif->tpdf_size++;
             if (r) {
@@ -4968,7 +6003,7 @@ read_yin_notif(struct lys_module *module, struct lys_node *parent, struct lyxml_
                 goto error;
             }
         } else if (!strcmp(sub->name, "must")) {
-            r = fill_yin_must(module, sub, &notif->must[notif->must_size]);
+            r = fill_yin_must(module, sub, &notif->must[notif->must_size], unres);
             notif->must_size++;
             if (r) {
                 goto error;
@@ -5031,7 +6066,8 @@ read_yin_rpc_action(struct lys_module *module, struct lys_node *parent, struct l
     struct lys_node *retval;
     struct lys_node_rpc_action *rpc;
     int r;
-    int c_tpdf = 0, c_ftrs = 0, c_input = 0, c_output = 0;
+    int c_tpdf = 0, c_ftrs = 0, c_input = 0, c_output = 0, c_ext = 0;
+    void *reallocated;
 
     if (!strcmp(yin->name, "action")) {
         if (module->version < 2) {
@@ -5059,7 +6095,7 @@ read_yin_rpc_action(struct lys_module *module, struct lys_node *parent, struct l
     rpc->prev = (struct lys_node *)rpc;
     retval = (struct lys_node *)rpc;
 
-    if (read_yin_common(module, parent, retval, yin, OPT_IDENT | OPT_MODULE | OPT_NACMEXT)) {
+    if (read_yin_common(module, parent, retval, LYEXT_PAR_NODE, yin, OPT_IDENT | OPT_MODULE, unres)) {
         goto error;
     }
 
@@ -5072,13 +6108,11 @@ read_yin_rpc_action(struct lys_module *module, struct lys_node *parent, struct l
 
     /* process rpc's specific children */
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, sub);
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
             continue;
-        }
-
-        if (!strcmp(sub->name, "input")) {
+        } else if (!strcmp(sub->name, "input")) {
             if (c_input) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_LYS, retval, sub->name, yin->name);
                 goto error;
@@ -5126,9 +6160,28 @@ read_yin_rpc_action(struct lys_module *module, struct lys_node *parent, struct l
             goto error;
         }
     }
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(retval->ext, (c_ext + retval->ext_size) * sizeof *retval->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        retval->ext = reallocated;
 
-    LY_TREE_FOR(yin->child, sub) {
-        if (!strcmp(sub->name, "typedef")) {
+        /* init memory */
+        memset(&retval->ext[retval->ext_size], 0, c_ext * sizeof *retval->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            r = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (r) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "typedef")) {
             r = fill_yin_typedef(module, retval, sub, &rpc->tpdf[rpc->tpdf_size], unres);
             rpc->tpdf_size++;
             if (r) {
@@ -5182,8 +6235,9 @@ read_yin_uses(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     struct lys_node *retval;
     struct lys_node_uses *uses;
     const char *value;
-    int c_ref = 0, c_aug = 0, c_ftrs = 0;
+    int c_ref = 0, c_aug = 0, c_ftrs = 0, c_ext = 0;
     int r;
+    void *reallocated;
 
     uses = calloc(1, sizeof *uses);
     if (!uses) {
@@ -5197,8 +6251,7 @@ read_yin_uses(struct lys_module *module, struct lys_node *parent, struct lyxml_e
     GETVAL(value, yin, "name");
     uses->name = lydict_insert(module->ctx, value, 0);
 
-    if (read_yin_common(module, parent, retval, yin, OPT_MODULE
-            | (parent && (parent->nodetype == LYS_GROUPING) ? 0 : OPT_NACMEXT))) {
+    if (read_yin_common(module, parent, retval, LYEXT_PAR_NODE, yin, OPT_MODULE, unres)) {
         goto error;
     }
 
@@ -5211,13 +6264,11 @@ read_yin_uses(struct lys_module *module, struct lys_node *parent, struct lyxml_e
 
     /* get other properties of uses */
     LY_TREE_FOR_SAFE(yin->child, next, sub) {
-        if (!sub->ns || strcmp(sub->ns->value, LY_NSYIN)) {
-            /* garbage */
-            lyxml_free(module->ctx, sub);
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            c_ext++;
             continue;
-        }
-
-        if (!strcmp(sub->name, "refine")) {
+        } else if (!strcmp(sub->name, "refine")) {
             c_ref++;
         } else if (!strcmp(sub->name, "augment")) {
             c_aug++;
@@ -5229,7 +6280,7 @@ read_yin_uses(struct lys_module *module, struct lys_node *parent, struct lyxml_e
                 goto error;
             }
 
-            uses->when = read_yin_when(module, sub);
+            uses->when = read_yin_when(module, sub, unres);
             if (!uses->when) {
                 lyxml_free(module->ctx, sub);
                 goto error;
@@ -5263,9 +6314,28 @@ read_yin_uses(struct lys_module *module, struct lys_node *parent, struct lyxml_e
             goto error;
         }
     }
+    if (c_ext) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(retval->ext, (c_ext + retval->ext_size) * sizeof *retval->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        retval->ext = reallocated;
 
-    LY_TREE_FOR(yin->child, sub) {
-        if (!strcmp(sub->name, "refine")) {
+        /* init memory */
+        memset(&retval->ext[retval->ext_size], 0, c_ext * sizeof *retval->ext);
+    }
+
+    LY_TREE_FOR_SAFE(yin->child, next, sub) {
+        if (strcmp(sub->ns->value, LY_NSYIN)) {
+            /* extension */
+            r = lyp_yin_fill_ext(retval, LYEXT_PAR_NODE, 0, 0, module, sub, &retval->ext, retval->ext_size, unres);
+            retval->ext_size++;
+            if (r) {
+                goto error;
+            }
+        } else if (!strcmp(sub->name, "refine")) {
             r = fill_yin_refine(retval, sub, &uses->refine[uses->refine_size], unres);
             uses->refine_size++;
             if (r) {
@@ -5313,14 +6383,21 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
                 struct unres_schema *unres)
 {
     struct ly_ctx *ctx = module->ctx;
-    struct lyxml_elem *next, *child, *child2, root, grps, augs;
+    struct lyxml_elem *next, *child, root, grps, augs, revs, exts;
     struct lys_node *node = NULL;
     struct lys_module *trg;
     const char *value;
-    int i, r;
+    int i, r, ret = -1;
     int version_flag = 0;
+    /* (sub)module substatements are ordered in groups, increment this value when moving to another group
+     * 0 - header-stmts, 1 - linkage-stmts, 2 - meta-stmts, 3 - revision-stmts, 4 - body-stmts */
+    int substmt_group;
+    /* just remember last substatement for logging */
+    const char *substmt_prev;
     /* counters */
     int c_imp = 0, c_rev = 0, c_tpdf = 0, c_ident = 0, c_inc = 0, c_aug = 0, c_ftrs = 0, c_dev = 0;
+    int c_ext = 0, c_extinst = 0;
+    void *reallocated;
 
     /* to simplify code, store the module/submodule being processed as trg */
     trg = submodule ? (struct lys_module *)submodule : module;
@@ -5329,6 +6406,8 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
     memset(&root, 0, sizeof root);
     memset(&grps, 0, sizeof grps);
     memset(&augs, 0, sizeof augs);
+    memset(&exts, 0, sizeof exts);
+    memset(&revs, 0, sizeof revs);
 
     /*
      * in the first run, we process elements with cardinality of 1 or 0..1 and
@@ -5338,40 +6417,82 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
      * the middle loop, we process other elements with carinality of 0..n since
      * we need to allocate arrays to store them.
      */
+    substmt_group = 0;
+    substmt_prev = NULL;
     LY_TREE_FOR_SAFE(yin->child, next, child) {
-        if (!child->ns || strcmp(child->ns->value, LY_NSYIN)) {
+        if (!child->ns) {
             /* garbage */
             lyxml_free(ctx, child);
             continue;
-        }
+        } else if (strcmp(child->ns->value, LY_NSYIN)) {
+            /* possible extension instance */
+            lyxml_unlink_elem(module->ctx, child, 2);
+            lyxml_add_child(module->ctx, &exts, child);
+            c_extinst++;
+        } else if (!submodule && !strcmp(child->name, "namespace")) {
+            if (substmt_group > 0) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Statement \"%s\" cannot appear after \"%s\" statement.",
+                       child->name, substmt_prev);
+                goto error;
+            }
 
-        if (!submodule && !strcmp(child->name, "namespace")) {
-            if (module->ns) {
+            if (trg->ns) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
                 goto error;
             }
             GETVAL(value, child, "uri");
-            module->ns = lydict_insert(ctx, value, strlen(value));
+            trg->ns = lydict_insert(ctx, value, strlen(value));
+
+            if (lyp_yin_parse_subnode_ext(trg, trg, LYEXT_PAR_MODULE, child, LYEXT_SUBSTMT_NAMESPACE, 0, unres)) {
+                goto error;
+            }
             lyxml_free(ctx, child);
+
+            substmt_prev = "namespace";
         } else if (!submodule && !strcmp(child->name, "prefix")) {
-            if (module->prefix) {
+            if (substmt_group > 0) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Statement \"%s\" cannot appear after \"%s\" statement.",
+                       child->name, substmt_prev);
+                goto error;
+            }
+
+            if (trg->prefix) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
                 goto error;
             }
             GETVAL(value, child, "value");
-            if (lyp_check_identifier(value, LY_IDENT_PREFIX, module, NULL)) {
+            if (lyp_check_identifier(value, LY_IDENT_PREFIX, trg, NULL)) {
                 goto error;
             }
-            module->prefix = lydict_insert(ctx, value, strlen(value));
+            trg->prefix = lydict_insert(ctx, value, strlen(value));
+
+            if (lyp_yin_parse_subnode_ext(trg, trg, LYEXT_PAR_MODULE, child, LYEXT_SUBSTMT_PREFIX, 0, unres)) {
+                goto error;
+            }
             lyxml_free(ctx, child);
+
+            substmt_prev = "prefix";
         } else if (submodule && !strcmp(child->name, "belongs-to")) {
-            if (submodule->prefix) {
+            if (substmt_group > 0) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Statement \"%s\" cannot appear after \"%s\" statement.",
+                       child->name, substmt_prev);
+                goto error;
+            }
+
+            if (trg->prefix) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
                 goto error;
             }
             GETVAL(value, child, "module");
             if (!ly_strequal(value, submodule->belongsto->name, 1)) {
                 LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, child->name);
+                goto error;
+            }
+
+            if (lyp_yin_parse_subnode_ext(trg, trg, LYEXT_PAR_MODULE, child, LYEXT_SUBSTMT_BELONGSTO, 0, unres)) {
                 goto error;
             }
 
@@ -5396,30 +6517,82 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
             }
             submodule->prefix = lydict_insert(ctx, value, strlen(value));
 
+            if (lyp_yin_parse_subnode_ext(trg, trg, LYEXT_PAR_MODULE, child->child, LYEXT_SUBSTMT_PREFIX, 0, unres)) {
+                goto error;
+            }
+
             /* we are done with belongs-to */
             lyxml_free(ctx, child);
 
+            substmt_prev = "belongs-to";
+
             /* counters (statements with n..1 cardinality) */
         } else if (!strcmp(child->name, "import")) {
+            if (substmt_group > 1) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Statement \"%s\" cannot appear after \"%s\" statement.",
+                       child->name, substmt_prev);
+                goto error;
+            }
+            substmt_group = 1;
+
             c_imp++;
+
+            substmt_prev = "import";
         } else if (!strcmp(child->name, "revision")) {
+            if (substmt_group > 3) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Statement \"%s\" cannot appear after \"%s\" statement.",
+                       child->name, substmt_prev);
+                goto error;
+            }
+            substmt_group = 3;
+
             c_rev++;
+
+            lyxml_unlink_elem(ctx, child, 2);
+            lyxml_add_child(ctx, &revs, child);
+
+            substmt_prev = "revision";
         } else if (!strcmp(child->name, "typedef")) {
+            substmt_group = 4;
+
             c_tpdf++;
+
+            substmt_prev = "typedef";
         } else if (!strcmp(child->name, "identity")) {
+            substmt_group = 4;
+
             c_ident++;
+
+            substmt_prev = "identity";
         } else if (!strcmp(child->name, "include")) {
+            if (substmt_group > 1) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Statement \"%s\" cannot appear after \"%s\" statement.",
+                       child->name, substmt_prev);
+                goto error;
+            }
+            substmt_group = 1;
+
             c_inc++;
+
+            substmt_prev = "include";
         } else if (!strcmp(child->name, "augment")) {
+            substmt_group = 4;
+
             c_aug++;
             /* keep augments separated, processed last */
             lyxml_unlink_elem(ctx, child, 2);
             lyxml_add_child(ctx, &augs, child);
 
+            substmt_prev = "augment";
         } else if (!strcmp(child->name, "feature")) {
+            substmt_group = 4;
+
             c_ftrs++;
-        } else if (!strcmp(child->name, "deviation")) {
-            c_dev++;
+
+            substmt_prev = "feature";
 
             /* data statements */
         } else if (!strcmp(child->name, "container") ||
@@ -5429,20 +6602,38 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
                 !strcmp(child->name, "choice") ||
                 !strcmp(child->name, "uses") ||
                 !strcmp(child->name, "anyxml") ||
+                !strcmp(child->name, "anydata") ||
                 !strcmp(child->name, "rpc") ||
                 !strcmp(child->name, "notification")) {
+            substmt_group = 4;
+
             lyxml_unlink_elem(ctx, child, 2);
             lyxml_add_child(ctx, &root, child);
 
+            substmt_prev = "data definition";
         } else if (!strcmp(child->name, "grouping")) {
+            substmt_group = 4;
+
             /* keep groupings separated and process them before other data statements */
             lyxml_unlink_elem(ctx, child, 2);
             lyxml_add_child(ctx, &grps, child);
 
+            substmt_prev = "grouping";
             /* optional statements */
         } else if (!strcmp(child->name, "description")) {
+            if (substmt_group > 2) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Statement \"%s\" cannot appear after \"%s\" statement.",
+                       child->name, substmt_prev);
+                goto error;
+            }
+            substmt_group = 2;
+
             if (trg->dsc) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(trg, trg, LYEXT_PAR_MODULE, child, LYEXT_SUBSTMT_DESCRIPTION, 0, unres)) {
                 goto error;
             }
             trg->dsc = read_yin_subnode(ctx, child, "text");
@@ -5450,9 +6641,22 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
             if (!trg->dsc) {
                 goto error;
             }
+
+            substmt_prev = "description";
         } else if (!strcmp(child->name, "reference")) {
+            if (substmt_group > 2) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Statement \"%s\" cannot appear after \"%s\" statement.",
+                       child->name, substmt_prev);
+                goto error;
+            }
+            substmt_group = 2;
+
             if (trg->ref) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(trg, trg, LYEXT_PAR_MODULE, child, LYEXT_SUBSTMT_REFERENCE, 0, unres)) {
                 goto error;
             }
             trg->ref = read_yin_subnode(ctx, child, "text");
@@ -5460,9 +6664,22 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
             if (!trg->ref) {
                 goto error;
             }
+
+            substmt_prev = "reference";
         } else if (!strcmp(child->name, "organization")) {
+            if (substmt_group > 2) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Statement \"%s\" cannot appear after \"%s\" statement.",
+                       child->name, substmt_prev);
+                goto error;
+            }
+            substmt_group = 2;
+
             if (trg->org) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(trg, trg, LYEXT_PAR_MODULE, child, LYEXT_SUBSTMT_ORGANIZATION, 0, unres)) {
                 goto error;
             }
             trg->org = read_yin_subnode(ctx, child, "text");
@@ -5470,9 +6687,22 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
             if (!trg->org) {
                 goto error;
             }
+
+            substmt_prev = "organization";
         } else if (!strcmp(child->name, "contact")) {
+            if (substmt_group > 2) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Statement \"%s\" cannot appear after \"%s\" statement.",
+                       child->name, substmt_prev);
+                goto error;
+            }
+            substmt_group = 2;
+
             if (trg->contact) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
+                goto error;
+            }
+            if (lyp_yin_parse_subnode_ext(trg, trg, LYEXT_PAR_MODULE, child, LYEXT_SUBSTMT_CONTACT, 0, unres)) {
                 goto error;
             }
             trg->contact = read_yin_subnode(ctx, child, "text");
@@ -5480,7 +6710,16 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
             if (!trg->contact) {
                 goto error;
             }
+
+            substmt_prev = "contact";
         } else if (!strcmp(child->name, "yang-version")) {
+            if (substmt_group > 0) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
+                LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Statement \"%s\" cannot appear after \"%s\" statement.",
+                       child->name, substmt_prev);
+                goto error;
+            }
+
             if (version_flag) {
                 LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child->name, yin->name);
                 goto error;
@@ -5511,25 +6750,24 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
                 }
             }
 
+            if (lyp_yin_parse_subnode_ext(trg, trg, LYEXT_PAR_MODULE, child, LYEXT_SUBSTMT_VERSION, 0, unres)) {
+                goto error;
+            }
             lyxml_free(ctx, child);
 
+            substmt_prev = "yang-version";
         } else if (!strcmp(child->name, "extension")) {
-            GETVAL(value, child, "name");
+            substmt_group = 4;
 
-            /* we have the following supported (hardcoded) extensions: */
-            /* ietf-netconf's get-filter-element-attributes */
-            if (!strcmp(module->ns, LY_NSNC) &&
-                    !strcmp(value, "get-filter-element-attributes")) {
-                LOGDBG("NETCONF filter extension found");
-            /* NACM's default-deny-write and default-deny-all */
-            } else if (!strcmp(module->ns, LY_NSNACM) &&
-                    (!strcmp(value, "default-deny-write") || !strcmp(value, "default-deny-all"))) {
-                LOGDBG("NACM extension found");
-            /* other extensions are not supported, so inform about such an extension */
-            } else {
-                LOGWRN("Not supported \"%s\" extension statement found, ignoring.", value);
-                lyxml_free(ctx, child);
-            }
+            c_ext++;
+
+            substmt_prev = "extension";
+        } else if (!strcmp(child->name, "deviation")) {
+            substmt_group = 4;
+
+            c_dev++;
+
+            substmt_prev = "deviation";
         } else {
             LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child->name);
             goto error;
@@ -5550,11 +6788,11 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
             }
         }
     } else {
-        if (!module->ns) {
+        if (!trg->ns) {
             LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "namespace", "module");
             goto error;
         }
-        if (!module->prefix) {
+        if (!trg->prefix) {
             LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "prefix", "module");
             goto error;
         }
@@ -5617,11 +6855,51 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
             goto error;
         }
     }
+    if (c_ext) {
+        trg->extensions = calloc(c_ext, sizeof *trg->extensions);
+        if (!trg->extensions) {
+            LOGMEM;
+            goto error;
+        }
+    }
 
-    /* middle part - process nodes with cardinality of 0..n except the data nodes and augments */
+    /* middle part 1 - process revision and then check whether this (sub)module was not already parsed, add it there */
+    LY_TREE_FOR_SAFE(revs.child, next, child) {
+        r = fill_yin_revision(trg, child, &trg->rev[trg->rev_size], unres);
+        trg->rev_size++;
+        if (r) {
+            goto error;
+        }
+
+        /* check uniqueness of the revision date - not required by RFC */
+        for (i = 0; i < (trg->rev_size - 1); i++) {
+            if (!strcmp(trg->rev[i].date, trg->rev[trg->rev_size - 1].date)) {
+                LOGWRN("Module's revisions are not unique (%s).", trg->rev[trg->rev_size - 1].date);
+                break;
+            }
+        }
+
+        lyxml_free(ctx, child);
+    }
+
+    /* check the module with respect to the context now */
+    if (!submodule) {
+        switch (lyp_ctx_check_module(module)) {
+        case -1:
+            goto error;
+        case 0:
+            break;
+        case 1:
+            /* it's already there */
+            ret = 1;
+            goto error;
+        }
+    }
+
+    /* middle part 2 - process nodes with cardinality of 0..n except the data nodes and augments */
     LY_TREE_FOR_SAFE(yin->child, next, child) {
         if (!strcmp(child->name, "import")) {
-            r = fill_yin_import(trg, child, &trg->imp[trg->imp_size]);
+            r = fill_yin_import(trg, child, &trg->imp[trg->imp_size], unres);
             trg->imp_size++;
             if (r) {
                 goto error;
@@ -5633,72 +6911,6 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
             if (r) {
                 goto error;
             }
-
-        } else if (!strcmp(child->name, "revision")) {
-            GETVAL(value, child, "date");
-            if (lyp_check_date(value)) {
-                goto error;
-            }
-            memcpy(trg->rev[trg->rev_size].date, value, LY_REV_SIZE - 1);
-            /* check uniqueness of the revision date - not required by RFC */
-            for (i = 0; i < trg->rev_size; i++) {
-                if (!strcmp(value, trg->rev[i].date)) {
-                    LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, child->name);
-                    LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Revision is not unique.");
-                }
-            }
-
-            LY_TREE_FOR(child->child, child2) {
-                if (!strcmp(child2->name, "description")) {
-                    if (trg->rev[trg->rev_size].dsc) {
-                        LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child2->name, child->name);
-                        goto error;
-                    }
-                    trg->rev[trg->rev_size].dsc = read_yin_subnode(ctx, child2, "text");
-                    if (!trg->rev[trg->rev_size].dsc) {
-                        goto error;
-                    }
-                } else if (!strcmp(child2->name, "reference")) {
-                    if (trg->rev[trg->rev_size].ref) {
-                        LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, child2->name, child->name);
-                        goto error;
-                    }
-                    trg->rev[trg->rev_size].ref = read_yin_subnode(ctx, child2, "text");
-                    if (!trg->rev[trg->rev_size].ref) {
-                        goto error;
-                    }
-                } else {
-                    LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, child2->name);
-                    goto error;
-                }
-            }
-
-            /* keep the latest revision at position 0 */
-            if (trg->rev_size && strcmp(trg->rev[trg->rev_size].date, trg->rev[0].date) > 0) {
-                /* switch their position */
-                value = strdup(trg->rev[0].date);
-                if (!value) {
-                    LOGMEM;
-                    goto error;
-                }
-                memcpy(trg->rev[0].date, trg->rev[trg->rev_size].date, LY_REV_SIZE - 1);
-                memcpy(trg->rev[trg->rev_size].date, value, LY_REV_SIZE - 1);
-                free((char *)value);
-
-                if (!ly_strequal(trg->rev[0].dsc, trg->rev[trg->rev_size].dsc, 1)) {
-                    value = trg->rev[0].dsc;
-                    trg->rev[0].dsc = trg->rev[trg->rev_size].dsc;
-                    trg->rev[trg->rev_size].dsc = value;
-                }
-
-                if (!ly_strequal(trg->rev[0].ref, trg->rev[trg->rev_size].ref, 1)) {
-                    value = trg->rev[0].ref;
-                    trg->rev[0].ref = trg->rev[trg->rev_size].ref;
-                    trg->rev[trg->rev_size].ref = value;
-                }
-            }
-
-            trg->rev_size++;
 
         } else if (!strcmp(child->name, "typedef")) {
             r = fill_yin_typedef(trg, NULL, child, &trg->tpdf[trg->tpdf_size], unres);
@@ -5721,9 +6933,38 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
                 goto error;
             }
 
+        } else if (!strcmp(child->name, "extension")) {
+            r = fill_yin_extension(trg, child, &trg->extensions[trg->extensions_size], unres);
+            trg->extensions_size++;
+            if (r) {
+                goto error;
+            }
+
         } else if (!strcmp(child->name, "deviation")) {
             r = fill_yin_deviation(trg, child, &trg->deviation[trg->deviation_size], unres);
             trg->deviation_size++;
+            if (r) {
+                goto error;
+            }
+        }
+    }
+
+    /* process extension instances */
+    if (c_extinst) {
+        /* some extensions may be already present from the substatements */
+        reallocated = realloc(trg->ext, (c_extinst + trg->ext_size) * sizeof *trg->ext);
+        if (!reallocated) {
+            LOGMEM;
+            goto error;
+        }
+        trg->ext = reallocated;
+
+        /* init memory */
+        memset(&trg->ext[trg->ext_size], 0, c_extinst * sizeof *trg->ext);
+
+        LY_TREE_FOR_SAFE(exts.child, next, child) {
+            r = lyp_yin_fill_ext(trg, LYEXT_PAR_MODULE, 0, 0, trg, child, &trg->ext, trg->ext_size, unres);
+            trg->ext_size++;
             if (r) {
                 goto error;
             }
@@ -5785,21 +7026,26 @@ read_sub_module(struct lys_module *module, struct lys_submodule *submodule, stru
         lyxml_free(ctx, child);
     }
 
-    return EXIT_SUCCESS;
+    return 0;
 
 error:
-    /* cleanup */
     while (root.child) {
-        lyxml_free(module->ctx, root.child);
+        lyxml_free(ctx, root.child);
     }
     while (grps.child) {
-        lyxml_free(module->ctx, grps.child);
+        lyxml_free(ctx, grps.child);
     }
     while (augs.child) {
-        lyxml_free(module->ctx, augs.child);
+        lyxml_free(ctx, augs.child);
+    }
+    while (revs.child) {
+        lyxml_free(ctx, revs.child);
+    }
+    while (exts.child) {
+        lyxml_free(module->ctx, exts.child);
     }
 
-    return EXIT_FAILURE;
+    return ret;
 }
 
 /* logs directly */
@@ -5840,9 +7086,12 @@ yin_read_submodule(struct lys_module *module, const char *data, struct unres_sch
     submodule->belongsto = module;
 
     LOGVRB("Reading submodule \"%s\".", submodule->name);
+    /* module cannot be changed in this case and 1 cannot be returned */
     if (read_sub_module(module, submodule, yin, unres)) {
         goto error;
     }
+
+    lyp_sort_revisions((struct lys_module *)submodule);
 
     /* cleanup */
     lyxml_free(module->ctx, yin);
@@ -5870,22 +7119,17 @@ error:
 
 /* logs directly */
 struct lys_module *
-yin_read_module(struct ly_ctx *ctx, const char *data, const char *revision, int implement)
+yin_read_module_(struct ly_ctx *ctx, struct lyxml_elem *yin, const char *revision, int implement)
 {
-    struct lyxml_elem *yin;
     struct lys_module *module = NULL;
     struct unres_schema *unres;
     const char *value;
+    int ret;
 
     unres = calloc(1, sizeof *unres);
     if (!unres) {
         LOGMEM;
         return NULL;
-    }
-
-    yin = lyxml_parse_mem(ctx, data, 0);
-    if (!yin) {
-       goto error;
     }
 
     /* check root element */
@@ -5915,12 +7159,31 @@ yin_read_module(struct ly_ctx *ctx, const char *data, const char *revision, int 
     module->implemented = (implement ? 1 : 0);
 
     LOGVRB("Reading module \"%s\".", module->name);
-    if (read_sub_module(module, NULL, yin, unres)) {
+    ret = read_sub_module(module, NULL, yin, unres);
+    if (ret == -1) {
         goto error;
     }
 
-    /* resolve rest of unres items */
-    if (unres->count && resolve_unres_schema(module, unres)) {
+    if (ret == 1) {
+        assert(!unres->count);
+    } else {
+        /* resolve rest of unres items */
+        if (unres->count && resolve_unres_schema(module, unres)) {
+            goto error;
+        }
+
+        /* check correctness of includes */
+        if (lyp_check_include_missing(module)) {
+            goto error;
+        }
+
+        /* remove our submodules from the parsed submodules list */
+        lyp_del_includedup(module);
+    }
+
+    lyp_sort_revisions(module);
+
+    if (lyp_rfn_apply_ext(module) || lyp_deviation_apply_ext(module)) {
         goto error;
     }
 
@@ -5933,32 +7196,35 @@ yin_read_module(struct ly_ctx *ctx, const char *data, const char *revision, int 
         }
     }
 
-    /* check correctness of includes */
-    if (lyp_check_include_missing(module)) {
-        goto error;
-    }
+    /* add into context if not already there */
+    if (!ret) {
+        if (module->deviation_size && !module->implemented) {
+            LOGVRB("Module \"%s\" includes deviations, changing its conformance to \"implement\".", module->name);
+            /* deviations always causes target to be made implemented,
+             * but augents and leafrefs not, so we have to apply them now */
+            if (lys_set_implemented(module)) {
+                goto error;
+            }
+        }
 
-    if (lyp_ctx_add_module(&module)) {
-        goto error;
-    }
-
-    if (module->deviation_size && !module->implemented) {
-        LOGVRB("Module \"%s\" includes deviations, changing its conformance to \"implement\".", module->name);
-        /* deviations always causes target to be made implemented,
-         * but augents and leafrefs not, so we have to apply them now */
-        if (lys_set_implemented(module)) {
+        if (lyp_ctx_add_module(module)) {
             goto error;
         }
+    } else {
+        /* free what was parsed */
+        lys_free(module, NULL, 0);
+
+        /* get the model from the context */
+        module = (struct lys_module *)ly_ctx_get_module(ctx, value, revision);
+        assert(module);
     }
 
-    lyxml_free(ctx, yin);
     unres_schema_free(NULL, &unres);
     LOGVRB("Module \"%s\" successfully parsed.", module->name);
     return module;
 
 error:
     /* cleanup */
-    lyxml_free(ctx, yin);
     unres_schema_free(module, &unres);
 
     if (!module) {
@@ -5970,7 +7236,865 @@ error:
 
     LOGERR(ly_errno, "Module \"%s\" parsing failed.", module->name);
 
+    lyp_del_includedup(module);
     lys_sub_module_remove_devs_augs(module);
     lys_free(module, NULL, 1);
     return NULL;
+}
+
+/* logs directly */
+struct lys_module *
+yin_read_module(struct ly_ctx *ctx, const char *data, const char *revision, int implement)
+{
+    struct lyxml_elem *yin;
+    struct lys_module *result;
+
+    yin = lyxml_parse_mem(ctx, data, 0);
+    if (!yin) {
+        LOGERR(ly_errno, "Module parsing failed.");
+        return NULL;
+    }
+
+    result = yin_read_module_(ctx, yin, revision, implement);
+
+    lyxml_free(ctx, yin);
+
+    return result;
+}
+
+static int
+yin_parse_extcomplex_bool(struct lys_module *mod, struct lyxml_elem *node,
+                          struct lys_ext_instance_complex *ext, LY_STMT stmt,
+                          const char *true_val, const char *false_val, struct unres_schema *unres)
+{
+    uint8_t *val;
+    const char *str;
+    struct lyext_substmt *info;
+
+    val = lys_ext_complex_get_substmt(stmt, ext, &info);
+    if (!val) {
+        LOGVAL(LYE_INCHILDSTMT, LY_VLOG_NONE, NULL, node->name, node->parent->name);
+        return EXIT_FAILURE;
+    }
+    if (*val) {
+        LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, node->parent->name);
+        return EXIT_FAILURE;
+    }
+
+    if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node, stmt, 0, unres)) {
+        return EXIT_FAILURE;
+    }
+
+    str = lyxml_get_attr(node, "value", NULL);
+    if (!str) {
+        LOGVAL(LYE_MISSARG, LY_VLOG_NONE, NULL, "value", node->name);
+    } else if (true_val && !strcmp(true_val, str)) {
+        /* true value */
+        *val = 1;
+    } else if (false_val && !strcmp(false_val, str)) {
+        /* false value */
+        *val = 2;
+    } else {
+        /* unknown value */
+        LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, str, node->name);
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
+}
+
+/*
+ * argelem - 1 if the value is stored in a standalone YIN element, 0 if stored as attribute
+ * argname - name of the element/attribute where the value is stored
+ */
+static int
+yin_parse_extcomplex_str(struct lys_module *mod, struct lyxml_elem *node,
+                         struct lys_ext_instance_complex *ext, LY_STMT stmt,
+                         int argelem, const char *argname, struct unres_schema *unres)
+{
+    int c;
+    const char **str, ***p = NULL, *value;
+    void *reallocated;
+    struct lyext_substmt *info;
+
+    str = lys_ext_complex_get_substmt(stmt, ext, &info);
+    if (!str) {
+        LOGVAL(LYE_INCHILDSTMT, LY_VLOG_NONE, NULL, node->name, node->parent->name);
+        return EXIT_FAILURE;
+    }
+    if (info->cardinality < LY_STMT_CARD_SOME && *str) {
+        LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, node->parent->name);
+        return EXIT_FAILURE;
+    }
+
+    c = 0;
+    if (info->cardinality >= LY_STMT_CARD_SOME) {
+        /* there can be multiple instances, str is actually const char *** */
+        p = (const char ***)str;
+        if (!p[0]) {
+            /* allocate initial array */
+            p[0] = malloc(2 * sizeof(const char *));
+            if (stmt == LY_STMT_BELONGSTO) {
+                /* allocate another array for the belongs-to's prefixes */
+                p[1] = malloc(2 * sizeof(const char *));
+            } else if (stmt == LY_STMT_ARGUMENT) {
+                /* allocate another array for the yin element */
+                p[1] = malloc(2 * sizeof(uint8_t));
+            }
+        } else {
+            /* get the index in the array to add new item */
+            for (c = 0; p[0][c]; c++);
+        }
+        str = p[0];
+    }
+    if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node, stmt, c, unres)) {
+        return EXIT_FAILURE;
+    }
+
+    if (argelem) {
+        str[c] = read_yin_subnode(mod->ctx, node, argname);
+        if (!str[c]) {
+            return EXIT_FAILURE;
+        }
+    } else {
+        str[c] = lyxml_get_attr(node, argname, NULL);
+        if (!str[c]) {
+            LOGVAL(LYE_MISSARG, LY_VLOG_NONE, NULL, argname, node->name);
+            return EXIT_FAILURE;
+        } else {
+            str[c] = lydict_insert(mod->ctx, str[c], 0);
+        }
+
+        if (stmt == LY_STMT_BELONGSTO) {
+            /* get the belongs-to's mandatory prefix substatement */
+            if (!node->child) {
+                LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_NONE, NULL, "prefix", node->name);
+                return EXIT_FAILURE;
+            } else if (strcmp(node->child->name, "prefix")) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, node->child->name);
+                return EXIT_FAILURE;
+            } else if (node->child->next) {
+                LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, node->child->next->name);
+                return EXIT_FAILURE;
+            }
+            /* and now finally get the value */
+            if (p) {
+                str = p[1];
+            } else {
+                str++;
+            }
+            str[c] = lyxml_get_attr(node->child, "value", ((void *)0));
+            if (!str[c]) {
+                LOGVAL(LYE_MISSARG, LY_VLOG_NONE, NULL, "value", node->child->name);
+                return EXIT_FAILURE;
+            }
+            str[c] = lydict_insert(mod->ctx, str[c], 0);
+
+            if (!str[c] || lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node->child, LYEXT_SUBSTMT_PREFIX, 0, unres)) {
+                return EXIT_FAILURE;
+            }
+        } else if (stmt == LY_STMT_ARGUMENT) {
+            str = (p) ? p[1] : str + 1;
+            if (!node->child) {
+                /* default value of yin element */
+                ((uint8_t *)str)[c] = 2;
+            } else {
+                /* get optional yin-element substatement */
+                if (strcmp(node->child->name, "yin-element")) {
+                    LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, node->child->name);
+                    return EXIT_FAILURE;
+                } else if (node->child->next) {
+                    LOGVAL(LYE_INSTMT, LY_VLOG_NONE, NULL, node->child->next->name);
+                    return EXIT_FAILURE;
+                } else {
+                    /* and now finally get the value */
+                    value = lyxml_get_attr(node->child, "value", NULL);
+                    if (!value) {
+                        LOGVAL(LYE_MISSARG, LY_VLOG_NONE, NULL, "value", node->child->name);
+                        return EXIT_FAILURE;
+                    }
+                    if (ly_strequal(value, "true", 0)) {
+                        ((uint8_t *)str)[c] = 1;
+                    } else if (ly_strequal(value, "false", 0)) {
+                        ((uint8_t *)str)[c] = 2;
+                    } else {
+                        LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, str, node->name);
+                        return EXIT_FAILURE;
+                    }
+
+                    if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node->child, LYEXT_SUBSTMT_YINELEM, c, unres)) {
+                        return EXIT_FAILURE;
+                    }
+                }
+            }
+        }
+    }
+    if (p) {
+        /* enlarge the array(s) */
+        reallocated = realloc(p[0], (c + 2) * sizeof(const char *));
+        if (!reallocated) {
+            LOGMEM;
+            lydict_remove(mod->ctx, p[0][c]);
+            p[0][c] = NULL;
+            return EXIT_FAILURE;
+        }
+        p[0] = reallocated;
+        p[0][c + 1] = NULL;
+
+        if (stmt == LY_STMT_BELONGSTO) {
+            /* enlarge the second belongs-to's array with prefixes */
+            reallocated = realloc(p[1], (c + 2) * sizeof(const char *));
+            if (!reallocated) {
+                LOGMEM;
+                lydict_remove(mod->ctx, p[1][c]);
+                p[1][c] = NULL;
+                return EXIT_FAILURE;
+            }
+            p[1] = reallocated;
+            p[1][c + 1] = NULL;
+        } else if (stmt == LY_STMT_ARGUMENT){
+            /* enlarge the second argument's array with yin element */
+            reallocated = realloc(p[1], (c + 2) * sizeof(uint8_t));
+            if (!reallocated) {
+                LOGMEM;
+                ((uint8_t *)p[1])[c] = 0;
+                return EXIT_FAILURE;
+            }
+            p[1] = reallocated;
+            ((uint8_t *)p[1])[c + 1] = 0;
+        }
+    }
+
+    return EXIT_SUCCESS;
+}
+
+static void *
+yin_getplace_for_extcomplex_flags(struct lyxml_elem *node, struct lys_ext_instance_complex *ext, LY_STMT stmt,
+                                  uint16_t mask)
+{
+    void *data;
+    struct lyext_substmt *info;
+
+    data = lys_ext_complex_get_substmt(stmt, ext, &info);
+    if (!data) {
+        LOGVAL(LYE_INCHILDSTMT, LY_VLOG_NONE, NULL, node->name, node->parent->name);
+        return NULL;
+    }
+    if (info->cardinality < LY_STMT_CARD_SOME && ((*(uint16_t *)data) & mask)) {
+        LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, node->parent->name);
+        return NULL;
+    }
+
+    return data;
+}
+
+static int
+yin_parse_extcomplex_flag(struct lys_module *mod, struct lyxml_elem *node,
+                          struct lys_ext_instance_complex *ext, LY_STMT stmt,
+                          const char *val1_str, const char *val2_str, uint16_t mask,
+                          uint16_t val1, uint16_t val2, struct unres_schema *unres)
+{
+    uint16_t *val;
+    const char *str;
+
+    val = yin_getplace_for_extcomplex_flags(node, ext, stmt, mask);
+    if (!val) {
+        return EXIT_FAILURE;
+    }
+
+    str = lyxml_get_attr(node, "value", NULL);
+    if (!str) {
+        LOGVAL(LYE_MISSARG, LY_VLOG_NONE, NULL, "value", node->name);
+    } else if (!strcmp(val1_str, str)) {
+        *val = *val | val1;
+    } else if (!strcmp(val2_str, str)) {
+        *val = *val | val2;
+    } else {
+        /* unknown value */
+        LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, str, node->name);
+        return EXIT_FAILURE;
+    }
+    if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node, stmt, 0, unres)) {
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
+static struct lys_node **
+yin_getplace_for_extcomplex_node(struct lyxml_elem *node, struct lys_ext_instance_complex *ext, LY_STMT stmt)
+{
+    struct lyext_substmt *info;
+    struct lys_node **snode, *siter;
+
+    snode = lys_ext_complex_get_substmt(stmt, ext, &info);
+    if (!snode) {
+        LOGVAL(LYE_INCHILDSTMT, LY_VLOG_NONE, NULL, node->name, node->parent->name);
+        return NULL;
+    }
+    if (info->cardinality < LY_STMT_CARD_SOME) {
+        LY_TREE_FOR(*snode, siter) {
+            if (stmt == lys_snode2stmt(siter->nodetype)) {
+                LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, node->parent->name);
+                return NULL;
+            }
+        }
+    }
+
+    return snode;
+}
+
+static void **
+yin_getplace_for_extcomplex_struct(struct lyxml_elem *node, struct lys_ext_instance_complex *ext, LY_STMT stmt)
+{
+    int c;
+    void **data, ***p = NULL;
+    void *reallocated;
+    struct lyext_substmt *info;
+
+    data = lys_ext_complex_get_substmt(stmt, ext, &info);
+    if (!data) {
+        LOGVAL(LYE_INCHILDSTMT, LY_VLOG_NONE, NULL, node->name, node->parent->name);
+        return NULL;
+    }
+    if (info->cardinality < LY_STMT_CARD_SOME && *data) {
+        LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, node->parent->name);
+        return NULL;
+    }
+
+    c = 0;
+    if (info->cardinality >= LY_STMT_CARD_SOME) {
+        /* there can be multiple instances, so instead of pointer to array,
+         * we have in data pointer to pointer to array */
+        p = (void ***)data;
+        data = *p;
+        if (!data) {
+            /* allocate initial array */
+            *p = data = malloc(2 * sizeof(void *));
+        } else {
+            for (c = 0; *data; data++, c++);
+        }
+    }
+
+    if (p) {
+        /* enlarge the array */
+        reallocated = realloc(*p, (c + 2) * sizeof(void *));
+        if (!reallocated) {
+            LOGMEM;
+            return NULL;
+        }
+        *p = reallocated;
+        data = *p;
+        data[c + 1] = NULL;
+    }
+
+    return &data[c];
+}
+
+int
+lyp_yin_parse_complex_ext(struct lys_module *mod, struct lys_ext_instance_complex *ext, struct lyxml_elem *yin,
+                          struct unres_schema *unres)
+{
+    struct lyxml_elem *next, *node, *child;
+    struct lys_type **type;
+    void **pp, *p, *reallocated;
+    const char *value, *name;
+    char *endptr, modifier;
+    struct lyext_substmt *info;
+    long int v;
+    long long int ll;
+    unsigned long u;
+    int i, j;
+
+#define YIN_EXTCOMPLEX_GETPLACE(STMT, TYPE)                                          \
+    p = lys_ext_complex_get_substmt(STMT, ext, &info);                               \
+    if (!p) {                                                                        \
+        LOGVAL(LYE_INCHILDSTMT, LY_VLOG_NONE, NULL, node->name, node->parent->name); \
+        goto error;                                                                  \
+    }                                                                                \
+    if (info->cardinality < LY_STMT_CARD_SOME && (*(TYPE*)p)) {                      \
+        LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, node->parent->name);     \
+        goto error;                                                                  \
+    }                                                                                \
+    pp = NULL; i = 0;                                                                \
+    if (info->cardinality >= LY_STMT_CARD_SOME) {                                    \
+        /* there can be multiple instances */                                        \
+        pp = p;                                                                      \
+        if (!(*pp)) {                                                                \
+            *pp = malloc(2 * sizeof(TYPE)); /* allocate initial array */             \
+        } else {                                                                     \
+            for (i = 0; (*(TYPE**)pp)[i]; i++);                                      \
+        }                                                                            \
+        p = &(*(TYPE**)pp)[i];                                                       \
+    }
+#define YIN_EXTCOMPLEX_ENLARGE(TYPE)                         \
+    if (pp) {                                                \
+        /* enlarge the array */                              \
+        reallocated = realloc(*pp, (i + 2) * sizeof(TYPE*)); \
+        if (!reallocated) {                                  \
+           LOGMEM;                                           \
+           goto error;                                       \
+        }                                                    \
+        *pp = reallocated;                                   \
+        (*(TYPE**)pp)[i + 1] = 0;                            \
+    }
+#define YIN_EXTCOMPLEX_PARSE_SNODE(STMT, FUNC, ARGS...)                              \
+    pp = (void**)yin_getplace_for_extcomplex_node(node, ext, STMT);                  \
+    if (!pp) { goto error; }                                                         \
+    if (!FUNC(mod, (struct lys_node*)ext, node, ##ARGS, unres)) { goto error; }
+#define YIN_EXTCOMPLEX_PARSE_RESTR(STMT)                                             \
+    YIN_EXTCOMPLEX_GETPLACE(STMT, struct lys_restr*);                                \
+    GETVAL(value, node, "value");                                                    \
+    *(struct lys_restr **)p = calloc(1, sizeof(struct lys_restr));                   \
+    (*(struct lys_restr **)p)->expr = lydict_insert(mod->ctx, value, 0);             \
+    if (read_restr_substmt(mod, *(struct lys_restr **)p, node, unres)) {             \
+        goto error;                                                                  \
+    }                                                                                \
+    YIN_EXTCOMPLEX_ENLARGE(struct lys_restr*);
+
+    LY_TREE_FOR_SAFE(yin->child, next, node) {
+        if (!node->ns) {
+            /* garbage */
+        } else if (node->ns == yin->ns && (ext->flags & LYS_YINELEM) && ly_strequal(node->name, ext->def->argument, 1)) {
+            /* we have the extension's argument */
+            if (ext->arg_value) {
+                LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, node->name, yin->name);
+                goto error;
+            }
+            ext->arg_value = node->content;
+            node->content = NULL;
+        } else if (strcmp(node->ns->value, LY_NSYIN)) {
+            /* extension */
+            if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node, LYEXT_SUBSTMT_SELF, 0, unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "description")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_DESCRIPTION, 1, "text", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "reference")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_REFERENCE, 1, "text", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "units")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_UNITS, 0, "name", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "type")) {
+            type = (struct lys_type **)yin_getplace_for_extcomplex_struct(node, ext, LY_STMT_TYPE);
+            if (!type) {
+                goto error;
+            }
+            /* allocate type structure */
+            (*type) = calloc(1, sizeof **type);
+
+            /* HACK for unres */
+            lyxml_unlink(mod->ctx, node);
+            (*type)->der = (struct lys_tpdf *)node;
+            (*type)->parent = (struct lys_tpdf *)ext;
+
+            if (unres_schema_add_node(mod, unres, *type, UNRES_TYPE_DER_EXT, NULL) == -1) {
+                (*type)->der = NULL;
+                goto error;
+            }
+            continue; /* skip lyxml_free() */
+        } else if (!strcmp(node->name, "typedef")) {
+            pp = yin_getplace_for_extcomplex_struct(node, ext, LY_STMT_TYPEDEF);
+            if (!pp) {
+                goto error;
+            }
+            /* allocate typedef structure */
+            (*pp) = calloc(1, sizeof(struct lys_tpdf));
+
+            if (fill_yin_typedef(mod, (struct lys_node *)ext, node, *((struct lys_tpdf **)pp), unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "if-feature")) {
+            pp = yin_getplace_for_extcomplex_struct(node, ext, LY_STMT_IFFEATURE);
+            if (!pp) {
+                goto error;
+            }
+            /* allocate iffeature structure */
+            (*pp) = calloc(1, sizeof(struct lys_iffeature));
+
+            if (fill_yin_iffeature((struct lys_node *)ext, 0, node, *((struct lys_iffeature **)pp), unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "status")) {
+            p = yin_getplace_for_extcomplex_flags(node, ext, LY_STMT_STATUS, LYS_STATUS_MASK);
+            if (!p) {
+                goto error;
+            }
+
+            GETVAL(value, node, "value");
+            if (!strcmp(value, "current")) {
+                *(uint16_t*)p |= LYS_STATUS_CURR;
+            } else if (!strcmp(value, "deprecated")) {
+                *(uint16_t*)p |= LYS_STATUS_DEPRC;
+            } else if (!strcmp(value, "obsolete")) {
+                *(uint16_t*)p |= LYS_STATUS_OBSLT;
+            } else {
+                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, node->name);
+                goto error;
+            }
+
+            if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node, LYEXT_SUBSTMT_STATUS, 0, unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "config")) {
+            if (yin_parse_extcomplex_flag(mod, node, ext, LY_STMT_MANDATORY, "true", "false", LYS_CONFIG_MASK,
+                                         LYS_CONFIG_W | LYS_CONFIG_SET, LYS_CONFIG_R | LYS_CONFIG_SET, unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "argument")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_ARGUMENT, 0, "name", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "default")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_DEFAULT, 0, "value", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "mandatory")) {
+            if (yin_parse_extcomplex_flag(mod, node, ext, LY_STMT_MANDATORY,
+                                         "true", "false", LYS_MAND_MASK, LYS_MAND_TRUE, LYS_MAND_FALSE, unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "error-app-tag")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_ERRTAG, 0, "value", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "error-message")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_ERRMSG, 1, "value", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "prefix")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_PREFIX, 0, "value", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "namespace")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_NAMESPACE, 0, "uri", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "presence")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_PRESENCE, 0, "value", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "revision-date")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_REVISIONDATE, 0, "date", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "key")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_KEY, 0, "value", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "base")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_BASE, 0, "name", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "ordered-by")) {
+            if (yin_parse_extcomplex_flag(mod, node, ext, LY_STMT_ORDEREDBY,
+                                          "user", "system", LYS_USERORDERED, LYS_USERORDERED, 0, unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "belongs-to")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_BELONGSTO, 0, "module", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "contact")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_CONTACT, 1, "text", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "organization")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_ORGANIZATION, 1, "text", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "path")) {
+            if (yin_parse_extcomplex_str(mod, node, ext, LY_STMT_PATH, 0, "value", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "require-instance")) {
+            if (yin_parse_extcomplex_bool(mod, node, ext, LY_STMT_REQINSTANCE, "true", "false", unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "modifier")) {
+            if (yin_parse_extcomplex_bool(mod, node, ext, LY_STMT_MODIFIER, "invert-match", NULL, unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "fraction-digits")) {
+            YIN_EXTCOMPLEX_GETPLACE(LY_STMT_DIGITS, uint8_t);
+
+            GETVAL(value, node, "value");
+            v = strtol(value, NULL, 10);
+
+            /* range check */
+            if (v < 1 || v > 18) {
+                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, node->name);
+                goto error;
+            }
+
+            if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node, LYEXT_SUBSTMT_STATUS, i, unres)) {
+                goto error;
+            }
+
+            /* store the value */
+            (*(uint8_t *)p) = (uint8_t)v;
+
+            YIN_EXTCOMPLEX_ENLARGE(uint8_t);
+        } else if (!strcmp(node->name, "max-elements")) {
+            YIN_EXTCOMPLEX_GETPLACE(LY_STMT_MAX, uint32_t*);
+
+            GETVAL(value, node, "value");
+            while (isspace(value[0])) {
+                value++;
+            }
+
+            if (!strcmp(value, "unbounded")) {
+                u = 0;
+            } else {
+                /* convert it to uint32_t */
+                errno = 0; endptr = NULL;
+                u = strtoul(value, &endptr, 10);
+                if (*endptr || value[0] == '-' || errno || u == 0 || u > UINT32_MAX) {
+                    LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, node->name);
+                    goto error;
+                }
+            }
+
+            if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node, LYEXT_SUBSTMT_MAX, i, unres)) {
+                goto error;
+            }
+
+            /* store the value */
+            *(uint32_t **)p = malloc(sizeof(uint32_t));
+            (**(uint32_t **)p) = (uint32_t)u;
+
+            YIN_EXTCOMPLEX_ENLARGE(uint32_t*);
+        } else if (!strcmp(node->name, "min-elements")) {
+            YIN_EXTCOMPLEX_GETPLACE(LY_STMT_MIN, uint32_t*);
+
+            GETVAL(value, node, "value");
+            while (isspace(value[0])) {
+                value++;
+            }
+
+            /* convert it to uint32_t */
+            errno = 0;
+            endptr = NULL;
+            u = strtoul(value, &endptr, 10);
+            if (*endptr || value[0] == '-' || errno || u > UINT32_MAX) {
+                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, node->name);
+                goto error;
+            }
+
+            if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node, LYEXT_SUBSTMT_MAX, i, unres)) {
+                goto error;
+            }
+
+            /* store the value */
+            *(uint32_t **)p = malloc(sizeof(uint32_t));
+            (**(uint32_t **)p) = (uint32_t)u;
+
+            YIN_EXTCOMPLEX_ENLARGE(uint32_t*);
+        } else if (!strcmp(node->name, "value")) {
+            YIN_EXTCOMPLEX_GETPLACE(LY_STMT_VALUE, int32_t*);
+
+            GETVAL(value, node, "value");
+            while (isspace(value[0])) {
+                value++;
+            }
+
+            /* convert it to int32_t */
+            ll = strtoll(value, NULL, 10);
+
+            /* range check */
+            if (ll < INT32_MIN || ll > INT32_MAX) {
+                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, node->name);
+                goto error;
+            }
+
+            if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node, LYEXT_SUBSTMT_VALUE, i, unres)) {
+                goto error;
+            }
+
+            /* store the value */
+            *(int32_t **)p = malloc(sizeof(int32_t));
+            (**(int32_t **)p) = (int32_t)ll;
+
+            YIN_EXTCOMPLEX_ENLARGE(int32_t*);
+        } else if (!strcmp(node->name, "position")) {
+            YIN_EXTCOMPLEX_GETPLACE(LY_STMT_POSITION, uint32_t*);
+
+            GETVAL(value, node, "value");
+            ll = strtoll(value, NULL, 10);
+
+            /* range check */
+            if (ll < 0 || ll > UINT32_MAX) {
+                LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, value, node->name);
+                goto error;
+            }
+
+            if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node, LYEXT_SUBSTMT_POSITION, i, unres)) {
+                goto error;
+            }
+
+            /* store the value */
+            *(uint32_t **)p = malloc(sizeof(uint32_t));
+            (**(uint32_t **)p) = (uint32_t)ll;
+
+            YIN_EXTCOMPLEX_ENLARGE(uint32_t*);
+        } else if (!strcmp(node->name, "module")) {
+            pp = yin_getplace_for_extcomplex_struct(node, ext, LY_STMT_MODULE);
+            if (!pp) {
+                goto error;
+            }
+
+            *(struct lys_module **)pp = yin_read_module_(mod->ctx, node, NULL, mod->implemented);
+            if (!(*pp)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "when")) {
+            YIN_EXTCOMPLEX_GETPLACE(LY_STMT_WHEN, struct lys_when*);
+
+            *(struct lys_when**)p = read_yin_when(mod, node, unres);
+            if (!*(struct lys_when**)p) {
+                goto error;
+            }
+
+            YIN_EXTCOMPLEX_ENLARGE(struct lys_when*);
+        } else if (!strcmp(node->name, "revision")) {
+            YIN_EXTCOMPLEX_GETPLACE(LY_STMT_REVISION, struct lys_revision*);
+
+            *(struct lys_revision**)p = calloc(1, sizeof(struct lys_revision));
+            if (fill_yin_revision(mod, node, *(struct lys_revision**)p, unres)) {
+                goto error;
+            }
+
+            /* check uniqueness of the revision dates - not required by RFC */
+            if (pp) {
+                for (j = 0; j < i; j++) {
+                    if (!strcmp((*(struct lys_revision***)pp)[j]->date, (*(struct lys_revision**)p)->date)) {
+                        LOGWRN("Module's revisions are not unique (%s).", (*(struct lys_revision**)p)->date);
+                    }
+                }
+            }
+
+            YIN_EXTCOMPLEX_ENLARGE(struct lys_revision*);
+        } else if (!strcmp(node->name, "unique")) {
+            YIN_EXTCOMPLEX_GETPLACE(LY_STMT_UNIQUE, struct lys_unique*);
+
+            *(struct lys_unique**)p = calloc(1, sizeof(struct lys_unique));
+            if (fill_yin_unique(mod, (struct lys_node*)ext, node, *(struct lys_unique**)p, unres)) {
+                goto error;
+            }
+
+            if (lyp_yin_parse_subnode_ext(mod, ext, LYEXT_PAR_EXTINST, node, LYEXT_SUBSTMT_UNIQUE, i, unres)) {
+                goto error;
+            }
+            YIN_EXTCOMPLEX_ENLARGE(struct lys_unique*);
+        } else if (!strcmp(node->name, "action")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_ACTION, read_yin_rpc_action);
+        } else if (!strcmp(node->name, "anydata")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_ANYDATA, read_yin_anydata, LYS_ANYDATA, 0);
+        } else if (!strcmp(node->name, "anyxml")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_ANYXML, read_yin_anydata, LYS_ANYXML, 0);
+        } else if (!strcmp(node->name, "case")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_CASE, read_yin_case, 0);
+        } else if (!strcmp(node->name, "choice")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_CHOICE, read_yin_choice, 0);
+        } else if (!strcmp(node->name, "container")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_CONTAINER, read_yin_container, 0);
+        } else if (!strcmp(node->name, "grouping")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_GROUPING, read_yin_grouping, 0);
+        } else if (!strcmp(node->name, "output")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_OUTPUT, read_yin_input_output);
+        } else if (!strcmp(node->name, "input")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_INPUT, read_yin_input_output);
+        } else if (!strcmp(node->name, "leaf")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_LEAF, read_yin_leaf, 0);
+        } else if (!strcmp(node->name, "leaf-list")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_LEAFLIST, read_yin_leaflist, 0);
+        } else if (!strcmp(node->name, "list")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_LIST, read_yin_list, 0);
+        } else if (!strcmp(node->name, "notification")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_NOTIFICATION, read_yin_notif);
+        } else if (!strcmp(node->name, "uses")) {
+            YIN_EXTCOMPLEX_PARSE_SNODE(LY_STMT_USES, read_yin_uses);
+        } else if (!strcmp(node->name, "length")) {
+            YIN_EXTCOMPLEX_PARSE_RESTR(LY_STMT_LENGTH);
+        } else if (!strcmp(node->name, "must")) {
+            pp = yin_getplace_for_extcomplex_struct(node, ext, LY_STMT_MUST);
+            if (!pp) {
+                goto error;
+            }
+            /* allocate structure for must */
+            (*pp) = calloc(1, sizeof(struct lys_restr));
+
+            if (fill_yin_must(mod, node, *((struct lys_restr **)pp), unres)) {
+                goto error;
+            }
+        } else if (!strcmp(node->name, "pattern")) {
+            YIN_EXTCOMPLEX_GETPLACE(LY_STMT_PATTERN, struct lys_restr*);
+            GETVAL(value, node, "value");
+            if (lyp_check_pattern(value, NULL)) {
+                goto error;
+            }
+
+            *(struct lys_restr **)p = calloc(1, sizeof(struct lys_restr));
+            (*(struct lys_restr **)p)->expr = lydict_insert(mod->ctx, value, 0);
+
+            modifier = 0x06; /* ACK */
+            if (mod->version >= 2) {
+                name = NULL;
+                LY_TREE_FOR(node->child, child) {
+                    if (child->ns && !strcmp(child->ns->value, LY_NSYIN) && !strcmp(child->name, "modifier")) {
+                        if (name) {
+                            LOGVAL(LYE_TOOMANY, LY_VLOG_NONE, NULL, "modifier", node->name);
+                            goto error;
+                        }
+
+                        GETVAL(name, child, "value");
+                        if (!strcmp(name, "invert-match")) {
+                            modifier = 0x15; /* NACK */
+                        } else {
+                            LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, name, "modifier");
+                            goto error;
+                        }
+                        /* get extensions of the modifier */
+                        if (lyp_yin_parse_subnode_ext(mod, *(struct lys_restr **)p, LYEXT_PAR_RESTR, child,
+                                                      LYEXT_SUBSTMT_MODIFIER, 0, unres)) {
+                            goto error;
+                        }
+                    }
+                }
+            }
+
+            /* store the value: modifier byte + value + terminating NULL byte */
+            (*(struct lys_restr **)p)->expr = malloc((strlen(value) + 2) * sizeof(char));
+            ((char *)(*(struct lys_restr **)p)->expr)[0] = modifier;
+            strcpy(&((char *)(*(struct lys_restr **)p)->expr)[1], value);
+            lydict_insert_zc(mod->ctx, (char *)(*(struct lys_restr **)p)->expr);
+
+            /* get possible sub-statements */
+            if (read_restr_substmt(mod, *(struct lys_restr **)p, node, unres)) {
+                goto error;
+            }
+
+            YIN_EXTCOMPLEX_ENLARGE(struct lys_restr*);
+        } else if (!strcmp(node->name, "range")) {
+            YIN_EXTCOMPLEX_PARSE_RESTR(LY_STMT_RANGE);
+        } else {
+            LOGERR(LY_SUCCESS, "Extension's substatement \"%s\" not supported.", node->name);
+            //LOGERR(LY_EINT, "Extension's substatement \"%s\" not supported.", node->name);
+            //return EXIT_FAILURE;
+        }
+        lyxml_free(mod->ctx, node);
+    }
+
+    if (ext->substmt && lyp_mand_check_ext(ext, yin->name)) {
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
+
+error:
+    return EXIT_FAILURE;
 }

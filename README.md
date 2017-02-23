@@ -89,6 +89,17 @@ The `Debug` mode is currently used as the default one. to switch to the
 ```
 $ cmake -D CMAKE_BUILD_TYPE:String="Release" ..
 ```
+
+#### Changing Plugins Dir
+
+For the YANG extensions, libyang loads the extension plugins. By default, the
+directory to store the plugins is LIBDIR/libyang. To change it, use the following
+cmake option with the value specifying the desired directory:
+
+```
+$ cmake -DPLUGINS_DIR:PATH=`pwd`"/src/extensions/" ..
+```
+
 ### CMake Notes
 
 Note that, with CMake, if you want to change the compiler or its options after
@@ -126,6 +137,22 @@ well as its man page are installed together with the library itself.
 
 There is also [README](./tools/lint/examples/README.md) describing some examples of
 using `yanglint`.
+
+libyang supports YANG extensions via a plugin mechanism. Some of the plugins (for
+NACM or Metadata) are available out of the box and installed together with libyang.
+However, when libyang is not installed and `yanglint(1)` is used from the build
+directory, the plugins are not available. There are two options:
+
+1. Install libyang.
+```
+# make install
+```
+
+2. Set environment variable `LIBYANG_EXTENSIONS_PLUGINS_DIR` to contain path to the
+   built extensions plugin (`./src/extensions` from the build directory).
+```
+$ LIBYANG_EXTENSIONS_PLUGINS_DIR="`pwd`/src/extensions" ./yanglint
+```
 
 ## Tests
 

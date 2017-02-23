@@ -291,6 +291,8 @@ strnodetype(LYS_NODE type)
         return "action";
     case LYS_ANYDATA:
         return "anydata";
+    case LYS_EXT:
+        return "extension instance";
     }
 
     return NULL;
@@ -300,6 +302,10 @@ const char *
 transform_module_name2import_prefix(const struct lys_module *module, const char *module_name)
 {
     uint16_t i;
+
+    if (!module_name) {
+        return NULL;
+    }
 
     if (!strcmp(lys_main_module(module)->name, module_name)) {
         /* the same for module and submodule */

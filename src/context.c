@@ -27,6 +27,13 @@
 #include "dict_private.h"
 #include "parser.h"
 #include "tree_internal.h"
+#include "resolve.h"
+
+/*
+ * counter for references to the extensions plugins (for the number of contexts)
+ * located in extensions.c
+ */
+extern unsigned int ext_plugins_ref;
 
 #define YANG_FAKEMODULE_PATH "../models/yang@2016-02-11.h"
 #define IETF_INET_TYPES_PATH "../models/ietf-inet-types@2013-07-15.h"
@@ -70,6 +77,9 @@ ly_ctx_new(const char *search_dir)
     /* dictionary */
     lydict_init(&ctx->dict);
 
+    /* plugins */
+    lyext_load_plugins();
+
     /* models list */
     ctx->models.list = calloc(16, sizeof *ctx->models.list);
     if (!ctx->models.list) {
@@ -77,6 +87,7 @@ ly_ctx_new(const char *search_dir)
         free(ctx);
         return NULL;
     }
+    ext_plugins_ref++;
     ctx->models.used = 0;
     ctx->models.size = 16;
     if (search_dir) {
@@ -154,21 +165,26 @@ ly_ctx_get_searchdir(const struct ly_ctx *ctx)
 API void
 ly_ctx_destroy(struct ly_ctx *ctx, void (*private_destructor)(const struct lys_node *node, void *priv))
 {
-    int i;
-
     if (!ctx) {
         return;
     }
 
     /* models list */
-    for (i = 0; i < ctx->models.used; ++i) {
-        lys_free(ctx->models.list[i], private_destructor, 0);
+    for (; ctx->models.used > 0; ctx->models.used--) {
+        /* remove the applied deviations and augments */
+        lys_sub_module_remove_devs_augs(ctx->models.list[ctx->models.used - 1]);
+        /* remove the module */
+        lys_free(ctx->models.list[ctx->models.used - 1], private_destructor, 0);
     }
     free(ctx->models.search_path);
     free(ctx->models.list);
 
     /* dictionary */
     lydict_clean(&ctx->dict);
+
+    /* plugins - will be removed only if this is the last context */
+    ext_plugins_ref--;
+    lyext_clean_plugins();
 
     /* clean the error list */
     ly_err_clean(0);
@@ -466,7 +482,7 @@ ly_ctx_load_sub_module(struct ly_ctx *ctx, struct lys_module *module, const char
         }
 
         if (module) {
-            mod = (struct lys_module *)lys_submodule_parse(module, module_data, format, unres);
+            mod = (struct lys_module *)lys_sub_parse_mem(module, module_data, format, unres);
         } else {
             mod = (struct lys_module *)lys_parse_mem(ctx, module_data, format);
         }
@@ -495,8 +511,8 @@ ly_ctx_load_module(struct ly_ctx *ctx, const char *name, const char *revision)
 /*
  * mods - set of removed modules, if NULL all modules are supposed to be removed so any backlink is invalid
  */
-static int
-ctx_modules_maintain_backlinks(struct ly_ctx *ctx, struct ly_set *mods)
+static void
+ctx_modules_undo_backlinks(struct ly_ctx *ctx, struct ly_set *mods)
 {
     int o;
     uint8_t j;
@@ -527,7 +543,8 @@ ctx_modules_maintain_backlinks(struct ly_ctx *ctx, struct ly_set *mods)
                 mod->features[j].depfeatures = NULL;
             }
         }
-        /* identities */
+
+        /* 2) identities */
         for (u = 0; u < mod->ident_size; u++) {
             if (!mod->ident[u].der) {
                 continue;
@@ -546,7 +563,7 @@ ctx_modules_maintain_backlinks(struct ly_ctx *ctx, struct ly_set *mods)
             }
         }
 
-        /* leafrefs */
+        /* 3) leafrefs */
         for (elem = next = mod->data; elem; elem = next) {
             if (elem->nodetype & (LYS_LEAF | LYS_LEAFLIST)) {
                 leaf = (struct lys_node_leaf *)elem; /* shortcut */
@@ -594,8 +611,55 @@ ctx_modules_maintain_backlinks(struct ly_ctx *ctx, struct ly_set *mods)
             }
         }
     }
+}
 
-    return EXIT_SUCCESS;
+static int
+ctx_modules_redo_backlinks(struct ly_set *mods)
+{
+    unsigned int i, j, k, s;
+    struct lys_module *mod;
+    struct lys_node *next, *elem;
+    struct lys_type *type;
+    struct lys_feature *feat;
+
+    for (i = 0; i < mods->number; ++i) {
+        mod = (struct lys_module *)mods->set.g[i]; /* shortcut */
+
+        /* identities */
+        for (j = 0; j < mod->ident_size; j++) {
+            for (k = 0; k < mod->ident[j].base_size; k++) {
+                resolve_identity_backlink_update(&mod->ident[j], mod->ident[j].base[k]);
+            }
+        }
+
+        /* features */
+        for (j = 0; j < mod->features_size; j++) {
+            for (k = 0; k < mod->features[j].iffeature_size; k++) {
+                resolve_iffeature_getsizes(&mod->features[j].iffeature[k], NULL, &s);
+                while (s--) {
+                    feat = mod->features[j].iffeature[k].features[s]; /* shortcut */
+                    if (!feat->depfeatures) {
+                        feat->depfeatures = ly_set_new();
+                    }
+                    ly_set_add(feat->depfeatures, &mod->features[j], LY_SET_OPT_USEASLIST);
+                }
+            }
+        }
+
+        /* leafrefs */
+        LY_TREE_DFS_BEGIN(mod->data, next, elem) {
+            if (elem->nodetype & (LYS_LEAF | LYS_LEAFLIST)) {
+                type = &((struct lys_node_leaf *)elem)->type; /* shortcut */
+                if (type->base == LY_TYPE_LEAFREF) {
+                    lys_leaf_add_leafref_target(type->info.lref.target, elem);
+                }
+            }
+
+            LY_TREE_DFS_END(mod->data, next, elem);
+        }
+    }
+
+    return 0;
 }
 
 API int
@@ -695,7 +759,7 @@ imported:
     }
 
     /* maintain backlinks (start with internal ietf-yang-library which have leafs as possible targets of leafrefs */
-    ctx_modules_maintain_backlinks(ctx, mods);
+    ctx_modules_undo_backlinks(ctx, mods);
 
     /* remove the applied deviations and augments */
     for (u = 0; u < mods->number; u++) {
@@ -816,7 +880,7 @@ checkdependency:
     }
 
     /* maintain backlinks (start with internal ietf-yang-library which have leafs as possible targets of leafrefs */
-    ctx_modules_maintain_backlinks(ctx, mods);
+    ctx_modules_redo_backlinks(mods);
 
     /* re-apply the deviations and augments */
     for (v = 0; v < mods->number; v++) {
@@ -946,7 +1010,7 @@ imported:
     ctx->models.module_set_id++;
 
     /* maintain backlinks (start with internal ietf-yang-library which have leafs as possible targets of leafrefs */
-    ctx_modules_maintain_backlinks(ctx, mods);
+    ctx_modules_undo_backlinks(ctx, mods);
 
     /* free the modules */
     for (u = 0; u < mods->number; u++) {
@@ -963,22 +1027,23 @@ imported:
 API void
 ly_ctx_clean(struct ly_ctx *ctx, void (*private_destructor)(const struct lys_node *node, void *priv))
 {
-    int i;
-
     if (!ctx) {
         return;
     }
 
     /* models list */
-    for (i = INTERNAL_MODULES_COUNT; i < ctx->models.used; ++i) {
-        lys_free(ctx->models.list[i], private_destructor, 0);
-        ctx->models.list[i] = NULL;
+    for (; ctx->models.used > INTERNAL_MODULES_COUNT; ctx->models.used--) {
+        /* remove the applied deviations and augments */
+        lys_sub_module_remove_devs_augs(ctx->models.list[ctx->models.used - 1]);
+        /* remove the module */
+        lys_free(ctx->models.list[ctx->models.used - 1], private_destructor, 0);
+        /* clean it for safer future use */
+        ctx->models.list[ctx->models.used - 1] = NULL;
     }
-    ctx->models.used = INTERNAL_MODULES_COUNT;
     ctx->models.module_set_id++;
 
-    /* maintain backlinks (actually done only with ietf-yang-library since its leafs cna be target of leafref) */
-    ctx_modules_maintain_backlinks(ctx, NULL);
+    /* maintain backlinks (actually done only with ietf-yang-library since its leafs can be target of leafref) */
+    ctx_modules_undo_backlinks(ctx, NULL);
 }
 
 API const struct lys_module *
