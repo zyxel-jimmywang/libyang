@@ -328,7 +328,7 @@ _transform_json2xml(const struct lys_module *module, const char *expr, int schem
     const char *cur_expr, *end, *prefix, *ptr;
     char *out, *name;
     size_t out_size, out_used, name_len;
-    const struct lys_module *mod;
+    const struct lys_module *mod = NULL;
     uint32_t i, j;
     struct lyxp_expr *exp;
 
@@ -648,7 +648,9 @@ transform_xml2json(struct ly_ctx *ctx, const char *expr, struct lyxml_elem *xml,
                 out_size += strlen(mod->name) - pref_len;
                 out = ly_realloc(out, out_size);
                 if (!out) {
-                    LOGMEM;
+                    if (log) {
+                        LOGMEM;
+                    }
                     goto error;
                 }
 

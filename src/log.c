@@ -27,12 +27,25 @@ extern LY_ERR ly_errno_int;
 volatile int8_t ly_log_level = LY_LLERR;
 static void (*ly_log_clb)(LY_LOG_LEVEL level, const char *msg, const char *path);
 static volatile int path_flag = 1;
+#ifndef NDEBUG
+volatile int ly_log_dbg_groups = 0;
+#endif
 
 API void
 ly_verb(LY_LOG_LEVEL level)
 {
     ly_log_level = level;
 }
+
+#ifndef NDEBUG
+
+API void
+ly_verb_dbg(int dbg_groups)
+{
+    ly_log_dbg_groups = dbg_groups;
+}
+
+#endif
 
 API void
 ly_set_log_clb(void (*clb)(LY_LOG_LEVEL level, const char *msg, const char *path), int path)
@@ -140,20 +153,70 @@ ly_log(LY_LOG_LEVEL level, const char *format, ...)
     va_end(ap);
 }
 
+#ifndef NDEBUG
+
 void
-lyext_log(LY_LOG_LEVEL level, const char *filename, const char *function, const char *format, ...)
+ly_log_dbg(LY_LOG_DBG_GROUP group, const char *format, ...)
+{
+    char *dbg_format;
+    const char *str_group;
+    va_list ap;
+
+    if (!(ly_log_dbg_groups & group)) {
+        return;
+    }
+
+    switch (group) {
+    case LY_LDGDICT:
+        str_group = "DICT";
+        break;
+    case LY_LDGYANG:
+        str_group = "YANG";
+        break;
+    case LY_LDGYIN:
+        str_group = "YIN";
+        break;
+    case LY_LDGXPATH:
+        str_group = "XPATH";
+        break;
+    case LY_LDGDIFF:
+        str_group = "DIFF";
+        break;
+    default:
+        LOGINT;
+        return;
+    }
+
+    if (asprintf(&dbg_format, "%s: %s", str_group, format) == -1) {
+        LOGMEM;
+        return;
+    }
+
+    va_start(ap, format);
+    log_vprintf(LY_LLDBG, (*ly_vlog_hide_location()), dbg_format, NULL, ap);
+    va_end(ap);
+}
+
+#endif
+
+void
+lyext_log(LY_LOG_LEVEL level, const char *plugin, const char *function, const char *format, ...)
 {
     va_list ap;
-    char *plugin_msg, *plugin_name, *p;
+    char *plugin_msg;
 
+    if (level == LY_LLERR) {
+        /* set errno */
+        ly_errno = LY_EEXT;
+    }
     if (ly_log_level < level) {
         return;
     }
 
-    plugin_name = strdup(filename);
-    p = strrchr(plugin_name, '.');
-    *p = '\0';
-    asprintf(&plugin_msg, "%s (extension plugin %s, %s())", format, plugin_name, function);
+    if (asprintf(&plugin_msg, "%s (reported by extension plugin %s, %s())", format, plugin, function) == -1) {
+        LOGMEM;
+        return;
+    }
 
     va_start(ap, format);
     log_vprintf(level, (*ly_vlog_hide_location()), plugin_msg, NULL, ap);
