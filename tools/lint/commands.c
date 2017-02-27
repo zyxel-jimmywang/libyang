@@ -123,11 +123,15 @@ cmd_verb_help(void)
     printf("verb (error/0 | warning/1 | verbose/2 | debug/3)\n");
 }
 
+#ifndef NDEBUG
+
 void
 cmd_debug_help(void)
 {
     printf("debug (dict | yang | yin | xpath | diff)+\n");
 }
+
+#endif
 
 LYS_INFORMAT
 get_schema_format(const char *path)
@@ -229,13 +233,19 @@ cmd_print(const char *arg)
         {"tree-print-groupings", no_argument, 0, 'g'},
         {NULL, 0, 0, 0}
     };
+    void *rlcd;
 
     argc = 1;
     argv = malloc(2*sizeof *argv);
     *argv = strdup(arg);
     ptr = strtok(*argv, " ");
     while ((ptr = strtok(NULL, " "))) {
-        argv = realloc(argv, (argc+2)*sizeof *argv);
+        rlcd = realloc(argv, (argc+2)*sizeof *argv);
+        if (!rlcd) {
+            fprintf(stderr, "Memory allocation failed (%s:%d, %s)", __FILE__, __LINE__, strerror(errno));
+            goto cleanup;
+        }
+        argv = rlcd;
         argv[argc++] = ptr;
     }
     argv[argc] = NULL;
@@ -548,13 +558,19 @@ cmd_data(const char *arg)
         {"validation-tree", required_argument, 0, 'x'},
         {NULL, 0, 0, 0}
     };
+    void *rlcd;
 
     argc = 1;
     argv = malloc(2*sizeof *argv);
     *argv = strdup(arg);
     ptr = strtok(*argv, " ");
     while ((ptr = strtok(NULL, " "))) {
-        argv = realloc(argv, (argc+2)*sizeof *argv);
+        rlcd = realloc(argv, (argc + 2) * sizeof *argv);
+        if (!rlcd) {
+            fprintf(stderr, "Memory allocation failed (%s:%d, %s)", __FILE__, __LINE__, strerror(errno));
+            goto cleanup;
+        }
+        argv = rlcd;
         argv[argc++] = ptr;
     }
     argv[argc] = NULL;
@@ -697,6 +713,7 @@ cmd_xpath(const char *arg)
         {"expr", required_argument, 0, 'e'},
         {NULL, 0, 0, 0}
     };
+    void *rlcd;
 
     long_str = 0;
     argc = 1;
@@ -711,7 +728,12 @@ cmd_xpath(const char *arg)
                 ptr[strlen(ptr) - 1] = '\0';
             }
         } else {
-            argv = realloc(argv, (argc + 2) * sizeof *argv);
+            rlcd = realloc(argv, (argc + 2) * sizeof *argv);
+            if (!rlcd) {
+                fprintf(stderr, "Memory allocation failed (%s:%d, %s)", __FILE__, __LINE__, strerror(errno));
+                goto cleanup;
+            }
+            argv = rlcd;
             argv[argc] = ptr;
             if (ptr[0] == '"') {
                 long_str = '"';
@@ -875,13 +897,19 @@ cmd_list(const char *arg)
         {"format", required_argument, 0, 'f'},
         {NULL, 0, 0, 0}
     };
+    void *rlcd;
 
     argc = 1;
     argv = malloc(2*sizeof *argv);
     *argv = strdup(arg);
     ptr = strtok(*argv, " ");
     while ((ptr = strtok(NULL, " "))) {
-        argv = realloc(argv, (argc+2)*sizeof *argv);
+        rlcd = realloc(argv, (argc+2)*sizeof *argv);
+        if (!rlcd) {
+            fprintf(stderr, "Memory allocation failed (%s:%d, %s)", __FILE__, __LINE__, strerror(errno));
+            goto error;
+        }
+        argv = rlcd;
         argv[argc++] = ptr;
     }
     argv[argc] = NULL;
@@ -1010,13 +1038,19 @@ cmd_feature(const char *arg)
         {"disable", required_argument, 0, 'd'},
         {NULL, 0, 0, 0}
     };
+    void *rlcd;
 
     argc = 1;
     argv = malloc(2*sizeof *argv);
     *argv = strdup(arg);
     ptr = strtok(*argv, " ");
     while ((ptr = strtok(NULL, " "))) {
-        argv = realloc(argv, (argc+2)*sizeof *argv);
+        rlcd = realloc(argv, (argc + 2) * sizeof *argv);
+        if (!rlcd) {
+            fprintf(stderr, "Memory allocation failed (%s:%d, %s)", __FILE__, __LINE__, strerror(errno));
+            goto cleanup;
+        }
+        argv = rlcd;
         argv[argc++] = ptr;
     }
     argv[argc] = NULL;
@@ -1179,16 +1213,24 @@ cmd_verb(const char *arg)
     verb = arg + 5;
     if (!strcmp(verb, "error") || !strcmp(verb, "0")) {
         ly_verb(LY_LLERR);
+#ifndef NDEBUG
         ly_verb_dbg(0);
+#endif
     } else if (!strcmp(verb, "warning") || !strcmp(verb, "1")) {
         ly_verb(LY_LLWRN);
+#ifndef NDEBUG
         ly_verb_dbg(0);
+#endif
     } else if (!strcmp(verb, "verbose")  || !strcmp(verb, "2")) {
         ly_verb(LY_LLVRB);
+#ifndef NDEBUG
         ly_verb_dbg(0);
+#endif
     } else if (!strcmp(verb, "debug")  || !strcmp(verb, "3")) {
         ly_verb(LY_LLDBG);
+#ifndef NDEBUG
         ly_verb_dbg(LY_LDGDICT | LY_LDGYANG | LY_LDGYIN | LY_LDGXPATH | LY_LDGDIFF);
+#endif
     } else {
         fprintf(stderr, "Unknown verbosity \"%s\"\n", verb);
         return 1;
@@ -1196,6 +1238,8 @@ cmd_verb(const char *arg)
 
     return 0;
 }
+
+#ifndef NDEBUG
 
 int
 cmd_debug(const char *arg)
@@ -1235,6 +1279,8 @@ cmd_debug(const char *arg)
 
     return 0;
 }
+
+#endif
 
 int
 cmd_quit(const char *UNUSED(arg))
@@ -1300,7 +1346,9 @@ COMMAND commands[] = {
         {"searchpath", cmd_searchpath, cmd_searchpath_help, "Set the search path for models"},
         {"clear", cmd_clear, NULL, "Clear the context - remove all the loaded models"},
         {"verb", cmd_verb, cmd_verb_help, "Change verbosity"},
+#ifndef NDEBUG
         {"debug", cmd_debug, cmd_debug_help, "Display specific debug message groups"},
+#endif
         {"quit", cmd_quit, NULL, "Quit the program"},
         /* synonyms for previous commands */
         {"?", cmd_help, NULL, "Display commands description"},
