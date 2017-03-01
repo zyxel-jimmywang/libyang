@@ -121,6 +121,15 @@ xml_parse_data(struct ly_ctx *ctx, struct lyxml_elem *xml, struct lyd_node *pare
     assert(result);
     *result = NULL;
 
+    if (xml->flags & LYXML_ELEM_MIXED) {
+        if (options & LYD_OPT_STRICT) {
+            LOGVAL(LYE_XML_INVAL, LY_VLOG_XML, xml, "XML element with mixed content");
+            return -1;
+        } else {
+            return 0;
+        }
+    }
+
     if (!xml->ns || !xml->ns->value) {
         if (options & LYD_OPT_STRICT) {
             LOGVAL(LYE_XML_MISS, LY_VLOG_XML, xml, "element's", "namespace");
@@ -525,11 +534,7 @@ attr_error:
     if (havechildren && xml->child) {
         diter = dlast = NULL;
         LY_TREE_FOR_SAFE(xml->child, next, child) {
-            if (schema->nodetype & (LYS_RPC | LYS_NOTIF)) {
-                r = xml_parse_data(ctx, child, *result, (*result)->child, dlast, 0, unres, &diter, act_notif);
-            } else {
-                r = xml_parse_data(ctx, child, *result, (*result)->child, dlast, options, unres, &diter, act_notif);
-            }
+            r = xml_parse_data(ctx, child, *result, (*result)->child, dlast, options, unres, &diter, act_notif);
             if (r) {
                 goto error;
             } else if (options & LYD_OPT_DESTRUCT) {

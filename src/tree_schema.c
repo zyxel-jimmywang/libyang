@@ -411,7 +411,7 @@ lys_find_grouping_up(const char *name, struct lys_node *start)
     for (par_iter = start; par_iter; par_iter = par_iter->parent) {
         /* top-level augment, look into module (uses augment is handled correctly below) */
         if (par_iter->parent && !par_iter->parent->parent && (par_iter->parent->nodetype == LYS_AUGMENT)) {
-            par_iter = par_iter->parent->module->data;
+            par_iter = lys_main_module(par_iter->parent->module)->data;
             if (!par_iter) {
                 break;
             }
@@ -504,6 +504,7 @@ lys_check_id(struct lys_node *node, struct lys_node *parent, struct lys_module *
     } else {
         module = parent->module;
     }
+    module = lys_main_module(module);
 
     switch (node->nodetype) {
     case LYS_GROUPING:
@@ -893,6 +894,7 @@ lys_parse_mem_(struct ly_ctx *ctx, const char *data, LYS_INFORMAT format, int in
     void *reallocated;
     struct lys_ext_instance_complex *op;
     struct lys_type **type;
+    int i;
 
     ly_err_clean(1);
 
@@ -991,6 +993,17 @@ lys_parse_mem_(struct ly_ctx *ctx, const char *data, LYS_INFORMAT format, int in
         (*type)->info.enums.enm[0].name = lydict_insert(ctx, "subtree", 7);
         (*type)->info.enums.enm[1].value = 1;
         (*type)->info.enums.enm[1].name = lydict_insert(ctx, "xpath", 5);
+        for (i = mod->features_size; i > 0; i--) {
+            if (!strcmp(mod->features[i - 1].name, "xpath")) {
+                (*type)->info.enums.enm[1].iffeature_size = 1;
+                (*type)->info.enums.enm[1].iffeature = calloc(1, sizeof(struct lys_feature));
+                (*type)->info.enums.enm[1].iffeature[0].expr = malloc(sizeof(uint8_t));
+                *(*type)->info.enums.enm[1].iffeature[0].expr = 3; /* LYS_IFF_F */
+                (*type)->info.enums.enm[1].iffeature[0].features = malloc(sizeof(struct lys_feature*));
+                (*type)->info.enums.enm[1].iffeature[0].features[0] = &mod->features[i - 1];
+                break;
+            }
+        }
         mod->ext_size++;
 
         /* 3) filter's select */
@@ -3238,8 +3251,8 @@ lys_node_switch(struct lys_node *dst, struct lys_node *src)
         if (dst->parent->child == dst) {
             dst->parent->child = src;
         }
-    } else if (dst->module->data == dst) {
-        dst->module->data = src;
+    } else if (lys_main_module(dst->module)->data == dst) {
+        lys_main_module(dst->module)->data = src;
     }
 
     /* parent */
