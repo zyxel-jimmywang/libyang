@@ -4164,6 +4164,7 @@ moveto_resolve_model(const char *mod_name_ns, uint16_t mod_nam_ns_len, struct ly
             return lys_node_module(cur_snode);
         }
 
+        mod = cur_snode->module;
         for (i = 0; i < mod->imp_size; ++i) {
             str = (is_name ? mod->imp[i].module->name : mod->imp[i].module->ns);
             if (!strncmp(str, mod_name_ns, mod_nam_ns_len) && !str[mod_nam_ns_len]) {
@@ -4173,8 +4174,8 @@ moveto_resolve_model(const char *mod_name_ns, uint16_t mod_nam_ns_len, struct ly
     }
 
     for (i = 0; i < ctx->models.used; ++i) {
-        if (ctx->models.list[i]->disabled) {
-            /* skip disabled modules */
+        if (!ctx->models.list[i]->implemented || ctx->models.list[i]->disabled) {
+            /* skip not implemented or disabled modules */
             continue;
         }
         str = (is_name ? ctx->models.list[i]->name : ctx->models.list[i]->ns);
@@ -6170,6 +6171,7 @@ eval_absolute_location_path(struct lyxp_expr *exp, uint16_t *exp_idx, struct lyd
             if (ret) {
                 return ret;
             }
+            break;
         default:
             break;
         }
@@ -7739,7 +7741,7 @@ lyxp_node_atomize(const struct lys_node *node, struct lyxp_set *set, int warn_on
         resolve_when_ctx_snode(node, &ctx_snode, &ctx_snode_type);
         if (lyxp_atomize(when->cond, ctx_snode, ctx_snode_type, &tmp_set, LYXP_SNODE_WHEN | opts)) {
             free(tmp_set.val.snodes);
-            if ((ly_errno != LY_EVALID) || (ly_vecode != LYVE_XPATH_INSNODE)) {
+            if ((ly_errno != LY_EVALID) || ((ly_vecode != LYVE_XPATH_INSNODE) && (ly_vecode != LYVE_XPATH_INMOD))) {
                 LOGVAL(LYE_SPEC, LY_VLOG_LYS, node, "Invalid when condition \"%s\".", when->cond);
                 ret = -1;
                 goto finish;
