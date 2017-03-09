@@ -2155,7 +2155,7 @@ resolve_json_nodeid(const char *nodeid, struct ly_ctx *ctx, const struct lys_nod
                 }
 
                 /* update prev mod */
-                prev_mod = start_parent->child->module;
+                prev_mod = (start_parent ? start_parent->child->module : module);
                 break;
             }
         }
@@ -5544,7 +5544,7 @@ resolve_unres_schema_uses(struct lys_node_uses *uses, struct unres_schema *unres
             /* instantiate grouping only when it is completely resolved */
             uses->grp = NULL;
         }
-        LOGVAL(LYE_INRESOLV, LY_VLOG_LYS, uses, "uses", uses->name);
+        LOGVAL(LYE_INRESOLV, LY_VLOG_LYS, uses, "uses (grouping is incomplete)", uses->name);
         return EXIT_FAILURE;
     }
 

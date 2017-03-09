@@ -47,6 +47,14 @@ struct lyd_node *lyd_parse_json(struct ly_ctx *ctx, const char *data, int option
 
 /**@} jsondata */
 
+/**
+ * internal options values for schema parsers
+ */
+#define LYS_PARSE_OPT_CFG_NOINHERIT 0x01 /**< do not inherit config flag */
+#define LYS_PARSE_OPT_CFG_IGNORE    0x02 /**< ignore config flag (in rpc, actions, notifications) */
+#define LYS_PARSE_OPT_CFG_MASK      0x03
+#define LYS_PARSE_OPT_INGRP         0x04 /**< flag to know that parser is inside a grouping */
+
 /* list of YANG statement strings */
 extern const char *ly_stmt_str[];
 
@@ -124,8 +132,9 @@ int lyp_check_mandatory_choice(struct lys_node *node);
 int lyp_check_include(struct lys_module *module, const char *value,
                       struct lys_include *inc, struct unres_schema *unres);
 int lyp_check_include_missing(struct lys_module *main_module);
-
 int lyp_check_import(struct lys_module *module, const char *value, struct lys_import *imp);
+int lyp_check_circmod_add(struct lys_module *module);
+void lyp_check_circmod_pop(struct ly_ctx *ctx);
 
 void lyp_sort_revisions(struct lys_module *module);
 int lyp_rfn_apply_ext(struct lys_module *module);
