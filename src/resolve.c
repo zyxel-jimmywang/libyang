@@ -3029,7 +3029,7 @@ check_leafref:
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on forward reference, -1 on error.
  */
 static int
-check_default(struct lys_type *type, const char **value, struct lys_module *module)
+check_default(struct lys_type *type, const char **value, struct lys_module *module, int tpdf)
 {
     struct lys_tpdf *base_tpdf = NULL;
     struct lyd_node_leaf_list node;
@@ -3041,6 +3041,9 @@ check_default(struct lys_type *type, const char **value, struct lys_module *modu
     if (type->base <= LY_TYPE_DER) {
         /* the type was not resolved yet, nothing to do for now */
         return EXIT_FAILURE;
+    } else if (type->base == LY_TYPE_LEAFREF && tpdf) {
+        /* leafref in typedef cannot be checked */
+        return EXIT_SUCCESS;
     }
 
     dflt = *value;
@@ -3142,7 +3145,7 @@ check_default(struct lys_type *type, const char **value, struct lys_module *modu
             ret = EXIT_FAILURE;
             goto finish;
         }
-        ret = check_default(&type->info.lref.target->type, &dflt, module);
+        ret = check_default(&type->info.lref.target->type, &dflt, module, 0);
         if (!ret) {
             /* adopt possibly changed default value to its canonical form */
             if (*value) {
@@ -3709,7 +3712,7 @@ error:
 }
 
 static int
-resolve_path_arg_schema_valid_dep_flag(const struct lys_node *op_node, const struct lys_node *first_node, int abs_path)
+resolve_schema_leafref_valid_dep_flag(const struct lys_node *op_node, const struct lys_node *first_node, int abs_path)
 {
     int dep1, dep2;
     const struct lys_node *node;
@@ -3749,8 +3752,8 @@ resolve_path_arg_schema_valid_dep_flag(const struct lys_node *op_node, const str
  *         positive on success, negative on failure.
  */
 static int
-resolve_path_predicate_schema(const char *path, const struct lys_node *context_node,
-                              struct lys_node *parent, const struct lys_node *op_node)
+resolve_schema_leafref_predicate(const char *path, const struct lys_node *context_node,
+                                 struct lys_node *parent, const struct lys_node *op_node)
 {
     const struct lys_module *trg_mod;
     const struct lys_node *src_node, *dst_node;
@@ -3815,7 +3818,7 @@ resolve_path_predicate_schema(const char *path, const struct lys_node *context_n
             }
 
             if (first_iter) {
-                if (resolve_path_arg_schema_valid_dep_flag(op_node, dst_node, 0)) {
+                if (resolve_schema_leafref_valid_dep_flag(op_node, dst_node, 0)) {
                     parent->flags |= LYS_LEAFREF_DEP;
                 }
                 first_iter = 0;
@@ -3851,15 +3854,12 @@ resolve_path_predicate_schema(const char *path, const struct lys_node *context_n
  *
  * @param[in] path Path to use.
  * @param[in] parent_node Parent of the leafref.
- * @param[in] parent_tpdf Flag if the parent node is actually typedef, in that case the path
- *            has to contain absolute path
  * @param[out] ret Pointer to the resolved schema node. Can be NULL.
  *
  * @return EXIT_SUCCESS on success, EXIT_FAILURE on forward reference, -1 on error.
  */
 static int
-resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tpdf,
-                        const struct lys_node **ret)
+resolve_schema_leafref(const char *path, struct lys_node *parent, const struct lys_node **ret)
 {
     const struct lys_node *node, *op_node = NULL;
     const struct lys_module *mod;
@@ -3872,17 +3872,15 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
     parent_times = 0;
     id = path;
 
-    /* find operation schema we are in, if applicable */
-    if (!parent_tpdf) {
-        for (op_node = lys_parent(parent);
-             op_node && !(op_node->nodetype & (LYS_ACTION | LYS_NOTIF | LYS_RPC));
-             op_node = lys_parent(op_node));
-    }
+    /* find operation schema we are in */
+    for (op_node = lys_parent(parent);
+         op_node && !(op_node->nodetype & (LYS_ACTION | LYS_NOTIF | LYS_RPC));
+         op_node = lys_parent(op_node));
 
     mod_start = lys_node_module(parent);
     do {
         if ((i = parse_path_arg(mod_start, id, &prefix, &pref_len, &name, &nam_len, &parent_times, &has_predicate)) < 1) {
-            LOGVAL(LYE_INCHAR, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent, id[-i], &id[-i]);
+            LOGVAL(LYE_INCHAR, LY_VLOG_LYS, parent, id[-i], &id[-i]);
             return -1;
         }
         id += i;
@@ -3892,8 +3890,7 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
                 /* resolve prefix of the module */
                 mod = prefix ? lys_get_import_module(mod_start, NULL, 0, prefix, pref_len) : mod_start;
                 if (!mod) {
-                    LOGVAL(LYE_NORESOLV, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent,
-                           "leafref", path);
+                    LOGVAL(LYE_NORESOLV, LY_VLOG_LYS, parent, "leafref", path);
                     return EXIT_FAILURE;
                 }
                 if (!mod->implemented) {
@@ -3907,19 +3904,12 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
                 }
                 /* get start node */
                 if (!mod->data) {
-                    LOGVAL(LYE_NORESOLV, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent,
-                           "leafref", path);
+                    LOGVAL(LYE_NORESOLV, LY_VLOG_LYS, parent, "leafref", path);
                     return EXIT_FAILURE;
                 }
                 node = mod->data;
 
             } else if (parent_times > 0) {
-                if (parent_tpdf) {
-                    /* the path is not allowed to contain relative path since we are in top level typedef */
-                    LOGVAL(LYE_NORESOLV, 0, NULL, "leafref", path);
-                    return -1;
-                }
-
                 /* we are looking for a sibling of a node, node it's parent (that is why parent_times - 1) */
                 for (i = 0, node = parent; i < parent_times - 1; i++) {
                     /* path is supposed to be evaluated in data tree, so we have to skip
@@ -3973,13 +3963,12 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
 
             /* move down the tree, if possible */
             if (node->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA)) {
-                LOGVAL(LYE_INCHAR, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent, name[0], name);
+                LOGVAL(LYE_INCHAR, LY_VLOG_LYS, parent, name[0], name);
                 return -1;
             }
             node = node->child;
             if (!node) {
-                LOGVAL(LYE_NORESOLV, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent,
-                       "leafref", path);
+                LOGVAL(LYE_NORESOLV, LY_VLOG_LYS, parent, "leafref", path);
                 return EXIT_FAILURE;
             }
         }
@@ -3987,14 +3976,14 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
         rc = lys_get_data_sibling(mod, node, name, nam_len, LYS_LIST | LYS_CONTAINER | LYS_RPC | LYS_ACTION | LYS_NOTIF
                                   | LYS_LEAF | LYS_LEAFLIST | LYS_ANYDATA, &node);
         if (rc) {
-            LOGVAL(LYE_NORESOLV, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent, "leafref", path);
+            LOGVAL(LYE_NORESOLV, LY_VLOG_LYS, parent, "leafref", path);
             return EXIT_FAILURE;
         }
 
         if (first_iter) {
             /* set external dependency flag, we can decide based on the first found node */
-            if (!parent_tpdf && op_node && parent_times &&
-                    resolve_path_arg_schema_valid_dep_flag(op_node, node, (parent_times == -1 ? 1 : 0))) {
+            if (op_node && parent_times &&
+                    resolve_schema_leafref_valid_dep_flag(op_node, node, (parent_times == -1 ? 1 : 0))) {
                 parent->flags |= LYS_LEAFREF_DEP;
             }
             first_iter = 0;
@@ -4003,11 +3992,11 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
         if (has_predicate) {
             /* we have predicate, so the current result must be list */
             if (node->nodetype != LYS_LIST) {
-                LOGVAL(LYE_NORESOLV, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent, "leafref", path);
+                LOGVAL(LYE_NORESOLV, LY_VLOG_LYS, parent, "leafref", path);
                 return -1;
             }
 
-            i = resolve_path_predicate_schema(id, node, parent, op_node);
+            i = resolve_schema_leafref_predicate(id, node, parent, op_node);
             if (i <= 0) {
                 if (i == 0) {
                     return EXIT_FAILURE;
@@ -4022,7 +4011,7 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
 
     /* the target must be leaf or leaf-list (in YANG 1.1 only) */
     if ((node->nodetype != LYS_LEAF) && (node->nodetype != LYS_LEAFLIST)) {
-        LOGVAL(LYE_NORESOLV, parent_tpdf ? LY_VLOG_NONE : LY_VLOG_LYS, parent_tpdf ? NULL : parent, "leafref", path);
+        LOGVAL(LYE_NORESOLV, LY_VLOG_LYS, parent, "leafref", path);
         LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL, "Leafref target \"%s\" is not a leaf nor a leaf-list.", path);
         return -1;
     }
@@ -4053,7 +4042,7 @@ resolve_path_arg_schema(const char *path, struct lys_node *parent, int parent_tp
  *         positive on success, negative on failure.
  */
 static int
-resolve_predicate(const char *pred, struct unres_data *node_match)
+resolve_instid_predicate(const char *pred, struct unres_data *node_match)
 {
     /* ... /node[target = value] ... */
     struct lyd_node *target;
@@ -6381,23 +6370,14 @@ resolve_unres_schema_item(struct lys_module *mod, void *item, enum UNRES_ITEM ty
         node = str_snode;
         stype = item;
 
-        /* HACK - when there is no parent, we are in top level typedef and in that
-         * case, the path has to contain absolute path, so we let the resolve_path_arg_schema()
-         * know it via tpdf_flag */
-        if (!node) {
-            parent_type = 1;
-            node = (struct lys_node *)stype->parent;
-        }
-
         if (!lys_node_module(node)->implemented) {
             /* not implemented module, don't bother with resolving the leafref
              * if the module is set to be implemented, the path will be resolved then */
             rc = 0;
             break;
         }
-        rc = resolve_path_arg_schema(stype->info.lref.path, node, parent_type,
-                                     (const struct lys_node **)&stype->info.lref.target);
-        if (!parent_type && !rc) {
+        rc = resolve_schema_leafref(stype->info.lref.path, node, (const struct lys_node **)&stype->info.lref.target);
+        if (!rc) {
             assert(stype->info.lref.target);
             /* check if leafref and its target are under a common if-features */
             rc = check_leafref_features(stype);
@@ -6539,10 +6519,13 @@ featurecheckdone:
     case UNRES_USES:
         rc = resolve_unres_schema_uses(item, unres);
         break;
+    case UNRES_TYPEDEF_DFLT:
+        parent_type++;
+        /* no break */
     case UNRES_TYPE_DFLT:
         stype = item;
 
-        rc = check_default(stype, (const char **)str_snode, mod);
+        rc = check_default(stype, (const char **)str_snode, mod, parent_type);
         break;
     case UNRES_CHOICE_DFLT:
         expr = str_snode;
@@ -6764,6 +6747,7 @@ print_unres_schema_item_fail(void *item, enum UNRES_ITEM type, void *str_node)
     case UNRES_USES:
         LOGVRB("Resolving %s \"%s\" failed, it will be attempted later.", "uses", ((struct lys_node_uses *)item)->name);
         break;
+    case UNRES_TYPEDEF_DFLT:
     case UNRES_TYPE_DFLT:
         if (str_node) {
             LOGVRB("Resolving %s \"%s\" failed, it will be attempted later.", "type default", (char *)str_node);
@@ -7006,13 +6990,14 @@ unres_schema_add_node(struct lys_module *mod, struct unres_schema *unres, void *
                       struct lys_node *snode)
 {
     int rc, log_hidden;
-    uint32_t u;
     struct lyxml_elem *yin;
 
     assert(unres && item && ((type != UNRES_LEAFREF) && (type != UNRES_INSTID) && (type != UNRES_WHEN)
            && (type != UNRES_MUST)));
 
 #ifndef NDEBUG
+    uint32_t u;
+
     /* check for duplicities in unres */
     for (u = 0; u < unres->count; u++) {
         if (unres->type[u] == type && unres->item[u] == item &&
@@ -7392,7 +7377,7 @@ resolve_instid(struct lyd_node *data, const char *path, int req_inst, struct lyd
 
         if (has_predicate) {
             /* we have predicate, so the current results must be list or leaf-list */
-            j = resolve_predicate(&path[i], &node_match);
+            j = resolve_instid_predicate(&path[i], &node_match);
             if (j < 1) {
                 LOGVAL(LYE_INPRED, LY_VLOG_LYD, data, &path[i-j]);
                 goto error;
