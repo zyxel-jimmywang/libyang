@@ -69,6 +69,10 @@ check:
     if (node->nodetype == LYS_AUGMENT) {
         /* go to parent actually means go to the target node */
         node = ((struct lys_node_augment *)node)->target;
+        if (!node) {
+            /* unresolved augment, let's say it's enabled */
+            return NULL;
+        }
     } else if (node->parent) {
         node = node->parent;
     } else {
@@ -201,7 +205,7 @@ lys_get_data_sibling(const struct lys_module *mod, const struct lys_node *siblin
 API const struct lys_node *
 lys_getnext(const struct lys_node *last, const struct lys_node *parent, const struct lys_module *module, int options)
 {
-    const struct lys_node *next;
+    const struct lys_node *next, *aug_parent;
     struct lys_node **snode;
 
     if ((!parent && !module) || (parent && (parent->nodetype == LYS_USES) && !(options & LYS_GETNEXT_PARENTUSES))) {
@@ -216,7 +220,8 @@ lys_getnext(const struct lys_node *last, const struct lys_node *parent, const st
         if (parent) {
             /* schema subtree */
             snode = lys_child(parent, LYS_UNKNOWN);
-            if (!snode) {
+            /* do not return anything if the augment does not have any children */
+            if (!snode || ((parent->nodetype == LYS_AUGMENT) && ((*snode)->parent != parent))) {
                 return NULL;
             }
             next = last = *snode;
@@ -234,6 +239,25 @@ lys_getnext(const struct lys_node *last, const struct lys_node *parent, const st
     }
 
 repeat:
+    if (parent && (parent->nodetype == LYS_AUGMENT) && next) {
+        /* do not return anything outside the parent augment */
+        aug_parent = next->parent;
+        do {
+            while (aug_parent && (aug_parent->nodetype != LYS_AUGMENT)) {
+                aug_parent = aug_parent->parent;
+            }
+            if (aug_parent) {
+                if (aug_parent == parent) {
+                    break;
+                }
+                aug_parent = ((struct lys_node_augment *)aug_parent)->target;
+            }
+
+        } while (aug_parent);
+        if (!aug_parent) {
+            return NULL;
+        }
+    }
     while (next && (next->nodetype == LYS_GROUPING)) {
         if (options & LYS_GETNEXT_WITHGROUPING) {
             return next;
@@ -2690,7 +2714,7 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
     struct lys_node_uses *uses_orig = (struct lys_node_uses *)node;
     struct lys_node_rpc_action *rpc = NULL;
     struct lys_node_inout *io = NULL;
-    struct lys_node_rpc_action *ntf = NULL;
+    struct lys_node_notif *ntf = NULL;
     struct lys_node_case *cs = NULL;
     struct lys_node_case *cs_orig = (struct lys_node_case *)node;
 
@@ -3692,7 +3716,7 @@ lys_leaf_add_leafref_target(struct lys_node_leaf *leafref_target, struct lys_nod
     /* check for config flag */
     if ((leafref->flags & LYS_CONFIG_W) && (leafref_target->flags & LYS_CONFIG_R)) {
         LOGVAL(LYE_SPEC, LY_VLOG_LYS, leafref,
-               "The %s is config but refers to a non-config %s.",
+               "The leafref %s is config but refers to a non-config %s.",
                strnodetype(leafref->nodetype), strnodetype(leafref_target->nodetype));
         return -1;
     }

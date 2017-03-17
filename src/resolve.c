@@ -3564,14 +3564,18 @@ resolve_path_predicate_data(const char *pred, struct lyd_node *node, struct unre
 
             /* check match between source and destination nodes */
             leaf_dst = (struct lyd_node_leaf_list *)dest_match.node[0];
-            while (leaf_dst->value_type == LY_TYPE_LEAFREF) {
+            while (leaf_dst && leaf_dst->value_type == LY_TYPE_LEAFREF) {
                 leaf_dst = (struct lyd_node_leaf_list *)leaf_dst->value.leafref;
             }
             leaf_src = (struct lyd_node_leaf_list *)source_match.node[0];
-            while (leaf_src->value_type == LY_TYPE_LEAFREF) {
+            while (leaf_src && leaf_src->value_type == LY_TYPE_LEAFREF) {
                 leaf_src = (struct lyd_node_leaf_list *)leaf_src->value.leafref;
             }
-            if (leaf_src->value_type != leaf_dst->value_type) {
+            if (!leaf_src || !leaf_dst) {
+                /* not yet resolved leafrefs */
+                return EXIT_FAILURE;
+            }
+            if ((leaf_src->value_type & LY_DATA_TYPE_MASK) != (leaf_dst->value_type & LY_DATA_TYPE_MASK)) {
                 goto remove_leafref;
             }
 
@@ -4233,7 +4237,7 @@ check_leafref_config(struct lys_node_leaf *leaf, struct lys_type *type)
 
     if (type->base == LY_TYPE_LEAFREF) {
         if ((leaf->flags & LYS_CONFIG_W) && type->info.lref.target && (type->info.lref.target->flags & LYS_CONFIG_R)) {
-            LOGVAL(LYE_SPEC, LY_VLOG_LYS, leaf, "The %s is config but refers to a non-config %s.",
+            LOGVAL(LYE_SPEC, LY_VLOG_LYS, leaf, "The leafref %s is config but refers to a non-config %s.",
                    strnodetype(leaf->nodetype), strnodetype(type->info.lref.target->nodetype));
             return -1;
         }
@@ -5533,7 +5537,6 @@ resolve_unres_schema_uses(struct lys_node_uses *uses, struct unres_schema *unres
             /* instantiate grouping only when it is completely resolved */
             uses->grp = NULL;
         }
-        LOGVAL(LYE_INRESOLV, LY_VLOG_LYS, uses, "uses (grouping is incomplete)", uses->name);
         return EXIT_FAILURE;
     }
 
@@ -7796,7 +7799,7 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int options
         ly_err_clean(1);
         progress = 0;
         for (i = 0; i < unres->count; i++) {
-            if (unres->type[i] != UNRES_WHEN) {
+            if (unres->type[i] != UNRES_WHEN && unres->type[i] != UNRES_LEAFREF) {
                 continue;
             }
             if (first) {
