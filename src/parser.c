@@ -360,13 +360,15 @@ lyp_search_file(struct ly_ctx *ctx, struct lys_module *module, const char *name,
     } else if (ly_set_add(dirs, wd, 0) == -1) {
         goto cleanup;
     }
-    if (ctx->models.search_path) {
-        wd = strdup(ctx->models.search_path);
-        if (!wd) {
-            LOGMEM;
-            goto cleanup;
-        } else if (ly_set_add(dirs, wd, 0) == -1) {
-            goto cleanup;
+    if (ctx->models.search_paths) {
+        for (i = 0; ctx->models.search_paths[i]; i++) {
+            wd = strdup(ctx->models.search_paths[i]);
+            if (!wd) {
+                LOGMEM;
+                goto cleanup;
+            } else if (ly_set_add(dirs, wd, 0) == -1) {
+                goto cleanup;
+            }
         }
     }
     wd = NULL;
@@ -489,7 +491,7 @@ lyp_search_file(struct ly_ctx *ctx, struct lys_module *module, const char *name,
             result = (struct lys_module *)ly_ctx_get_module(ctx, name, revision);
         }
         if (!result) {
-            LOGERR(LY_ESYS, "Data model \"%s\" not found.", name, ctx->models.search_path, wd);
+            LOGERR(LY_ESYS, "Data model \"%s\" not found.", name);
         }
         goto cleanup;
     }
@@ -1146,8 +1148,10 @@ make_canonical(struct ly_ctx *ctx, int type, const char **value, void *data1, vo
         if (num) {
             count = sprintf(buf, "%"PRId64" ", num);
             if ((count - 1) <= c) {
-                /* we have 0. value, add a space for the leading zero */
-                count = sprintf(buf, "0%"PRId64" ", num);
+                /* we have 0. value, print the value with the leading zeros
+                 * (one for 0. and also keep the correct with of num according
+                 * to fraction-digits value) */
+                count = sprintf(buf, "0%0*"PRId64" ", c, num);
             }
             for (i = c, j = 1; i > 0 ; i--) {
                 if (j && i > 1 && buf[count - 2] == '0') {

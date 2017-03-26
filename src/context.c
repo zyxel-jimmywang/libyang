@@ -102,7 +102,9 @@ ly_ctx_new(const char *search_dir)
             ly_ctx_destroy(ctx, NULL);
             return NULL;
         }
-        ctx->models.search_path = get_current_dir_name();
+        ctx->models.search_paths = malloc(2 * sizeof *ctx->models.search_paths);
+        ctx->models.search_paths[0] = get_current_dir_name();
+        ctx->models.search_paths[1] = NULL;
         if (chdir(cwd)) {
             LOGWRN("Unable to return back to working directory \"%s\" (%s)",
                    cwd, strerror(errno));
@@ -131,7 +133,7 @@ ly_ctx_new_yl_common(const char *search_dir, const char *input, LYD_FORMAT forma
     unsigned int u;
     struct lyd_node *module, *node;
     const char *name, *revision;
-    struct ly_set features = {0, };
+    struct ly_set features = {0, 0, {NULL}};
     const struct lys_module *mod;
     struct lyd_node *yltree = NULL;
     struct ly_ctx *ctx = NULL;
@@ -242,6 +244,8 @@ API void
 ly_ctx_set_searchdir(struct ly_ctx *ctx, const char *search_dir)
 {
     char *cwd;
+    int index = 0;
+    void *r;
 
     if (!ctx) {
         return;
@@ -255,17 +259,27 @@ ly_ctx_set_searchdir(struct ly_ctx *ctx, const char *search_dir)
             free(cwd);
             return;
         }
-        free(ctx->models.search_path);
-        ctx->models.search_path = get_current_dir_name();
+
+        if (!ctx->models.search_paths) {
+            ctx->models.search_paths = malloc(2 * sizeof *ctx->models.search_paths);
+            index = 0;
+        } else {
+            for (index = 0; ctx->models.search_paths[index]; index++);
+            r = realloc(ctx->models.search_paths, (index + 2) * sizeof *ctx->models.search_paths);
+            if (!r) {
+                LOGMEM;
+                return;
+            }
+            ctx->models.search_paths = r;
+        }
+        ctx->models.search_paths[index] = get_current_dir_name();
+        ctx->models.search_paths[index + 1] = NULL;
 
         if (chdir(cwd)) {
             LOGWRN("Unable to return back to working directory \"%s\" (%s)",
                    cwd, strerror(errno));
         }
         free(cwd);
-    } else {
-        free(ctx->models.search_path);
-        ctx->models.search_path = NULL;
     }
 }
 
@@ -276,12 +290,30 @@ ly_ctx_get_searchdir(const struct ly_ctx *ctx)
         ly_errno = LY_EINVAL;
         return NULL;
     }
-    return ctx->models.search_path;
+    return ctx->models.search_paths ? ctx->models.search_paths[0] : NULL;
+}
+
+API void
+ly_ctx_unset_searchdirs(struct ly_ctx *ctx)
+{
+    int i;
+
+    if (!ctx->models.search_paths) {
+        return;
+    }
+
+    for (i = 0; ctx->models.search_paths[i]; i++) {
+        free(ctx->models.search_paths[i]);
+    }
+    free(ctx->models.search_paths);
+    ctx->models.search_paths = NULL;
 }
 
 API void
 ly_ctx_destroy(struct ly_ctx *ctx, void (*private_destructor)(const struct lys_node *node, void *priv))
 {
+    int i;
+
     if (!ctx) {
         return;
     }
@@ -293,7 +325,12 @@ ly_ctx_destroy(struct ly_ctx *ctx, void (*private_destructor)(const struct lys_n
         /* remove the module */
         lys_free(ctx->models.list[ctx->models.used - 1], private_destructor, 0);
     }
-    free(ctx->models.search_path);
+    if (ctx->models.search_paths) {
+        for(i = 0; ctx->models.search_paths[i]; i++) {
+            free(ctx->models.search_paths[i]);
+        }
+        free(ctx->models.search_paths);
+    }
     free(ctx->models.list);
 
     /* dictionary */

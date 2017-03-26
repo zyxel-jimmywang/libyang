@@ -2977,9 +2977,9 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
         if (leaf_orig->dflt) {
             leaf->dflt = lydict_insert(ctx, leaf_orig->dflt, 0);
             if (!ingrouping(retval) || (leaf->type.base != LY_TYPE_LEAFREF)) {
-                /* problem is when it is an identityref referencing identity from its own module
-                 * (no prefix) and we are using the grouping in a different module */
-                if ((leaf->type.base == LY_TYPE_IDENT) && !strchr(leaf->dflt, ':') && (module != leaf_orig->module)) {
+                /* problem is when it is an identityref referencing an identity from a module
+                 * and we are using the grouping in a different module */
+                if (leaf->type.base == LY_TYPE_IDENT) {
                     tmp_mod = leaf_orig->module;
                 } else {
                     tmp_mod = module;
@@ -3714,7 +3714,8 @@ lys_leaf_add_leafref_target(struct lys_node_leaf *leafref_target, struct lys_nod
     }
 
     /* check for config flag */
-    if ((leafref->flags & LYS_CONFIG_W) && (leafref_target->flags & LYS_CONFIG_R)) {
+    if (((struct lys_node_leaf*)leafref)->type.info.lref.req != -1 &&
+            (leafref->flags & LYS_CONFIG_W) && (leafref_target->flags & LYS_CONFIG_R)) {
         LOGVAL(LYE_SPEC, LY_VLOG_LYS, leafref,
                "The leafref %s is config but refers to a non-config %s.",
                strnodetype(leafref->nodetype), strnodetype(leafref_target->nodetype));
@@ -4018,8 +4019,8 @@ remove_aug(struct lys_node_augment *augment)
 {
     struct lys_node *last, *elem;
 
-    if (!augment->target) {
-        /* skip not resolved augments */
+    if (!augment->target || (augment->flags & LYS_NOTAPPLIED)) {
+        /* skip not resolved augments OR already not applied augment */
         return;
     }
 

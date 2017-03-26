@@ -4236,7 +4236,8 @@ check_leafref_config(struct lys_node_leaf *leaf, struct lys_type *type)
     int i;
 
     if (type->base == LY_TYPE_LEAFREF) {
-        if ((leaf->flags & LYS_CONFIG_W) && type->info.lref.target && (type->info.lref.target->flags & LYS_CONFIG_R)) {
+        if ((leaf->flags & LYS_CONFIG_W) && type->info.lref.target && type->info.lref.req != -1 &&
+                (type->info.lref.target->flags & LYS_CONFIG_R)) {
             LOGVAL(LYE_SPEC, LY_VLOG_LYS, leaf, "The leafref %s is config but refers to a non-config %s.",
                    strnodetype(leaf->nodetype), strnodetype(type->info.lref.target->nodetype));
             return -1;
@@ -6828,7 +6829,7 @@ resolve_unres_schema(struct lys_module *mod, struct unres_schema *unres)
              * UNRES_AUGMENT, UNRES_CHOICE_DFLT and UNRES_IDENT */
 
             ++unres_count;
-            rc = resolve_unres_schema_item(mod, unres->item[i], unres->type[i], unres->str_snode[i], unres, 0);
+            rc = resolve_unres_schema_item(unres->module[i], unres->item[i], unres->type[i], unres->str_snode[i], unres, 0);
             if (!rc) {
                 unres->type[i] = UNRES_RESOLVED;
                 ++resolved;
@@ -6857,7 +6858,7 @@ resolve_unres_schema(struct lys_module *mod, struct unres_schema *unres)
             if (unres->type[i] > UNRES_IDENT) {
                 continue;
             }
-            resolve_unres_schema_item(mod, unres->item[i], unres->type[i], unres->str_snode[i], unres, 1);
+            resolve_unres_schema_item(unres->module[i], unres->item[i], unres->type[i], unres->str_snode[i], unres, 1);
             if (unres->type[i] == UNRES_TYPE_DER_EXT) {
                 yin = (struct lyxml_elem*)((struct lys_type *)unres->item[i])->der;
                 if (yin->flags & LY_YANG_STRUCTURE_FLAG) {
@@ -6882,7 +6883,7 @@ resolve_unres_schema(struct lys_module *mod, struct unres_schema *unres)
             continue;
         }
 
-        rc = resolve_unres_schema_item(mod, unres->item[i], unres->type[i], unres->str_snode[i], unres, 0);
+        rc = resolve_unres_schema_item(unres->module[i], unres->item[i], unres->type[i], unres->str_snode[i], unres, 0);
         if (rc == 0) {
             if (unres->type[i] == UNRES_LIST_UNIQ) {
                 /* free the allocated structure */
@@ -6913,7 +6914,7 @@ resolve_unres_schema(struct lys_module *mod, struct unres_schema *unres)
             continue;
         }
 
-        rc =  resolve_unres_schema_item(mod, unres->item[i], unres->type[i], unres->str_snode[i], unres, 0);
+        rc =  resolve_unres_schema_item(unres->module[i], unres->item[i], unres->type[i], unres->str_snode[i], unres, 0);
         unres->type[i] = UNRES_RESOLVED;
         if (rc == 0) {
             ++resolved;
@@ -6932,7 +6933,7 @@ resolve_unres_schema(struct lys_module *mod, struct unres_schema *unres)
             if (unres->type[i] == UNRES_RESOLVED) {
                 continue;
             }
-            resolve_unres_schema_item(mod, unres->item[i], unres->type[i], unres->str_snode[i], unres, 1);
+            resolve_unres_schema_item(unres->module[i], unres->item[i], unres->type[i], unres->str_snode[i], unres, 1);
             if (unres->type[i] == UNRES_XPATH) {
                 /* XPath referencing an unknown node is actually supposed to be just a warning */
                 unres->type[i] = UNRES_RESOLVED;
