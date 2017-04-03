@@ -1797,14 +1797,14 @@ resolve_descendant_schema_nodeid(const char *nodeid, const struct lys_node *star
     }
 
     start_parent = lys_parent(start);
-    while (start_parent && (start_parent->nodetype == LYS_USES)) {
+    while ((start_parent->nodetype == LYS_USES) && lys_parent(start_parent)) {
         start_parent = lys_parent(start_parent);
     }
 
     while (1) {
         sibling = NULL;
         while ((sibling = lys_getnext(sibling, start_parent, module,
-                                      LYS_GETNEXT_WITHCHOICE | LYS_GETNEXT_WITHCASE))) {
+                                      LYS_GETNEXT_WITHCHOICE | LYS_GETNEXT_WITHCASE | LYS_GETNEXT_PARENTUSES))) {
             /* name match */
             if (sibling->name && !strncmp(name, sibling->name, nam_len) && !sibling->name[nam_len]) {
                 r = schema_nodeid_siblingcheck(sibling, &shorthand, id, module, mod_name, mod_name_len, 0, &start_parent);
@@ -6147,11 +6147,11 @@ resolve_when(struct lyd_node *node, int *result, int ignore_fail)
 
             lyxp_set_cast(&set, LYXP_SET_BOOLEAN, ctx_node, lys_node_module(sparent), LYXP_WHEN);
             if (!set.val.bool) {
-                node->when_status |= LYD_WHEN_FALSE;
                 if ((ignore_fail == 1) || ((sparent->flags & LYS_XPATH_DEP) || (ignore_fail == 2))) {
                     LOGVRB("When condition \"%s\" is not satisfied, but it is not required.",
                         ((struct lys_node_uses *)sparent)->when->cond);
                 } else {
+                    node->when_status |= LYD_WHEN_FALSE;
                     LOGVAL(LYE_NOWHEN, LY_VLOG_LYD, node, ((struct lys_node_uses *)sparent)->when->cond);
                     goto cleanup;
                 }
@@ -7836,6 +7836,10 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int options
                         return -1;
                     } /* follows else */
 
+                    /* auto-delete */
+                    LOGVRB("auto-delete node \"%s\" due to when condition (%s)", ly_errpath(),
+                           ((struct lys_node_leaf *)unres->node[i]->schema)->when->cond);
+
                     /* only unlink now, the subtree can contain another nodes stored in the unres list */
                     /* if it has parent non-presence containers that would be empty, we should actually
                      * remove the container
@@ -7854,9 +7858,6 @@ resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int options
                     }
                     unres->node[i] = parent;
 
-                    /* auto-delete */
-                    LOGVRB("auto-delete node \"%s\" due to when condition (%s)", ly_errpath(),
-                                    ((struct lys_node_leaf *)unres->node[i]->schema)->when->cond);
                     if (*root && *root == unres->node[i]) {
                         *root = (*root)->next;
                     }
