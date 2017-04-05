@@ -333,7 +333,7 @@ lyp_search_file(struct ly_ctx *ctx, struct lys_module *module, const char *name,
                 int implement, struct unres_schema *unres)
 {
     size_t len, flen, match_len = 0, dir_len;
-    int fd, i;
+    int fd, i, statused;
     char *wd, *wn = NULL;
     DIR *dir = NULL;
     struct dirent *file;
@@ -401,12 +401,22 @@ lyp_search_file(struct ly_ctx *ctx, struct lys_module *module, const char *name,
                     LOGMEM;
                     goto cleanup;
                 }
-                if (stat(wn, &st) == -1) {
-                    LOGWRN("Unable to get information about \"%s\" file in \"%s\" when searching for (sub)modules (%s)",
-                           file->d_name, wd, strerror(errno));
-                    continue;
+
+                statused = 0;
+#ifdef _DIRENT_HAVE_D_TYPE
+                if (file->d_type == DT_LNK) {
+#else
+                {
+#endif
+                    if (stat(wn, &st) == -1) {
+                        LOGWRN("Unable to get information about \"%s\" file in \"%s\" when searching for (sub)modules (%s)",
+                               file->d_name, wd, strerror(errno));
+                        continue;
+                    }
+                    statused = 1;
                 }
-                if (S_ISDIR(st.st_mode) && dirs->number) {
+
+                if (dirs->number && (statused ? S_ISDIR(st.st_mode) : file->d_type == DT_DIR)) {
                     /* we have another subdirectory in searchpath to explore,
                      * subdirectories are not taken into account in current working dir (dirs->set.g[0]) */
                     if (ly_set_add(dirs, wn, 0) == -1) {
@@ -415,8 +425,8 @@ lyp_search_file(struct ly_ctx *ctx, struct lys_module *module, const char *name,
                     /* continue with the next item in current directory */
                     wn = NULL;
                     continue;
-                } else if (!S_ISREG(st.st_mode)) {
-                    /* not a regular file (note that we see the target of symlinks instead of symlinks */
+                } else if (statused ? !S_ISREG(st.st_mode) : file->d_type != DT_REG) {
+                    /* not a regular file (note that stat() provides the target of symlinks instead of symlinks) */
                     continue;
                 }
 
