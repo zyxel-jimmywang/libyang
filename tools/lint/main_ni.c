@@ -47,6 +47,12 @@ help(int shortout)
         "  -v, --version         Show version number and exit.\n"
         "  -V, --verbose         Show verbose messages, can be used multiple times to\n"
         "                        increase verbosity.\n"
+#ifndef NDEBUG
+        "  -G GROUPS, --debug=GROUPS\n"
+        "                        Enable printing of specific debugging message group\n"
+        "                        (nothing will be printed unless verbosity is set to debug):\n"
+        "                        <group>[,<group>]* (dict, yang, yin, xpath, diff)\n\n"
+#endif
         "  -p PATH, --path=PATH  Search path for schema (YANG/YIN) modules. The option can be used multiple times.\n\n"
         "  -s, --strict          Strict data parsing (do not skip unknown data),\n"
         "                        has no effect for schemas.\n\n"
@@ -168,6 +174,9 @@ main_ni(int argc, char* argv[])
         {"strict",           no_argument,       NULL, 's'},
         {"version",          no_argument,       NULL, 'v'},
         {"verbose",          no_argument,       NULL, 'V'},
+#ifndef NDEBUG
+        {"debug",            required_argument, NULL, 'G'},
+#endif
         {"type",             required_argument, NULL, 't'},
         {NULL,               required_argument, NULL, 'y'},
         {NULL,               0,                 NULL, 0}
@@ -194,7 +203,12 @@ main_ni(int argc, char* argv[])
     void *p;
 
     opterr = 0;
-    while ((opt = getopt_long(argc, argv, "d:f:F:ghHio:p:st:vVy:", options, &opt_index)) != -1) {
+#ifndef NDEBUG
+    while ((opt = getopt_long(argc, argv, "d:f:F:ghHio:p:st:vVG:y:", options, &opt_index)) != -1)
+#else
+    while ((opt = getopt_long(argc, argv, "d:f:F:ghHio:p:st:vVy:", options, &opt_index)) != -1)
+#endif
+    {
         switch (opt) {
         case 'd':
             if (!strcmp(optarg, "all")) {
@@ -321,6 +335,39 @@ main_ni(int argc, char* argv[])
         case 'V':
             verbose++;
             break;
+#ifndef NDEBUG
+        case 'G':
+            u = 0;
+            ptr = optarg;
+            while (ptr[0]) {
+                if (!strncmp(ptr, "dict", 4)) {
+                    u |= LY_LDGDICT;
+                    ptr += 4;
+                } else if (!strncmp(ptr, "yang", 4)) {
+                    u |= LY_LDGYANG;
+                    ptr += 4;
+                } else if (!strncmp(ptr, "yin", 3)) {
+                    u |= LY_LDGYIN;
+                    ptr += 3;
+                } else if (!strncmp(ptr, "xpath", 5)) {
+                    u |= LY_LDGXPATH;
+                    ptr += 5;
+                } else if (!strncmp(ptr, "diff", 4)) {
+                    u |= LY_LDGDIFF;
+                    ptr += 4;
+                }
+
+                if (ptr[0]) {
+                    if (ptr[0] != ',') {
+                        fprintf(stderr, "yanglint error: unknown debug group string \"%s\"\n", optarg);
+                        goto cleanup;
+                    }
+                    ++ptr;
+                }
+            }
+            ly_verb_dbg(u);
+            break;
+#endif
         case 'y':
             ptr = strrchr(optarg, '.');
             if (ptr) {
@@ -550,7 +597,6 @@ main_ni(int argc, char* argv[])
                 } else {
                     fprintf(stderr, "yanglint error: invalid top-level element \"%s\" for data type autodetection.\n",
                             xml->name);
-                    lyxml_free(ctx, xml);
                     goto cleanup;
                 }
 

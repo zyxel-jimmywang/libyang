@@ -166,7 +166,7 @@ int resolve_augment_schema_nodeid(const char *nodeid, const struct lys_node *sta
                                   int implement, const struct lys_node **ret);
 
 int resolve_descendant_schema_nodeid(const char *nodeid, const struct lys_node *start, int ret_nodetype,
-                                     int check_shorthand, int no_innerlist, const struct lys_node **ret);
+                                     int no_innerlist, const struct lys_node **ret);
 
 int resolve_choice_default_schema_nodeid(const char *nodeid, const struct lys_node *start, const struct lys_node **ret);
 
@@ -235,5 +235,8 @@ int unres_data_add(struct unres_data *unres, struct lyd_node *node, enum UNRES_I
 void unres_data_del(struct unres_data *unres, uint32_t i);
 
 int resolve_unres_data(struct unres_data *unres, struct lyd_node **root, int options);
+int schema_nodeid_siblingcheck(const struct lys_node *sibling, const char *id, const struct lys_module *module,
+                               const char *mod_name, int mod_name_len, int implemented_mod,
+                               const struct lys_node **start_parent);
 
 #endif /* _RESOLVE_H */
