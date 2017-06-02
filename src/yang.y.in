@@ -4329,10 +4329,15 @@ type_ext_alloc: @EMPTYDIR@ { struct lys_type **type;
                              }
                              /* allocate type structure */
                              (*type) = calloc(1, sizeof **type);
+                             if (!*type) {
+                               LOGMEM;
+                               YYABORT;
+                             }
 
                              /* HACK for unres */
                              (*type)->parent = (struct lys_tpdf *)ext_instance;
                              $$ = actual = *type;
+                             is_ext_instance = 0;
                             }
 
 typedef_ext_alloc: @EMPTYDIR@ { struct lys_tpdf **tpdf;
@@ -4344,7 +4349,13 @@ typedef_ext_alloc: @EMPTYDIR@ { struct lys_tpdf **tpdf;
                                 }
                                 /* allocate typedef structure */
                                 (*tpdf) = calloc(1, sizeof **tpdf);
+                                if (!*tpdf) {
+                                  LOGMEM;
+                                  YYABORT;
+                                }
+                                
                                 $$ = actual = *tpdf;
+                                is_ext_instance = 0;
                               }
 
 iffeature_ext_alloc: @EMPTYDIR@ { struct lys_iffeature **iffeature;
@@ -4356,6 +4367,10 @@ iffeature_ext_alloc: @EMPTYDIR@ { struct lys_iffeature **iffeature;
                                  }
                                  /* allocate typedef structure */
                                  (*iffeature) = calloc(1, sizeof **iffeature);
+                                 if (!*iffeature) {
+                                   LOGMEM;
+                                   YYABORT;
+                                 }
                                  $$ = actual = *iffeature;
                                }
 
@@ -4378,6 +4393,10 @@ restriction_ext_alloc: @EMPTYDIR@ { struct lys_restr **restr;
                                     }
                                     /* allocate structure for must */
                                     (*restr) = calloc(1, sizeof(struct lys_restr));
+                                    if (!*restr) {
+                                      LOGMEM;
+                                      YYABORT;
+                                    }
                                     $$ = actual = *restr;
                                     s = NULL;
                                   }
@@ -4398,7 +4417,7 @@ revision_ext_alloc: @EMPTYDIR@ { struct lys_revision **rev;
                                    YYABORT;
                                  }
                                  rev[i] = calloc(1, sizeof **rev);
-                                 if (!*rev) {
+                                 if (!rev[i]) {
                                    LOGMEM;
                                    YYABORT;
                                  }
@@ -4444,6 +4463,7 @@ datadef_ext_check: @EMPTYDIR@ { LY_STMT stmt;
                                 }
                                 actual = NULL;
                                 s = NULL;
+                                is_ext_instance = 0;
                               }
 
 not_supported_ext_check: not_supported_ext { LOGERR(LY_SUCCESS, "Extension's substatement \"%s\" not supported.", yyget_text(scanner)); }
@@ -4578,6 +4598,7 @@ ext_substatements: @EMPTYDIR@ { actual_type = EXTENSION_INSTANCE;
          YYABORT;
        }
        actual = ext_instance;
+       is_ext_instance = 1;
      }
   |  ext_substatements typedef_ext_alloc typedef_stmt stmtsep
      { struct lys_tpdf *tpdf = $2;
@@ -4597,6 +4618,7 @@ ext_substatements: @EMPTYDIR@ { actual_type = EXTENSION_INSTANCE;
          YYABORT;
        }
        actual = ext_instance;
+       is_ext_instance = 1;
      }
   |  ext_substatements status_stmt { if (yang_fill_extcomplex_flags(ext_instance, ext_name, "status", LY_STMT_STATUS,
                                                                     $2, LYS_STATUS_MASK)) {
@@ -4654,6 +4676,10 @@ ext_substatements: @EMPTYDIR@ { actual_type = EXTENSION_INSTANCE;
                                            }
                                            /* store the value */
                                            *val = malloc(sizeof(uint32_t));
+                                           if (!*val) {
+                                             LOGMEM;
+                                             YYABORT;
+                                           }
                                            **val = $2;
                                          }
   |  ext_substatements max_elements_stmt { uint32_t **val;
@@ -4665,6 +4691,10 @@ ext_substatements: @EMPTYDIR@ { actual_type = EXTENSION_INSTANCE;
                                            }
                                            /* store the value */
                                            *val = malloc(sizeof(uint32_t));
+                                           if (!*val) {
+                                             LOGMEM;
+                                             YYABORT;
+                                           }
                                            **val = $2;
                                          }
   |  ext_substatements position_stmt { uint32_t **val;
@@ -4676,6 +4706,10 @@ ext_substatements: @EMPTYDIR@ { actual_type = EXTENSION_INSTANCE;
                                        }
                                        /* store the value */
                                        *val = malloc(sizeof(uint32_t));
+                                       if (!*val) {
+                                         LOGMEM;
+                                         YYABORT;
+                                       }
                                        **val = $2;
                                      }
   |  ext_substatements value_stmt { int32_t **val;
@@ -4687,6 +4721,10 @@ ext_substatements: @EMPTYDIR@ { actual_type = EXTENSION_INSTANCE;
                                     }
                                     /* store the value */
                                     *val = malloc(sizeof(int32_t));
+                                    if (!*val) {
+                                      LOGMEM;
+                                      YYABORT;
+                                    }
                                     **val = $2;
                                   }
   |  ext_substatements unique_stmt { struct lys_unique **unique;
@@ -4698,6 +4736,10 @@ ext_substatements: @EMPTYDIR@ { actual_type = EXTENSION_INSTANCE;
                                        YYABORT;
                                      }
                                      *unique = calloc(1, sizeof(struct lys_unique));
+                                     if (!*unique) {
+                                       LOGMEM;
+                                       YYABORT;
+                                     }
                                      rc = yang_fill_unique(trg, (struct lys_node_list *)ext_instance, *unique, s, param->unres);
                                      free(s);
                                      s = NULL;
@@ -4749,7 +4791,9 @@ ext_substatements: @EMPTYDIR@ { actual_type = EXTENSION_INSTANCE;
        }
        actual = ext_instance;
      }
-  |  ext_substatements datadef_ext_check datadef_ext_stmt stmtsep { actual = ext_instance; }
+  |  ext_substatements datadef_ext_check datadef_ext_stmt stmtsep { actual = ext_instance;
+                                                                    is_ext_instance = 1;
+                                                                  }
   |  ext_substatements not_supported_ext_check unknown_string unknown_statement3_opt_end
 
 %%

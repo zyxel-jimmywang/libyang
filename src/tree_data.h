@@ -677,7 +677,7 @@ struct lyd_node *lyd_new_leaf(struct lyd_node *parent, const struct lys_module *
  * @param[in] leaf A leaf node to change.
  * @param[in] val_str String form of the new value to be set to the \p leaf. In case the type is #LY_TYPE_INST
  * or #LY_TYPE_IDENT, JSON node-id format is expected (nodes are prefixed with module names, not XML namespaces).
- * @return 0 on success, non-zero on error.
+ * @return 0 on success, <0 on error, 1 if the (canonical) value matched the original one and no change occured.
  */
 int lyd_change_leaf(struct lyd_node_leaf_list *leaf, const char *val_str);
 
@@ -1060,6 +1060,18 @@ struct lyd_node *lyd_first_sibling(struct lyd_node *node);
  * @return 0 on success, nonzero in case of an error.
  */
 int lyd_validate(struct lyd_node **node, int options, void *var_arg);
+
+/**
+ * @brief Check restrictions applicable to the particular leaf/leaf-list on the given string value.
+ *
+ * Validates the value only using the types' restrictions. Do not check the rest of restrictions dependent on the
+ * data tree (must, when statements or uniqueness of the leaf-list item).
+ *
+ * @param[in] node Schema node of the leaf or leaf-list eventually holding the \p value.
+ * @param[in] value Value to be checked (NULL is checked as empty string).
+ * @return EXIT_SUCCESS if the \p value conforms to the restrictions, EXIT_FAILURE otherwise.
+ */
+int lyd_validate_value(struct lys_node *node, const char *value);
 
 /**
  * @brief Get know if the node contain (despite implicit or explicit) default value.

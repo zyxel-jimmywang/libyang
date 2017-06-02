@@ -65,16 +65,13 @@ static struct internal_modules_s {
 API struct ly_ctx *
 ly_ctx_new(const char *search_dir)
 {
-    struct ly_ctx *ctx;
+    struct ly_ctx *ctx = NULL;
     struct lys_module *module;
-    char *cwd;
+    char *cwd = NULL;
     int i;
 
     ctx = calloc(1, sizeof *ctx);
-    if (!ctx) {
-        LOGMEM;
-        return NULL;
-    }
+    LY_CHECK_ERR_RETURN(!ctx, LOGMEM, NULL);
 
     /* dictionary */
     lydict_init(&ctx->dict);
@@ -84,11 +81,7 @@ ly_ctx_new(const char *search_dir)
 
     /* models list */
     ctx->models.list = calloc(16, sizeof *ctx->models.list);
-    if (!ctx->models.list) {
-        LOGMEM;
-        free(ctx);
-        return NULL;
-    }
+    LY_CHECK_ERR_RETURN(!ctx->models.list, LOGMEM; free(ctx), NULL);
     ext_plugins_ref++;
     ctx->models.used = 0;
     ctx->models.size = 16;
@@ -97,18 +90,16 @@ ly_ctx_new(const char *search_dir)
         if (chdir(search_dir)) {
             LOGERR(LY_ESYS, "Unable to use search directory \"%s\" (%s)",
                    search_dir, strerror(errno));
-            free(cwd);
-            ly_ctx_destroy(ctx, NULL);
-            return NULL;
+            goto error;
         }
         ctx->models.search_paths = malloc(2 * sizeof *ctx->models.search_paths);
+        LY_CHECK_ERR_GOTO(!ctx->models.search_paths, LOGMEM, error);
         ctx->models.search_paths[0] = get_current_dir_name();
         ctx->models.search_paths[1] = NULL;
         if (chdir(cwd)) {
             LOGWRN("Unable to return back to working directory \"%s\" (%s)",
                    cwd, strerror(errno));
         }
-        free(cwd);
     }
     ctx->models.module_set_id = 1;
 
@@ -116,13 +107,20 @@ ly_ctx_new(const char *search_dir)
     for (i = 0; i < LY_INTERNAL_MODULE_COUNT; i++) {
         module = (struct lys_module *)lys_parse_mem(ctx, internal_modules[i].data, internal_modules[i].format);
         if (!module) {
-            ly_ctx_destroy(ctx, NULL);
-            return NULL;
+            goto error;
         }
         module->implemented = internal_modules[i].implemented;
     }
 
+    /* cleanup */
+    free(cwd);
+
     return ctx;
+
+error:
+    free(cwd);
+    ly_ctx_destroy(ctx, NULL);
+    return NULL;
 }
 
 static struct ly_ctx *
@@ -242,7 +240,7 @@ ly_ctx_unset_allimplemented(struct ly_ctx *ctx)
 API void
 ly_ctx_set_searchdir(struct ly_ctx *ctx, const char *search_dir)
 {
-    char *cwd;
+    char *cwd = NULL;
     int index = 0;
     void *r;
 
@@ -255,21 +253,17 @@ ly_ctx_set_searchdir(struct ly_ctx *ctx, const char *search_dir)
         if (chdir(search_dir)) {
             LOGERR(LY_ESYS, "Unable to use search directory \"%s\" (%s)",
                    search_dir, strerror(errno));
-            free(cwd);
-            return;
+            goto cleanup;
         }
 
         if (!ctx->models.search_paths) {
             ctx->models.search_paths = malloc(2 * sizeof *ctx->models.search_paths);
+            LY_CHECK_ERR_GOTO(!ctx->models.search_paths, LOGMEM, cleanup);
             index = 0;
         } else {
             for (index = 0; ctx->models.search_paths[index]; index++);
             r = realloc(ctx->models.search_paths, (index + 2) * sizeof *ctx->models.search_paths);
-            if (!r) {
-                LOGMEM;
-                free(cwd);
-                return;
-            }
+            LY_CHECK_ERR_GOTO(!r, LOGMEM, cleanup);
             ctx->models.search_paths = r;
         }
         ctx->models.search_paths[index] = get_current_dir_name();
@@ -279,8 +273,10 @@ ly_ctx_set_searchdir(struct ly_ctx *ctx, const char *search_dir)
             LOGWRN("Unable to return back to working directory \"%s\" (%s)",
                    cwd, strerror(errno));
         }
-        free(cwd);
     }
+
+cleanup:
+    free(cwd);
 }
 
 API const char *
@@ -872,7 +868,7 @@ lys_set_disabled(const struct lys_module *module)
     struct ly_set *mods;
     uint8_t j, imported;
     int i, o;
-    unsigned int u;
+    unsigned int u, v;
 
     if (!module) {
         ly_errno = LY_EINVAL;
@@ -968,9 +964,13 @@ imported:
         lys_sub_module_remove_devs_augs((struct lys_module *)mods->set.g[u]);
     }
 
-    /* now again disable the modules to disable */
+    /* now again disable the modules to disable and disable also all its submodules */
     for (u = 0; u < mods->number; u++) {
-        ((struct lys_module *)mods->set.g[u])->disabled = 1;
+        mod = (struct lys_module *)mods->set.g[u];
+        mod->disabled = 1;
+        for (v = 0; v < mod->inc_size; v++) {
+            mod->inc[v].submodule->disabled = 1;
+        }
     }
 
     /* free the set */
@@ -990,6 +990,10 @@ lys_set_enabled_(struct ly_set *mods, struct lys_module *mod)
     ly_set_add(mods, mod, 0);
     mod->disabled = 0;
 
+    for (i = 0; i < mod->inc_size; i++) {
+        mod->inc[i].submodule->disabled = 0;
+    }
+
     /* go recursively */
     for (i = 0; i < mod->imp_size; i++) {
         if (!mod->imp[i].module->disabled) {
@@ -1007,7 +1011,7 @@ lys_set_enabled(const struct lys_module *module)
     struct lys_module *mod;
     struct ly_set *mods, *disabled;
     int i;
-    unsigned int u, v;
+    unsigned int u, v, w;
 
     if (!module) {
         ly_errno = LY_EINVAL;
@@ -1066,6 +1070,9 @@ checkdependency:
                      * know that there is no disabled import to enable */
                     mod->disabled = 0;
                     ly_set_add(mods, mod, 0);
+                    for (w = 0; w < mod->inc_size; w++) {
+                        mod->inc[w].submodule->disabled = 0;
+                    }
                     /* we have to start again because some of the already checked modules can
                      * depend on the one we have just decided to enable */
                     goto checkdependency;
