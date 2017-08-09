@@ -1401,8 +1401,10 @@ fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_e
         }
 
         /* allocate array for union's types ... */
-        type->info.uni.types = calloc(i, sizeof *type->info.uni.types);
-        LY_CHECK_ERR_GOTO(!type->info.uni.types, LOGMEM, error);
+        if (i) {
+            type->info.uni.types = calloc(i, sizeof *type->info.uni.types);
+            LY_CHECK_ERR_GOTO(!type->info.uni.types, LOGMEM, error);
+        }
 
         /* ... and fill the structures */
         LY_TREE_FOR(yin->child, node) {
@@ -2011,7 +2013,7 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
     struct lys_node *node = NULL, *parent, *dev_target = NULL;
     struct lys_node_choice *choice = NULL;
     struct lys_node_leaf *leaf = NULL;
-    struct ly_set *dflt_check = ly_set_new();
+    struct ly_set *dflt_check = ly_set_new(), *set;
     struct lys_node_list *list = NULL;
     struct lys_node_leaflist *llist = NULL;
     struct lys_type *t = NULL;
@@ -2030,11 +2032,15 @@ fill_yin_deviation(struct lys_module *module, struct lyxml_elem *yin, struct lys
     }
 
     /* resolve target node */
-    rc = resolve_augment_schema_nodeid(dev->target_name, NULL, module, (const struct lys_node **)&dev_target);
-    if (rc || !dev_target) {
+    rc = resolve_schema_nodeid(dev->target_name, NULL, module, &set, 0, 1);
+    if (rc == -1) {
         LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, dev->target_name, yin->name);
+        ly_set_free(set);
         goto error;
     }
+    dev_target = set->set.s[0];
+    ly_set_free(set);
+
     if (dev_target->module == lys_main_module(module)) {
         LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, dev->target_name, yin->name);
         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Deviating own module is not allowed.");

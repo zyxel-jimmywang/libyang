@@ -11,7 +11,7 @@ set(CMAKE_MACOSX_RPATH TRUE)
 # set version
 set(LIBYANG_MAJOR_VERSION 0)
 set(LIBYANG_MINOR_VERSION 13)
-set(LIBYANG_MICRO_VERSION 7)
+set(LIBYANG_MICRO_VERSION 38)
 set(LIBYANG_VERSION ${LIBYANG_MAJOR_VERSION}.${LIBYANG_MINOR_VERSION}.${LIBYANG_MICRO_VERSION})
 set(LIBYANG_SOVERSION ${LIBYANG_MAJOR_VERSION}.${LIBYANG_MINOR_VERSION})
 configure_file(${PROJECT_SOURCE_DIR}/src/libyang.h.in ${PROJECT_SOURCE_DIR}/src/libyang.h)
@@ -28,6 +28,8 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/CMakeModules/")
 
 find_package(FLEX)
 find_package(BISON)
+find_program (DEB_BUILDER NAMES debuild)
+find_program (RPM_BUILDER NAMES rpmbuild)
 find_program (SED_TOOL NAMES sed)
 
 if(NOT BISON_FOUND)
@@ -49,6 +51,64 @@ else()
 	)
 endif()
 
+if (NOT DEFINED ENV{TRAVIS_BRANCH})
+	execute_process(COMMAND "git" "rev-parse" "--abbrev-ref" "HEAD"
+	                OUTPUT_VARIABLE GIT_BRANCH
+	                OUTPUT_STRIP_TRAILING_WHITESPACE
+	                ERROR_QUIET
+	               )
+	if (NOT GIT_BRANCH)
+		set(ENV{TRAVIS_BRANCH} "master")
+	else()
+	    if (GIT_BRANCH MATCHES "master|devel")
+	    	set(ENV{TRAVIS_BRANCH} ${GIT_BRANCH})
+	    else()
+	    	set(ENV{TRAVIS_BRANCH} "master")
+	    endif()
+	endif()
+	set(GIT_BRANCH $ENV{TRAVIS_BRANCH})
+endif()
+
+if ($ENV{TRAVIS_BRANCH} STREQUAL "master")
+	set(PACKAGE_NAME "libyang")
+	set(BRANCH "master")
+	set(BUILD_TYPE "Package")
+	set(CONFLICT_PACKAGE_NAME "libyang-experimental")
+else ()
+	set(PACKAGE_NAME "libyang-experimental")
+	set(BRANCH "devel")
+	set(BUILD_TYPE "debug")
+	set(CONFLICT_PACKAGE_NAME "libyang")
+endif()
+# change version in config files
+configure_file(${PROJECT_SOURCE_DIR}/packages/libyang.spec.in ${PROJECT_BINARY_DIR}/build-packages/libyang.spec)
+configure_file(${PROJECT_SOURCE_DIR}/packages/libyang.dsc.in ${PROJECT_BINARY_DIR}/build-packages/libyang.dsc)
+configure_file(${PROJECT_SOURCE_DIR}/packages/debian.control.in ${PROJECT_BINARY_DIR}/build-packages/debian.control @ONLY)
+configure_file(${PROJECT_SOURCE_DIR}/packages/debian.rules.in ${PROJECT_BINARY_DIR}/build-packages/debian.rules)
+
+if (NOT DEB_BUILDER)
+	message(WARNING "Missing tools (devscripts, debhelper package) for building deb package.\nYou won't be able to generate deb package from source code.\nCompiling libyang should still works fine.")
+else ()
+	# target for local build deb package
+	add_custom_target(build-deb
+					  WORKING_DIRECTORY ${PROJECT_BINARY_DIR}
+					  COMMAND build-packages/local-deb.sh
+	)
+	configure_file(${PROJECT_SOURCE_DIR}/packages/local-deb.sh.in ${PROJECT_BINARY_DIR}/build-packages/local-deb.sh @ONLY)
+endif()
+
+if (NOT RPM_BUILDER)
+	message(WARNING "Missing tools (rpm package) for building rpm package. \nYou won't be able to generate rpm package from source code.\nCompiling libyang should still works fine.")
+else ()
+	# target for local build rpm package
+	string(REPLACE ${PROJECT_SOURCE_DIR} "." EXCLUDE_BUILD_DIR ${PROJECT_BINARY_DIR})
+	add_custom_target(build-rpm
+					  WORKING_DIRECTORY ${PROJECT_BINARY_DIR}
+					  COMMAND build-packages/local-rpm.sh
+	)
+	configure_file(${PROJECT_SOURCE_DIR}/packages/local-rpm.sh.in ${PROJECT_BINARY_DIR}/build-packages/local-rpm.sh @ONLY)
+endif()
+
 # check the supported platform
 if(NOT UNIX)
 	message(FATAL_ERROR "Only *nix like systems are supported.")
@@ -61,9 +121,10 @@ endif()
 
 set(CMAKE_C_FLAGS         "${CMAKE_C_FLAGS} -Wall -Wextra")
 set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
+set(CMAKE_C_FLAGS_PACKAGE "-g -O2 -DNDEBUG")
 set(CMAKE_C_FLAGS_DEBUG   "-g -O0")
 
-if(CMAKE_BUILD_TYPE STREQUAL debug)
+if((CMAKE_BUILD_TYPE STREQUAL debug) OR (CMAKE_BUILD_TYPE STREQUAL Package))
 	option(ENABLE_BUILD_TESTS "Build tests" ON)
 	option(ENABLE_VALGRIND_TESTS "Build tests with valgrind" ON)
 else()
@@ -106,6 +167,9 @@ set(lintsrc
 	tools/lint/completion.c
 	linenoise/linenoise.c)
 
+set(resrc
+	tools/re/main.c)
+
 set(yang2yinsrc
 	tools/yang2yin/main.c)
 
@@ -116,18 +180,6 @@ set(headers
 	src/extensions.h
 	src/xml.h
 	src/dict.h)
-
-# create static libyang library
-if(STATIC)
-    add_library(yang_static STATIC ${libsrc})
-    set_target_properties(yang_static PROPERTIES OUTPUT_NAME yang)
-    set_target_properties(yang_static PROPERTIES COMPILE_FLAGS "-fvisibility=hidden")
-    target_link_libraries(yang_static m)
-    target_link_libraries(yang_static ${CMAKE_DL_LIBS})
-    target_link_libraries(yang_static ${CMAKE_THREAD_LIBS_INIT})
-    target_link_libraries(yang_static ${PCRE_LIBRARIES})
-    install(TARGETS yang_static DESTINATION ${CMAKE_INSTALL_LIBDIR})
-endif(STATIC)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 add_library(yangobj OBJECT ${libsrc})
@@ -195,6 +247,11 @@ add_executable(yanglint ${lintsrc})
 target_link_libraries(yanglint yang)
 install(TARGETS yanglint DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ${PROJECT_SOURCE_DIR}/tools/lint/yanglint.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+
+#yangre
+add_executable(yangre ${resrc})
+target_link_libraries(yangre yang)
+install(TARGETS yangre DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # yang2yin
 add_executable(yang2yin ${yang2yinsrc})

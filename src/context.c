@@ -59,6 +59,7 @@ static struct internal_modules_s {
     {"yang", "2017-02-20", (const char*)yang_2017_02_20_yin, 1, LYS_IN_YIN},
     {"ietf-inet-types", "2013-07-15", (const char*)ietf_inet_types_2013_07_15_yin, 0, LYS_IN_YIN},
     {"ietf-yang-types", "2013-07-15", (const char*)ietf_yang_types_2013_07_15_yin, 0, LYS_IN_YIN},
+    /* ietf-yang-library is expected at (LY_INTERNAL_MODULE_COUNT - 1) position! */
     {"ietf-yang-library", "2016-06-21", (const char*)ietf_yang_library_2016_06_21_yin, 1, LYS_IN_YIN}
 };
 
@@ -240,7 +241,7 @@ ly_ctx_unset_allimplemented(struct ly_ctx *ctx)
 API void
 ly_ctx_set_searchdir(struct ly_ctx *ctx, const char *search_dir)
 {
-    char *cwd = NULL;
+    char *cwd = NULL, *new;
     int index = 0;
     void *r;
 
@@ -256,19 +257,28 @@ ly_ctx_set_searchdir(struct ly_ctx *ctx, const char *search_dir)
             goto cleanup;
         }
 
+        new = get_current_dir_name();
         if (!ctx->models.search_paths) {
             ctx->models.search_paths = malloc(2 * sizeof *ctx->models.search_paths);
             LY_CHECK_ERR_GOTO(!ctx->models.search_paths, LOGMEM, cleanup);
             index = 0;
         } else {
-            for (index = 0; ctx->models.search_paths[index]; index++);
+            for (index = 0; ctx->models.search_paths[index]; index++) {
+                /* check for duplicities */
+                if (!strcmp(new, ctx->models.search_paths[index])) {
+                    /* path is already present */
+                    free(new);
+                    goto success;
+                }
+            }
             r = realloc(ctx->models.search_paths, (index + 2) * sizeof *ctx->models.search_paths);
             LY_CHECK_ERR_GOTO(!r, LOGMEM, cleanup);
             ctx->models.search_paths = r;
         }
-        ctx->models.search_paths[index] = get_current_dir_name();
+        ctx->models.search_paths[index] = new;
         ctx->models.search_paths[index + 1] = NULL;
 
+success:
         if (chdir(cwd)) {
             LOGWRN("Unable to return back to working directory \"%s\" (%s)",
                    cwd, strerror(errno));
@@ -279,18 +289,18 @@ cleanup:
     free(cwd);
 }
 
-API const char *
-ly_ctx_get_searchdir(const struct ly_ctx *ctx)
+API const char * const *
+ly_ctx_get_searchdirs(const struct ly_ctx *ctx)
 {
     if (!ctx) {
         ly_errno = LY_EINVAL;
         return NULL;
     }
-    return ctx->models.search_paths ? ctx->models.search_paths[0] : NULL;
+    return (const char * const *)ctx->models.search_paths;
 }
 
 API void
-ly_ctx_unset_searchdirs(struct ly_ctx *ctx)
+ly_ctx_unset_searchdirs(struct ly_ctx *ctx, int index)
 {
     int i;
 
@@ -299,10 +309,18 @@ ly_ctx_unset_searchdirs(struct ly_ctx *ctx)
     }
 
     for (i = 0; ctx->models.search_paths[i]; i++) {
-        free(ctx->models.search_paths[i]);
+        if (index < 0 || index == i) {
+            free(ctx->models.search_paths[i]);
+            ctx->models.search_paths[i] = NULL;
+        } else if (i > index) {
+            ctx->models.search_paths[i - 1] = ctx->models.search_paths[i];
+            ctx->models.search_paths[i] = NULL;
+        }
     }
-    free(ctx->models.search_paths);
-    ctx->models.search_paths = NULL;
+    if (index < 0 || !ctx->models.search_paths[0]) {
+        free(ctx->models.search_paths);
+        ctx->models.search_paths = NULL;
+    }
 }
 
 API void
@@ -670,7 +688,7 @@ ly_ctx_load_module(struct ly_ctx *ctx, const char *name, const char *revision)
         return NULL;
     }
 
-    return ly_ctx_load_sub_module(ctx, NULL, name, revision, 1, NULL);
+    return ly_ctx_load_sub_module(ctx, NULL, name, revision && revision[0] ? revision : NULL, 1, NULL);
 }
 
 /*
@@ -1495,7 +1513,7 @@ ly_ctx_info(struct ly_ctx *ctx)
 }
 
 API const struct lys_node *
-ly_ctx_get_node(struct ly_ctx *ctx, const struct lys_node *start, const char *nodeid)
+ly_ctx_get_node(struct ly_ctx *ctx, const struct lys_node *start, const char *nodeid, int output)
 {
     const struct lys_node *node;
 
@@ -1505,7 +1523,7 @@ ly_ctx_get_node(struct ly_ctx *ctx, const struct lys_node *start, const char *no
     }
 
     /* sets error and everything */
-    node = resolve_json_nodeid(nodeid, ctx, start);
+    node = resolve_json_nodeid(nodeid, ctx, start, output);
 
     return node;
 }

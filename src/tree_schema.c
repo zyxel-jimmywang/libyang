@@ -216,7 +216,7 @@ lys_getnext(const struct lys_node *last, const struct lys_node *parent, const st
             /* schema subtree */
             snode = lys_child(parent, LYS_UNKNOWN);
             /* do not return anything if the augment does not have any children */
-            if (!snode || ((parent->nodetype == LYS_AUGMENT) && ((*snode)->parent != parent))) {
+            if (!snode || !(*snode) || ((parent->nodetype == LYS_AUGMENT) && ((*snode)->parent != parent))) {
                 return NULL;
             }
             next = last = *snode;
@@ -1193,6 +1193,7 @@ lys_ext_dup(struct lys_module *mod, struct lys_ext_instance **orig, uint8_t size
     uint8_t u = 0;
     struct lys_ext_instance **result;
     struct unres_ext *info, *info_orig;
+    size_t len;
 
     assert(new);
 
@@ -1216,16 +1217,18 @@ lys_ext_dup(struct lys_module *mod, struct lys_ext_instance **orig, uint8_t size
                 LY_CHECK_ERR_GOTO(!result[u], LOGMEM, error);
                 break;
             case LYEXT_COMPLEX:
-                result[u] = calloc(1, ((struct lyext_plugin_complex*)orig[u]->def->plugin)->instance_size);
+                len = ((struct lyext_plugin_complex*)orig[u]->def->plugin)->instance_size;
+                result[u] = calloc(1, len);
                 LY_CHECK_ERR_GOTO(!result[u], LOGMEM, error);
 
                 ((struct lys_ext_instance_complex*)result[u])->substmt = ((struct lyext_plugin_complex*)orig[u]->def->plugin)->substmt;
                 /* TODO duplicate data in extension instance content */
+                memcpy((void*)result[u] + sizeof(**orig), (void*)orig[u] + sizeof(**orig), len - sizeof(**orig));
                 break;
             }
             /* generic part */
             result[u]->def = orig[u]->def;
-            result[u]->flags = 0;
+            result[u]->flags = LYEXT_OPT_CONTENT;
             result[u]->arg_value = lydict_insert(mod->ctx, orig[u]->arg_value, 0);
             result[u]->parent = parent;
             result[u]->parent_type = parent_type;
@@ -1237,7 +1240,6 @@ lys_ext_dup(struct lys_module *mod, struct lys_ext_instance **orig, uint8_t size
             result[u]->module = mod;
 
             /* extensions */
-            orig[u]->ext = NULL;
             result[u]->ext_size = orig[u]->ext_size;
             if (lys_ext_dup(mod, orig[u]->ext, orig[u]->ext_size, result[u],
                             LYEXT_PAR_EXTINST, &result[u]->ext, shallow, unres)) {
@@ -1341,143 +1343,145 @@ lys_iffeature_free(struct ly_ctx *ctx, struct lys_iffeature *iffeature, uint8_t 
 
 static int
 type_dup(struct lys_module *mod, struct lys_node *parent, struct lys_type *new, struct lys_type *old,
-              LY_DATA_TYPE base, int in_grp, int shallow, struct unres_schema *unres)
+         LY_DATA_TYPE base, int in_grp, int shallow, struct unres_schema *unres)
 {
     int i;
 
     switch (base) {
-        case LY_TYPE_BINARY:
-            if (old->info.binary.length) {
-                new->info.binary.length = lys_restr_dup(mod, old->info.binary.length, 1, shallow, unres);
-            }
-            break;
+    case LY_TYPE_BINARY:
+        if (old->info.binary.length) {
+            new->info.binary.length = lys_restr_dup(mod, old->info.binary.length, 1, shallow, unres);
+        }
+        break;
 
-        case LY_TYPE_BITS:
-            new->info.bits.count = old->info.bits.count;
-            if (new->info.bits.count) {
-                new->info.bits.bit = calloc(new->info.bits.count, sizeof *new->info.bits.bit);
-                LY_CHECK_ERR_RETURN(!new->info.bits.bit, LOGMEM, -1);
+    case LY_TYPE_BITS:
+        new->info.bits.count = old->info.bits.count;
+        if (new->info.bits.count) {
+            new->info.bits.bit = calloc(new->info.bits.count, sizeof *new->info.bits.bit);
+            LY_CHECK_ERR_RETURN(!new->info.bits.bit, LOGMEM, -1);
 
-                for (i = 0; i < new->info.bits.count; i++) {
-                    new->info.bits.bit[i].name = lydict_insert(mod->ctx, old->info.bits.bit[i].name, 0);
-                    new->info.bits.bit[i].dsc = lydict_insert(mod->ctx, old->info.bits.bit[i].dsc, 0);
-                    new->info.bits.bit[i].ref = lydict_insert(mod->ctx, old->info.bits.bit[i].ref, 0);
-                    new->info.bits.bit[i].flags = old->info.bits.bit[i].flags;
-                    new->info.bits.bit[i].pos = old->info.bits.bit[i].pos;
-                    new->info.bits.bit[i].ext_size = old->info.bits.bit[i].ext_size;
-                    if (lys_ext_dup(mod, old->info.bits.bit[i].ext, old->info.bits.bit[i].ext_size,
-                                    &new->info.bits.bit[i], LYEXT_PAR_TYPE_BIT,
-                                    &new->info.bits.bit[i].ext, shallow, unres)) {
-                        return -1;
-                    }
-                }
-            }
-            break;
-
-        case LY_TYPE_DEC64:
-            new->info.dec64.dig = old->info.dec64.dig;
-            new->info.dec64.div = old->info.dec64.div;
-            if (old->info.dec64.range) {
-                new->info.dec64.range = lys_restr_dup(mod, old->info.dec64.range, 1, shallow, unres);
-            }
-            break;
-
-        case LY_TYPE_ENUM:
-            new->info.enums.count = old->info.enums.count;
-            if (new->info.enums.count) {
-                new->info.enums.enm = calloc(new->info.enums.count, sizeof *new->info.enums.enm);
-                LY_CHECK_ERR_RETURN(!new->info.enums.enm, LOGMEM, -1);
-
-                for (i = 0; i < new->info.enums.count; i++) {
-                    new->info.enums.enm[i].name = lydict_insert(mod->ctx, old->info.enums.enm[i].name, 0);
-                    new->info.enums.enm[i].dsc = lydict_insert(mod->ctx, old->info.enums.enm[i].dsc, 0);
-                    new->info.enums.enm[i].ref = lydict_insert(mod->ctx, old->info.enums.enm[i].ref, 0);
-                    new->info.enums.enm[i].flags = old->info.enums.enm[i].flags;
-                    new->info.enums.enm[i].value = old->info.enums.enm[i].value;
-                    new->info.enums.enm[i].ext_size = old->info.enums.enm[i].ext_size;
-                    if (lys_ext_dup(mod, old->info.enums.enm[i].ext, old->info.enums.enm[i].ext_size,
-                                    &new->info.enums.enm[i], LYEXT_PAR_TYPE_ENUM,
-                                    &new->info.enums.enm[i].ext, shallow, unres)) {
-                        return -1;
-                    }
-                }
-            }
-            break;
-
-        case LY_TYPE_IDENT:
-            new->info.ident.count = old->info.ident.count;
-            if (old->info.ident.count) {
-                new->info.ident.ref = malloc(old->info.ident.count * sizeof *new->info.ident.ref);
-                LY_CHECK_ERR_RETURN(!new->info.ident.ref, LOGMEM, -1);
-                memcpy(new->info.ident.ref, old->info.ident.ref, old->info.ident.count * sizeof *new->info.ident.ref);
-            } else {
-                /* there can be several unresolved base identities, duplicate them all */
-                i = -1;
-                do {
-                    i = unres_schema_find(unres, i, old, UNRES_TYPE_IDENTREF);
-                    if (i != -1) {
-                        if (unres_schema_add_str(mod, unres, new, UNRES_TYPE_IDENTREF, unres->str_snode[i]) == -1) {
-                            return -1;
-                        }
-                    }
-                    --i;
-                } while (i > -1);
-            }
-            break;
-
-        case LY_TYPE_INST:
-            new->info.inst.req = old->info.inst.req;
-            break;
-
-        case LY_TYPE_INT8:
-        case LY_TYPE_INT16:
-        case LY_TYPE_INT32:
-        case LY_TYPE_INT64:
-        case LY_TYPE_UINT8:
-        case LY_TYPE_UINT16:
-        case LY_TYPE_UINT32:
-        case LY_TYPE_UINT64:
-            if (old->info.num.range) {
-                new->info.num.range = lys_restr_dup(mod, old->info.num.range, 1, shallow, unres);
-            }
-            break;
-
-        case LY_TYPE_LEAFREF:
-            if (old->info.lref.path) {
-                new->info.lref.path = lydict_insert(mod->ctx, old->info.lref.path, 0);
-                if (!in_grp && unres_schema_add_node(mod, unres, new, UNRES_TYPE_LEAFREF, parent) == -1) {
+            for (i = 0; i < new->info.bits.count; i++) {
+                new->info.bits.bit[i].name = lydict_insert(mod->ctx, old->info.bits.bit[i].name, 0);
+                new->info.bits.bit[i].dsc = lydict_insert(mod->ctx, old->info.bits.bit[i].dsc, 0);
+                new->info.bits.bit[i].ref = lydict_insert(mod->ctx, old->info.bits.bit[i].ref, 0);
+                new->info.bits.bit[i].flags = old->info.bits.bit[i].flags;
+                new->info.bits.bit[i].pos = old->info.bits.bit[i].pos;
+                new->info.bits.bit[i].ext_size = old->info.bits.bit[i].ext_size;
+                if (lys_ext_dup(mod, old->info.bits.bit[i].ext, old->info.bits.bit[i].ext_size,
+                                &new->info.bits.bit[i], LYEXT_PAR_TYPE_BIT,
+                                &new->info.bits.bit[i].ext, shallow, unres)) {
                     return -1;
                 }
             }
-            break;
+        }
+        break;
 
-        case LY_TYPE_STRING:
-            if (old->info.str.length) {
-                new->info.str.length = lys_restr_dup(mod, old->info.str.length, 1, shallow, unres);
+    case LY_TYPE_DEC64:
+        new->info.dec64.dig = old->info.dec64.dig;
+        new->info.dec64.div = old->info.dec64.div;
+        if (old->info.dec64.range) {
+            new->info.dec64.range = lys_restr_dup(mod, old->info.dec64.range, 1, shallow, unres);
+        }
+        break;
+
+    case LY_TYPE_ENUM:
+        new->info.enums.count = old->info.enums.count;
+        if (new->info.enums.count) {
+            new->info.enums.enm = calloc(new->info.enums.count, sizeof *new->info.enums.enm);
+            LY_CHECK_ERR_RETURN(!new->info.enums.enm, LOGMEM, -1);
+
+            for (i = 0; i < new->info.enums.count; i++) {
+                new->info.enums.enm[i].name = lydict_insert(mod->ctx, old->info.enums.enm[i].name, 0);
+                new->info.enums.enm[i].dsc = lydict_insert(mod->ctx, old->info.enums.enm[i].dsc, 0);
+                new->info.enums.enm[i].ref = lydict_insert(mod->ctx, old->info.enums.enm[i].ref, 0);
+                new->info.enums.enm[i].flags = old->info.enums.enm[i].flags;
+                new->info.enums.enm[i].value = old->info.enums.enm[i].value;
+                new->info.enums.enm[i].ext_size = old->info.enums.enm[i].ext_size;
+                if (lys_ext_dup(mod, old->info.enums.enm[i].ext, old->info.enums.enm[i].ext_size,
+                                &new->info.enums.enm[i], LYEXT_PAR_TYPE_ENUM,
+                                &new->info.enums.enm[i].ext, shallow, unres)) {
+                    return -1;
+                }
             }
-            new->info.str.patterns = lys_restr_dup(mod, old->info.str.patterns, old->info.str.pat_count, shallow, unres);
-            new->info.str.pat_count = old->info.str.pat_count;
-            break;
+        }
+        break;
 
-        case LY_TYPE_UNION:
-            new->info.uni.count = old->info.uni.count;
-            if (new->info.uni.count) {
-                new->info.uni.types = calloc(new->info.uni.count, sizeof *new->info.uni.types);
-                LY_CHECK_ERR_RETURN(!new->info.uni.types, LOGMEM, -1);
-
-                for (i = 0; i < new->info.uni.count; i++) {
-                    if (lys_type_dup(mod, parent, &(new->info.uni.types[i]), &(old->info.uni.types[i]),
-                                     in_grp, shallow, unres)) {
+    case LY_TYPE_IDENT:
+        new->info.ident.count = old->info.ident.count;
+        if (old->info.ident.count) {
+            new->info.ident.ref = malloc(old->info.ident.count * sizeof *new->info.ident.ref);
+            LY_CHECK_ERR_RETURN(!new->info.ident.ref, LOGMEM, -1);
+            memcpy(new->info.ident.ref, old->info.ident.ref, old->info.ident.count * sizeof *new->info.ident.ref);
+        } else {
+            /* there can be several unresolved base identities, duplicate them all */
+            i = -1;
+            do {
+                i = unres_schema_find(unres, i, old, UNRES_TYPE_IDENTREF);
+                if (i != -1) {
+                    if (unres_schema_add_str(mod, unres, new, UNRES_TYPE_IDENTREF, unres->str_snode[i]) == -1) {
                         return -1;
                     }
                 }
-            }
-            break;
+                --i;
+            } while (i > -1);
+        }
+        break;
 
-        default:
-            /* nothing to do for LY_TYPE_BOOL, LY_TYPE_EMPTY */
-            break;
+    case LY_TYPE_INST:
+        new->info.inst.req = old->info.inst.req;
+        break;
+
+    case LY_TYPE_INT8:
+    case LY_TYPE_INT16:
+    case LY_TYPE_INT32:
+    case LY_TYPE_INT64:
+    case LY_TYPE_UINT8:
+    case LY_TYPE_UINT16:
+    case LY_TYPE_UINT32:
+    case LY_TYPE_UINT64:
+        if (old->info.num.range) {
+            new->info.num.range = lys_restr_dup(mod, old->info.num.range, 1, shallow, unres);
+        }
+        break;
+
+    case LY_TYPE_LEAFREF:
+        if (old->info.lref.path) {
+            new->info.lref.path = lydict_insert(mod->ctx, old->info.lref.path, 0);
+            if (!in_grp && unres_schema_add_node(mod, unres, new, UNRES_TYPE_LEAFREF, parent) == -1) {
+                return -1;
+            }
+        }
+        break;
+
+    case LY_TYPE_STRING:
+        if (old->info.str.length) {
+            new->info.str.length = lys_restr_dup(mod, old->info.str.length, 1, shallow, unres);
+        }
+        new->info.str.patterns = lys_restr_dup(mod, old->info.str.patterns, old->info.str.pat_count, shallow, unres);
+        new->info.str.pat_count = old->info.str.pat_count;
+        break;
+
+    case LY_TYPE_UNION:
+        new->info.uni.has_ptr_type = old->info.uni.has_ptr_type;
+        new->info.uni.count = old->info.uni.count;
+        if (new->info.uni.count) {
+            new->info.uni.types = calloc(new->info.uni.count, sizeof *new->info.uni.types);
+            LY_CHECK_ERR_RETURN(!new->info.uni.types, LOGMEM, -1);
+
+            for (i = 0; i < new->info.uni.count; i++) {
+                if (lys_type_dup(mod, parent, &(new->info.uni.types[i]), &(old->info.uni.types[i]), in_grp,
+                        shallow, unres)) {
+                    return -1;
+                }
+            }
+        }
+        break;
+
+    default:
+        /* nothing to do for LY_TYPE_BOOL, LY_TYPE_EMPTY */
+        break;
     }
+
     return EXIT_SUCCESS;
 }
 
@@ -1508,6 +1512,88 @@ lys_yang_type_dup(struct lys_module *module, struct lys_node *parent, struct yan
     error:
     free(new);
     return NULL;
+}
+
+int
+lys_copy_union_leafrefs(struct lys_module *mod, struct lys_node *parent, struct lys_type *type, struct lys_type *prev_new,
+                        struct unres_schema *unres)
+{
+    struct lys_type new;
+    int i, top_type;
+    struct lys_ext_instance **ext;
+    uint8_t ext_size;
+    void *reloc;
+
+    if (!prev_new) {
+        /* this is the "top-level" type, meaning it is a real type and no typedef directly above */
+        top_type = 1;
+
+        memset(&new, 0, sizeof new);
+
+        new.module_name = lydict_insert(mod->ctx, type->module_name, 0);
+        new.base = type->base;
+        new.parent = (struct lys_tpdf *)parent;
+
+        prev_new = &new;
+    } else {
+        /* this is not top-level type, just a type of a typedef */
+        top_type = 0;
+    }
+
+    if (type->der && type->der->module) {
+        /* typedef, skip it, but keep the extensions */
+        ext_size = type->ext_size;
+        if (lys_ext_dup(mod, type->ext, type->ext_size, (prev_new ? prev_new : &new), LYEXT_PAR_TYPE, &ext, 0, unres)) {
+            return -1;
+        }
+        if (prev_new->ext) {
+            reloc = realloc(prev_new->ext, (prev_new->ext_size + ext_size) * sizeof *prev_new->ext);
+            LY_CHECK_ERR_RETURN(!reloc, LOGMEM, -1);
+
+            memcpy(prev_new->ext + prev_new->ext_size, ext, ext_size * sizeof *ext);
+            free(ext);
+
+            prev_new->ext_size += ext_size;
+        } else {
+            prev_new->ext = ext;
+            prev_new->ext_size = ext_size;
+        }
+
+        if (lys_copy_union_leafrefs(mod, parent, &type->der->type, prev_new, unres)) {
+            return -1;
+        }
+    } else {
+        /* type, just make a deep copy */
+        switch (type->base) {
+        case LY_TYPE_UNION:
+            prev_new->info.uni.has_ptr_type = type->info.uni.has_ptr_type;
+            prev_new->info.uni.count = type->info.uni.count;
+            /* this cannot be a typedef anymore */
+            assert(prev_new->info.uni.count);
+
+            prev_new->info.uni.types = calloc(prev_new->info.uni.count, sizeof *prev_new->info.uni.types);
+            LY_CHECK_ERR_RETURN(!prev_new->info.uni.types, LOGMEM, -1);
+
+            for (i = 0; i < prev_new->info.uni.count; i++) {
+                if (lys_copy_union_leafrefs(mod, parent, &(type->info.uni.types[i]), &(prev_new->info.uni.types[i]), unres)) {
+                    return -1;
+                }
+            }
+
+            prev_new->der = type->der;
+            break;
+        default:
+            if (lys_type_dup(mod, parent, prev_new, type, 0, 0, unres)) {
+                return -1;
+            }
+            break;
+        }
+    }
+
+    if (top_type) {
+        memcpy(type, prev_new, sizeof *type);
+    }
+    return EXIT_SUCCESS;
 }
 
 API const void *
@@ -3637,6 +3723,8 @@ lys_child(const struct lys_node *node, LYS_NODE nodetype)
             return NULL;
         }
         return (struct lys_node **)pp;
+    } else if (node->nodetype & (LYS_LEAF | LYS_LEAFLIST)) {
+        return NULL;
     } else {
         return (struct lys_node **)&node->child;
     }
@@ -3757,88 +3845,21 @@ lys_data_path_reverse(const struct lys_node *node, char * const buf, uint32_t bu
 #endif
 
 API struct ly_set *
-lys_find_xpath(struct ly_ctx *ctx, const struct lys_node *node, const char *expr, int options)
-{
-    struct lyxp_set set;
-    struct ly_set *ret_set;
-    uint32_t i;
-    int opts;
-
-    if ((!ctx && !node) || !expr) {
-        ly_errno = LY_EINVAL;
-        return NULL;
-    }
-
-    if (!node) {
-        node = ly_ctx_get_node(ctx, NULL, "/ietf-yang-library:modules-state");
-        if (!node) {
-            ly_errno = LY_EINT;
-            return NULL;
-        }
-    }
-
-    memset(&set, 0, sizeof set);
-
-    opts = LYXP_SNODE;
-    if (options & LYS_FIND_OUTPUT) {
-        opts |= LYXP_SNODE_OUTPUT;
-    }
-
-    if (lyxp_atomize(expr, node, LYXP_NODE_ELEM, &set, opts)) {
-        /* just find a relevant node to put in path, if it fails, use the original one */
-        for (i = 0; i < set.used; ++i) {
-            if (set.val.snodes[i].in_ctx == 1) {
-                node = set.val.snodes[i].snode;
-                break;
-            }
-        }
-        free(set.val.snodes);
-        LOGVAL(LYE_SPEC, LY_VLOG_LYS, node, "Resolving XPath expression \"%s\" failed.", expr);
-        return NULL;
-    }
-
-    ret_set = ly_set_new();
-
-    for (i = 0; i < set.used; ++i) {
-        if (!set.val.snodes[i].in_ctx) {
-            continue;
-        }
-        assert(set.val.snodes[i].in_ctx == 1);
-
-        switch (set.val.snodes[i].type) {
-        case LYXP_NODE_ELEM:
-            if (ly_set_add(ret_set, set.val.snodes[i].snode, LY_SET_OPT_USEASLIST) == -1) {
-                ly_set_free(ret_set);
-                free(set.val.snodes);
-                return NULL;
-            }
-            break;
-        default:
-            /* ignore roots, text and attr should not ever appear */
-            break;
-        }
-    }
-
-    free(set.val.snodes);
-    return ret_set;
-}
-
-API struct ly_set *
-lys_xpath_atomize(const struct lys_node *cur_snode, enum lyxp_node_type cur_snode_type, const char *expr, int options)
+lys_xpath_atomize(const struct lys_node *ctx_node, enum lyxp_node_type ctx_node_type, const char *expr, int options)
 {
     struct lyxp_set set;
     struct ly_set *ret_set;
     uint32_t i;
 
-    if (!cur_snode || !expr) {
+    if (!ctx_node || !expr) {
         return NULL;
     }
 
     /* adjust the root */
-    if ((cur_snode_type == LYXP_NODE_ROOT) || (cur_snode_type == LYXP_NODE_ROOT_CONFIG)) {
+    if ((ctx_node_type == LYXP_NODE_ROOT) || (ctx_node_type == LYXP_NODE_ROOT_CONFIG)) {
         do {
-            cur_snode = lys_getnext(NULL, NULL, lys_node_module(cur_snode), 0);
-        } while ((cur_snode_type == LYXP_NODE_ROOT_CONFIG) && (cur_snode->flags & LYS_CONFIG_R));
+            ctx_node = lys_getnext(NULL, NULL, lys_node_module(ctx_node), 0);
+        } while ((ctx_node_type == LYXP_NODE_ROOT_CONFIG) && (ctx_node->flags & LYS_CONFIG_R));
     }
 
     memset(&set, 0, sizeof set);
@@ -3853,9 +3874,9 @@ lys_xpath_atomize(const struct lys_node *cur_snode, enum lyxp_node_type cur_snod
         options |= LYXP_SNODE;
     }
 
-    if (lyxp_atomize(expr, cur_snode, cur_snode_type, &set, options)) {
+    if (lyxp_atomize(expr, ctx_node, ctx_node_type, &set, options, NULL)) {
         free(set.val.snodes);
-        LOGVAL(LYE_SPEC, LY_VLOG_LYS, cur_snode, "Resolving XPath expression \"%s\" failed.", expr);
+        LOGVAL(LYE_SPEC, LY_VLOG_LYS, ctx_node, "Resolving XPath expression \"%s\" failed.", expr);
         return NULL;
     }
 
@@ -4062,6 +4083,7 @@ lys_switch_deviation(struct lys_deviation *dev, const struct lys_module *module,
     int ret;
     char *parent_path;
     struct lys_node *target = NULL, *parent;
+    struct ly_set *set;
 
     if (!dev->deviate) {
         return;
@@ -4100,12 +4122,16 @@ lys_switch_deviation(struct lys_deviation *dev, const struct lys_module *module,
                 } else {
                     /* non-augment, non-toplevel */
                     parent_path = strndup(dev->target_name, strrchr(dev->target_name, '/') - dev->target_name);
-                    ret = resolve_augment_schema_nodeid(parent_path, NULL, module, (const struct lys_node **)&target);
+                    ret = resolve_schema_nodeid(parent_path, NULL, module, &set, 0, 1);
                     free(parent_path);
-                    if (ret || !target) {
+                    if (ret == -1) {
                         LOGINT;
+                        ly_set_free(set);
                         return;
                     }
+                    target = set->set.s[0];
+                    ly_set_free(set);
+
                     lys_node_addchild(target, NULL, dev->orig_node);
                 }
             } else {
@@ -4116,11 +4142,14 @@ lys_switch_deviation(struct lys_deviation *dev, const struct lys_module *module,
             dev->orig_node = NULL;
         } else {
             /* adding not-supported deviation */
-            ret = resolve_augment_schema_nodeid(dev->target_name, NULL, module, (const struct lys_node **)&target);
-            if (ret || !target) {
+            ret = resolve_schema_nodeid(dev->target_name, NULL, module, &set, 0, 1);
+            if (ret == -1) {
                 LOGINT;
+                ly_set_free(set);
                 return;
             }
+            target = set->set.s[0];
+            ly_set_free(set);
 
             /* unlink and store the original node */
             parent = target->parent;
@@ -4134,11 +4163,14 @@ lys_switch_deviation(struct lys_deviation *dev, const struct lys_module *module,
             dev->orig_node = target;
         }
     } else {
-        ret = resolve_augment_schema_nodeid(dev->target_name, NULL, module, (const struct lys_node **)&target);
-        if (ret || !target) {
+        ret = resolve_schema_nodeid(dev->target_name, NULL, module, &set, 0, 1);
+        if (ret == -1) {
             LOGINT;
+            ly_set_free(set);
             return;
         }
+        target = set->set.s[0];
+        ly_set_free(set);
 
         lys_node_switch(target, dev->orig_node);
         dev->orig_node = target;
@@ -4526,13 +4558,66 @@ lys_path(const struct lys_node *node)
 
     /* build the path */
     buf[index] = '\0';
-    ly_vlog_build_path_reverse(LY_VLOG_LYS, node, buf, &index, 0);
+    ly_vlog_build_path_reverse(LY_VLOG_LYS, node, buf, &index);
     result = strdup(&buf[index]);
     if (!result) {
         LOGMEM;
         /* pass through to cleanup */
     }
 
+    /* restore the shared internal buffer */
+    if (buf_backup) {
+        strcpy(buf, buf_backup);
+        free(buf_backup);
+    }
+    ly_buf_used--;
+
+    return result;
+}
+
+API char *
+lys_data_path(const struct lys_node *node)
+{
+    char *buf_backup = NULL, *buf = ly_buf(), *result = NULL;
+    int i, used;
+    struct ly_set *set;
+    const struct lys_module *prev_mod;
+
+    if (!node) {
+        LOGERR(LY_EINVAL, "%s: NULL node parameter", __func__);
+        return NULL;
+    }
+
+    /* backup the shared internal buffer */
+    if (ly_buf_used && buf[0]) {
+        buf_backup = strndup(buf, LY_BUF_SIZE - 1);
+    }
+    ly_buf_used++;
+
+    set = ly_set_new();
+    LY_CHECK_ERR_GOTO(!set, LOGMEM, error);
+
+    while (node) {
+        ly_set_add(set, (void *)node, 0);
+        do {
+            node = lys_parent(node);
+        } while (node && (node->nodetype & (LYS_USES | LYS_CHOICE | LYS_CASE | LYS_INPUT | LYS_OUTPUT)));
+    }
+
+    prev_mod = NULL;
+    used = 0;
+    for (i = set->number - 1; i > -1; --i) {
+        node = set->set.s[i];
+        used += sprintf(buf + used, "/%s%s%s", (lys_node_module(node) == prev_mod ? "" : lys_node_module(node)->name),
+                        (lys_node_module(node) == prev_mod ? "" : ":"), node->name);
+        prev_mod = lys_node_module(node);
+    }
+
+    result = strdup(buf);
+    LY_CHECK_ERR_GOTO(!result, LOGMEM, error);
+
+error:
+    ly_set_free(set);
     /* restore the shared internal buffer */
     if (buf_backup) {
         strcpy(buf, buf_backup);
@@ -4594,6 +4679,24 @@ lys_getnext_target_aug(struct lys_node_augment *last, const struct lys_module *m
     }
 
     return NULL;
+}
+
+API struct ly_set *
+lys_find_path(const struct lys_module *cur_module, const struct lys_node *cur_node, const char *path)
+{
+    struct ly_set *ret;
+    int rc;
+
+    if ((!cur_module && !cur_node) || !path) {
+        return NULL;
+    }
+
+    rc = resolve_schema_nodeid(path, cur_node, cur_module, &ret, 1, 1);
+    if (rc == -1) {
+        return NULL;
+    }
+
+    return ret;
 }
 
 static void
@@ -4677,7 +4780,8 @@ lys_extension_instances_free(struct ly_ctx *ctx, struct lys_ext_instance **e, un
             lydict_remove(ctx, e[i]->arg_value);
         }
 
-        if (e[i]->def && e[i]->def->plugin && e[i]->def->plugin->type == LYEXT_COMPLEX) {
+        if (e[i]->def && e[i]->def->plugin && e[i]->def->plugin->type == LYEXT_COMPLEX
+                && ((e[i]->flags & LYEXT_OPT_CONTENT) == 0)) {
             substmt = ((struct lys_ext_instance_complex *)e[i])->substmt;
             for (j = 0; substmt[j].stmt; j++) {
                 switch(substmt[j].stmt) {

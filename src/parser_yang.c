@@ -2634,15 +2634,18 @@ yang_read_module(struct ly_ctx *ctx, const char* data, unsigned int size, const 
 error:
     /* cleanup */
     unres_schema_free(module, &unres, 1);
-    if (!module || !module->name) {
-        free(module);
+    if (!module) {
         if (ly_vecode != LYVE_SUBMODULE) {
             LOGERR(ly_errno, "Module parsing failed.");
         }
         return NULL;
     }
 
-    LOGERR(ly_errno, "Module \"%s\" parsing failed.", module->name);
+    if (module->name) {
+        LOGERR(ly_errno, "Module \"%s\" parsing failed.", module->name);
+    } else {
+        LOGERR(ly_errno, "Module parsing failed.");
+    }
 
     lyp_check_circmod_pop(ctx);
     lyp_del_includedup(module);
@@ -4333,7 +4336,7 @@ yang_check_deviation(struct lys_module *module, struct unres_schema *unres, stru
     int rc;
     uint i;
     struct lys_node *dev_target = NULL, *parent;
-    struct ly_set *dflt_check = ly_set_new();
+    struct ly_set *dflt_check = ly_set_new(), *set;
     unsigned int u;
     const char *value, *target_name;
     struct lys_node_leaflist *llist;
@@ -4342,12 +4345,15 @@ yang_check_deviation(struct lys_module *module, struct unres_schema *unres, stru
     struct lys_module *mod;
 
     /* resolve target node */
-
-    rc = resolve_augment_schema_nodeid(dev->target_name, NULL, module, (const struct lys_node **)&dev_target);
-    if (rc || !dev_target) {
+    rc = resolve_schema_nodeid(dev->target_name, NULL, module, &set, 0, 1);
+    if (rc == -1) {
         LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, dev->target_name, "deviation");
+        ly_set_free(set);
         goto error;
     }
+    dev_target = set->set.s[0];
+    ly_set_free(set);
+
     if (dev_target->module == lys_main_module(module)) {
         LOGVAL(LYE_INARG, LY_VLOG_NONE, NULL, dev->target_name, "deviation");
         LOGVAL(LYE_SPEC, LY_VLOG_NONE, NULL, "Deviating own module is not allowed.");
