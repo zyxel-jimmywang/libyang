@@ -395,7 +395,12 @@ _transform_json2xml(const struct lys_module *module, const char *expr, int schem
                 }
                 prefix = mod->prefix;
             } else {
-                name_len = end - cur_expr;
+                if (end) {
+                    name_len = end - cur_expr;
+                } else {
+                    name_len = strlen(cur_expr);
+                    end = cur_expr;
+                }
                 name = strndup(cur_expr, name_len);
                 prefix = transform_module_name2import_prefix(module, name);
                 free(name);
@@ -913,11 +918,11 @@ transform_json2xpath_subexpr(const struct lys_module *cur_module, const struct l
                 name_len = end - cur_expr;
                 name = strndup(cur_expr, name_len);
                 prev_mod = ly_ctx_get_module(cur_module->ctx, name, NULL);
+                free(name);
                 if (!prev_mod) {
                     LOGVAL(LYE_INMOD_LEN, LY_VLOG_NONE, NULL, name_len ? name_len : exp->tok_len[*i], cur_expr);
                     return -1;
                 }
-                free(name);
                 /* skip ":" */
                 ++end;
                 ++name_len;

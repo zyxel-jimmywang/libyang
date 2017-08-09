@@ -1540,15 +1540,17 @@ lys_copy_union_leafrefs(struct lys_module *mod, struct lys_node *parent, struct 
         top_type = 0;
     }
 
-    if (type->der && type->der->module) {
+    assert(type->der);
+    if (type->der->module) {
         /* typedef, skip it, but keep the extensions */
         ext_size = type->ext_size;
-        if (lys_ext_dup(mod, type->ext, type->ext_size, (prev_new ? prev_new : &new), LYEXT_PAR_TYPE, &ext, 0, unres)) {
+        if (lys_ext_dup(mod, type->ext, type->ext_size, prev_new, LYEXT_PAR_TYPE, &ext, 0, unres)) {
             return -1;
         }
         if (prev_new->ext) {
             reloc = realloc(prev_new->ext, (prev_new->ext_size + ext_size) * sizeof *prev_new->ext);
             LY_CHECK_ERR_RETURN(!reloc, LOGMEM, -1);
+            prev_new->ext = reloc;
 
             memcpy(prev_new->ext + prev_new->ext_size, ext, ext_size * sizeof *ext);
             free(ext);
