@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "common.h"
+#include "context.h"
 #include "tree_internal.h"
 
 volatile int8_t ly_log_level = LY_LLERR;
@@ -64,7 +65,7 @@ API void
 }
 
 static void
-log_vprintf(LY_LOG_LEVEL level, uint8_t hide, const char *format, const char *path, va_list args)
+log_vprintf(struct ly_ctx *ctx, LY_LOG_LEVEL level, uint8_t hide, const char *format, const char *path, va_list args)
 {
     char *msg, *bufdup = NULL;
     struct ly_err_item *eitem;
@@ -101,23 +102,27 @@ log_vprintf(LY_LOG_LEVEL level, uint8_t hide, const char *format, const char *pa
         ly_err_main.apptag[0] = '\0';
 
         /* store error information into a list */
-        if (!ly_err_main.errlist) {
-            eitem = ly_err_main.errlist = malloc(sizeof *eitem);
-        } else {
-            for (eitem = ly_err_main.errlist; eitem->next; eitem = eitem->next);
-            eitem->next = malloc(sizeof *eitem->next);
-            eitem = eitem->next;
-        }
-        if (eitem) {
-            eitem->no = ly_errno;
-            eitem->code = ly_vecode;
-            eitem->msg = strdup(msg);
-            if (path) {
-                eitem->path = strdup(path);
+        if (ctx) {
+            eitem = pthread_getspecific(ctx->errlist_key);
+            if (!eitem) {
+                eitem = malloc(sizeof *eitem);
+                pthread_setspecific(ctx->errlist_key, eitem);
             } else {
-                eitem->path = NULL;
+                for (; eitem->next; eitem = eitem->next);
+                eitem->next = malloc(sizeof *eitem->next);
+                eitem = eitem->next;
             }
-            eitem->next = NULL;
+            if (eitem) {
+                eitem->no = ly_errno;
+                eitem->code = ly_vecode;
+                eitem->msg = strdup(msg);
+                if (path) {
+                    eitem->path = strdup(path);
+                } else {
+                    eitem->path = NULL;
+                }
+                eitem->next = NULL;
+            }
         }
     }
 
@@ -144,12 +149,12 @@ clean:
 }
 
 void
-ly_log(LY_LOG_LEVEL level, const char *format, ...)
+ly_log(struct ly_ctx *ctx, LY_LOG_LEVEL level, const char *format, ...)
 {
     va_list ap;
 
     va_start(ap, format);
-    log_vprintf(level, ly_err_main.vlog_hide, format, NULL, ap);
+    log_vprintf(ctx, level, ly_err_main.vlog_hide, format, NULL, ap);
     va_end(ap);
 }
 
@@ -183,24 +188,24 @@ ly_log_dbg(LY_LOG_DBG_GROUP group, const char *format, ...)
         str_group = "DIFF";
         break;
     default:
-        LOGINT;
+        LOGINT(NULL);
         return;
     }
 
     if (asprintf(&dbg_format, "%s: %s", str_group, format) == -1) {
-        LOGMEM;
+        LOGMEM(NULL);
         return;
     }
 
     va_start(ap, format);
-    log_vprintf(LY_LLDBG, ly_err_main.vlog_hide, dbg_format, NULL, ap);
+    log_vprintf(NULL, LY_LLDBG, ly_err_main.vlog_hide, dbg_format, NULL, ap);
     va_end(ap);
 }
 
 #endif
 
 void
-lyext_log(LY_LOG_LEVEL level, const char *plugin, const char *function, const char *format, ...)
+lyext_log(struct ly_ctx *ctx, LY_LOG_LEVEL level, const char *plugin, const char *function, const char *format, ...)
 {
     va_list ap;
     char *plugin_msg;
@@ -214,12 +219,12 @@ lyext_log(LY_LOG_LEVEL level, const char *plugin, const char *function, const ch
     }
 
     if (asprintf(&plugin_msg, "%s (reported by extension plugin %s, %s())", format, plugin, function) == -1) {
-        LOGMEM;
+        LOGMEM(ctx);
         return;
     }
 
     va_start(ap, format);
-    log_vprintf(level, ly_err_main.vlog_hide, plugin_msg, NULL, ap);
+    log_vprintf(ctx, level, ly_err_main.vlog_hide, plugin_msg, NULL, ap);
     va_end(ap);
 
     free(plugin_msg);
@@ -548,7 +553,7 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
                     }
 
                     str = malloc(len + 1);
-                    LY_CHECK_ERR_RETURN(!str, LOGMEM, );
+                    LY_CHECK_ERR_RETURN(!str, LOGMEM(NULL), );
                     sprintf(str, "%d", i);
 
                     (*index) -= len;
@@ -590,7 +595,7 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
             return;
         default:
             /* shouldn't be here */
-            LOGINT;
+            LOGINT(NULL);
             return;
         }
         if (name) {
@@ -614,7 +619,7 @@ ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *
 }
 
 void
-ly_vlog(LY_ECODE code, enum LY_VLOG_ELEM elem_type, const void *elem, ...)
+ly_vlog(struct ly_ctx *ctx, LY_ECODE code, enum LY_VLOG_ELEM elem_type, const void *elem, ...)
 {
     va_list ap;
     const char *fmt;
@@ -657,13 +662,13 @@ log:
     switch (code) {
     case LYE_SPEC:
         fmt = va_arg(ap, char *);
-        log_vprintf(LY_LLERR, ly_err_main.vlog_hide, fmt, index && path[(*index)] ? &path[(*index)] : NULL, ap);
+        log_vprintf(ctx, LY_LLERR, ly_err_main.vlog_hide, fmt, index && path[(*index)] ? &path[(*index)] : NULL, ap);
         break;
     case LYE_PATH:
-        log_vprintf(LY_LLERR, ly_err_main.vlog_hide, NULL, &path[(*index)], ap);
+        log_vprintf(ctx, LY_LLERR, ly_err_main.vlog_hide, NULL, &path[(*index)], ap);
         break;
     default:
-        log_vprintf(LY_LLERR, ly_err_main.vlog_hide, ly_errs[code],
+        log_vprintf(ctx, LY_LLERR, ly_err_main.vlog_hide, ly_errs[code],
                     index && path[(*index)] ? &path[(*index)] : NULL, ap);
         break;
     }
@@ -671,12 +676,12 @@ log:
 }
 
 void
-ly_err_repeat(void)
+ly_err_repeat(struct ly_ctx *ctx)
 {
     struct ly_err_item *i;
 
     if ((ly_log_level >= LY_LLERR) && !ly_err_main.vlog_hide) {
-        for (i = ly_err_main.errlist; i; i = i->next) {
+        for (i = pthread_getspecific(ctx->errlist_key); i; i = i->next) {
             if (ly_log_clb) {
                 ly_log_clb(LY_LLERR, i->msg, i->path);
             } else {

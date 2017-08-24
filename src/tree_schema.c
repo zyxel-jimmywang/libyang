@@ -204,7 +204,7 @@ lys_getnext(const struct lys_node *last, const struct lys_node *parent, const st
     struct lys_node **snode;
 
     if ((!parent && !module) || (parent && (parent->nodetype == LYS_USES) && !(options & LYS_GETNEXT_PARENTUSES))) {
-        LOGERR(LY_EINVAL, "%s: Invalid parameter.", __func__);
+        LOGERR(NULL, LY_EINVAL, "%s: Invalid parameter.", __func__);
         return NULL;
     }
 
@@ -552,7 +552,7 @@ lys_check_id(struct lys_node *node, struct lys_node *parent, struct lys_module *
         }
         /* go up */
         if (up && lys_find_grouping_up(node->name, start)) {
-            LOGVAL(LYE_DUPID, LY_VLOG_LYS, node, "grouping", node->name);
+            LOGVAL(module->ctx, LYE_DUPID, LY_VLOG_LYS, node, "grouping", node->name);
             return EXIT_FAILURE;
         }
         /* go down, because grouping can be defined after e.g. container in which is collision */
@@ -570,7 +570,7 @@ lys_check_id(struct lys_node *node, struct lys_node *parent, struct lys_module *
                 grp = NULL;
                 while ((grp = lys_get_next_grouping(grp, iter))) {
                     if (ly_strequal(node->name, grp->name, 1)) {
-                        LOGVAL(LYE_DUPID,LY_VLOG_LYS, node, "grouping", node->name);
+                        LOGVAL(module->ctx, LYE_DUPID,LY_VLOG_LYS, node, "grouping", node->name);
                         return EXIT_FAILURE;
                     }
                 }
@@ -621,7 +621,7 @@ lys_check_id(struct lys_node *node, struct lys_node *parent, struct lys_module *
 
             if (iter->nodetype & (LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_CONTAINER | LYS_CHOICE | LYS_ANYDATA)) {
                 if (iter->module == node->module && ly_strequal(iter->name, node->name, 1)) {
-                    LOGVAL(LYE_DUPID, LY_VLOG_LYS, node, strnodetype(node->nodetype), node->name);
+                    LOGVAL(module->ctx, LYE_DUPID, LY_VLOG_LYS, node, strnodetype(node->nodetype), node->name);
                     return EXIT_FAILURE;
                 }
             }
@@ -670,7 +670,7 @@ lys_check_id(struct lys_node *node, struct lys_node *parent, struct lys_module *
             }
 
             if (iter->module == node->module && ly_strequal(iter->name, node->name, 1)) {
-                LOGVAL(LYE_DUPID, LY_VLOG_LYS, node, "case", node->name);
+                LOGVAL(module->ctx, LYE_DUPID, LY_VLOG_LYS, node, "case", node->name);
                 return EXIT_FAILURE;
             }
         }
@@ -714,7 +714,7 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
         if (!(child->nodetype &
                 (LYS_ANYDATA | LYS_CHOICE | LYS_CONTAINER | LYS_GROUPING | LYS_LEAF |
                  LYS_LEAFLIST | LYS_LIST | LYS_USES | LYS_ACTION | LYS_NOTIF))) {
-            LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), strnodetype(parent->nodetype));
+            LOGVAL(module->ctx, LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), strnodetype(parent->nodetype));
             return EXIT_FAILURE;
         }
         break;
@@ -724,14 +724,14 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
         if (!(child->nodetype &
                 (LYS_ANYDATA | LYS_CHOICE | LYS_CONTAINER | LYS_GROUPING | LYS_LEAF |
                  LYS_LEAFLIST | LYS_LIST | LYS_USES))) {
-            LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), strnodetype(parent->nodetype));
+            LOGVAL(module->ctx, LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), strnodetype(parent->nodetype));
             return EXIT_FAILURE;
         }
         break;
     case LYS_CHOICE:
         if (!(child->nodetype &
                 (LYS_ANYDATA | LYS_CASE | LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_CHOICE))) {
-            LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), "choice");
+            LOGVAL(module->ctx, LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), "choice");
             return EXIT_FAILURE;
         }
         if (child->nodetype != LYS_CASE) {
@@ -741,14 +741,14 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
     case LYS_CASE:
         if (!(child->nodetype &
                 (LYS_ANYDATA | LYS_CHOICE | LYS_CONTAINER | LYS_LEAF | LYS_LEAFLIST | LYS_LIST | LYS_USES))) {
-            LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), "case");
+            LOGVAL(module->ctx, LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), "case");
             return EXIT_FAILURE;
         }
         break;
     case LYS_RPC:
     case LYS_ACTION:
         if (!(child->nodetype & (LYS_INPUT | LYS_OUTPUT | LYS_GROUPING))) {
-            LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), "rpc");
+            LOGVAL(module->ctx, LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), "rpc");
             return EXIT_FAILURE;
         }
         break;
@@ -756,15 +756,15 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
     case LYS_LEAFLIST:
     case LYS_ANYXML:
     case LYS_ANYDATA:
-        LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), strnodetype(parent->nodetype));
-        LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL, "The \"%s\" statement cannot have any data substatement.",
+        LOGVAL(module->ctx, LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), strnodetype(parent->nodetype));
+        LOGVAL(module->ctx, LYE_SPEC, LY_VLOG_PREV, NULL, "The \"%s\" statement cannot have any data substatement.",
                strnodetype(parent->nodetype));
         return EXIT_FAILURE;
     case LYS_AUGMENT:
         if (!(child->nodetype &
                 (LYS_ANYDATA | LYS_CASE | LYS_CHOICE | LYS_CONTAINER | LYS_LEAF
                 | LYS_LEAFLIST | LYS_LIST | LYS_USES | LYS_ACTION | LYS_NOTIF))) {
-            LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), strnodetype(parent->nodetype));
+            LOGVAL(module->ctx, LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), strnodetype(parent->nodetype));
             return EXIT_FAILURE;
         }
         break;
@@ -773,7 +773,7 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
         if (!(child->nodetype &
                 (LYS_ANYDATA | LYS_CHOICE | LYS_CONTAINER | LYS_LEAF | LYS_GROUPING
                 | LYS_LEAFLIST | LYS_LIST | LYS_USES | LYS_RPC | LYS_NOTIF | LYS_AUGMENT))) {
-            LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), "(sub)module");
+            LOGVAL(module->ctx, LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype), "(sub)module");
             return EXIT_FAILURE;
         }
         break;
@@ -781,7 +781,7 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
         /* plugin-defined */
         p = lys_ext_complex_get_substmt(lys_snode2stmt(child->nodetype), (struct lys_ext_instance_complex*)parent, &info);
         if (!p) {
-            LOGVAL(LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype),
+            LOGVAL(module->ctx, LYE_INCHILDSTMT, LY_VLOG_LYS, parent, strnodetype(child->nodetype),
                    ((struct lys_ext_instance_complex*)parent)->def->name);
             return EXIT_FAILURE;
         }
@@ -826,7 +826,7 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
             /* create the implicit case to allow it to serve as a target of the augments,
              * it won't be printed, but it will be present in the tree */
             c = calloc(1, sizeof *c);
-            LY_CHECK_ERR_RETURN(!c, LOGMEM, EXIT_FAILURE);
+            LY_CHECK_ERR_RETURN(!c, LOGMEM(module->ctx), EXIT_FAILURE);
             c->name = lydict_insert(module->ctx, child->name, 0);
             c->flags = LYS_IMPLICIT;
             c->module = module;
@@ -885,8 +885,8 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
     if (parent && !iter) {
         for (iter = child; iter && !(iter->nodetype & (LYS_NOTIF | LYS_INPUT | LYS_OUTPUT | LYS_RPC)); iter = iter->parent);
         if (!iter && (parent->flags & LYS_CONFIG_R) && (child->flags & LYS_CONFIG_W)) {
-            LOGVAL(LYE_INARG, LY_VLOG_LYS, child, "true", "config");
-            LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL, "State nodes cannot have configuration nodes as children.");
+            LOGVAL(module->ctx, LYE_INARG, LY_VLOG_LYS, child, "true", "config");
+            LOGVAL(module->ctx, LYE_SPEC, LY_VLOG_PREV, NULL, "State nodes cannot have configuration nodes as children.");
             return EXIT_FAILURE;
         }
     }
@@ -912,7 +912,7 @@ lys_node_addchild(struct lys_node *parent, struct lys_module *module, struct lys
         in = calloc(1, sizeof *in);
         out = calloc(1, sizeof *out);
         if (!in || !out) {
-            LOGMEM;
+            LOGMEM(module->ctx);
             free(in);
             free(out);
             return EXIT_FAILURE;
@@ -939,18 +939,18 @@ lys_parse_mem_(struct ly_ctx *ctx, const char *data, LYS_INFORMAT format, int in
     struct lys_module *mod = NULL;
     unsigned int len;
 
-    ly_err_clean(1);
-
     if (!ctx || !data) {
-        LOGERR(LY_EINVAL, "%s: Invalid parameter.", __func__);
+        LOGERR(NULL, LY_EINVAL, "%s: Invalid parameter.", __func__);
         return NULL;
     }
+
+    ly_err_clean(ctx, 1);
 
     if (!internal && format == LYS_IN_YANG) {
         /* enlarge data by 2 bytes for flex */
         len = strlen(data);
         enlarged_data = malloc((len + 2) * sizeof *enlarged_data);
-        LY_CHECK_ERR_RETURN(!enlarged_data, LOGMEM, NULL);
+        LY_CHECK_ERR_RETURN(!enlarged_data, LOGMEM(ctx), NULL);
         memcpy(enlarged_data, data, len);
         enlarged_data[len] = enlarged_data[len + 1] = '\0';
         data = enlarged_data;
@@ -964,7 +964,7 @@ lys_parse_mem_(struct ly_ctx *ctx, const char *data, LYS_INFORMAT format, int in
         mod = yang_read_module(ctx, data, 0, NULL, implement);
         break;
     default:
-        LOGERR(LY_EINVAL, "Invalid schema input format.");
+        LOGERR(ctx, LY_EINVAL, "Invalid schema input format.");
         break;
     }
 
@@ -1005,7 +1005,7 @@ lys_sub_parse_mem(struct lys_module *module, const char *data, LYS_INFORMAT form
         /* enlarge data by 2 bytes for flex */
         len = strlen(data);
         enlarged_data = malloc((len + 2) * sizeof *enlarged_data);
-        LY_CHECK_ERR_RETURN(!enlarged_data, LOGMEM, NULL);
+        LY_CHECK_ERR_RETURN(!enlarged_data, LOGMEM(module->ctx), NULL);
         memcpy(enlarged_data, data, len);
         enlarged_data[len] = enlarged_data[len + 1] = '\0';
         data = enlarged_data;
@@ -1039,13 +1039,13 @@ lys_parse_path(struct ly_ctx *ctx, const char *path, LYS_INFORMAT format)
     size_t len;
 
     if (!ctx || !path) {
-        LOGERR(LY_EINVAL, "%s: Invalid parameter.", __func__);
+        LOGERR(NULL, LY_EINVAL, "%s: Invalid parameter.", __func__);
         return NULL;
     }
 
     fd = open(path, O_RDONLY);
     if (fd == -1) {
-        LOGERR(LY_ESYS, "Opening file \"%s\" failed (%s).", path, strerror(errno));
+        LOGERR(ctx, LY_ESYS, "Opening file \"%s\" failed (%s).", path, strerror(errno));
         return NULL;
     }
 
@@ -1099,16 +1099,16 @@ lys_parse_fd(struct ly_ctx *ctx, int fd, LYS_INFORMAT format)
     int len;
 
     if (!ctx || fd < 0) {
-        LOGERR(LY_EINVAL, "%s: Invalid parameter.", __func__);
+        LOGERR(NULL, LY_EINVAL, "%s: Invalid parameter.", __func__);
         return NULL;
     }
 
-    addr = lyp_mmap(fd, format == LYS_IN_YANG ? 1 : 0, &length);
+    addr = lyp_mmap(ctx, fd, format == LYS_IN_YANG ? 1 : 0, &length);
     if (addr == MAP_FAILED) {
-        LOGERR(LY_ESYS, "Mapping file descriptor into memory failed (%s()).", __func__);
+        LOGERR(ctx, LY_ESYS, "Mapping file descriptor into memory failed (%s()).", __func__);
         return NULL;
     } else if (!addr) {
-        LOGERR(LY_EINVAL, "Empty schema file.");
+        LOGERR(ctx, LY_EINVAL, "Empty schema file.");
         return NULL;
     }
 
@@ -1139,12 +1139,12 @@ lys_sub_parse_fd(struct lys_module *module, int fd, LYS_INFORMAT format, struct 
     assert(module);
     assert(fd >= 0);
 
-    addr = lyp_mmap(fd, format == LYS_IN_YANG ? 1 : 0, &length);
+    addr = lyp_mmap(module->ctx, fd, format == LYS_IN_YANG ? 1 : 0, &length);
     if (addr == MAP_FAILED) {
-        LOGERR(LY_ESYS, "Mapping file descriptor into memory failed (%s()).", __func__);
+        LOGERR(module->ctx, LY_ESYS, "Mapping file descriptor into memory failed (%s()).", __func__);
         return NULL;
     } else if (!addr) {
-        LOGERR(LY_EINVAL, "Empty submodule schema file.");
+        LOGERR(module->ctx, LY_EINVAL, "Empty submodule schema file.");
         return NULL;
     }
 
@@ -1159,7 +1159,7 @@ lys_sub_parse_fd(struct lys_module *module, int fd, LYS_INFORMAT format, struct 
         submodule = yang_read_submodule(module, addr, 0, unres);
         break;
     default:
-        LOGINT;
+        LOGINT(module->ctx);
         return NULL;
     }
 
@@ -1199,7 +1199,7 @@ lys_ext_dup(struct lys_module *mod, struct lys_ext_instance **orig, uint8_t size
 
     if (!size) {
         if (orig) {
-            LOGINT;
+            LOGINT(mod->ctx);
             return EXIT_FAILURE;
         }
         (*new) = NULL;
@@ -1207,19 +1207,19 @@ lys_ext_dup(struct lys_module *mod, struct lys_ext_instance **orig, uint8_t size
     }
 
     (*new) = result = calloc(size, sizeof *result);
-    LY_CHECK_ERR_RETURN(!result, LOGMEM, EXIT_FAILURE);
+    LY_CHECK_ERR_RETURN(!result, LOGMEM(mod->ctx), EXIT_FAILURE);
     for (u = 0; u < size; u++) {
         if (orig[u]) {
             /* resolved extension instance, just duplicate it */
             switch(orig[u]->ext_type) {
             case LYEXT_FLAG:
                 result[u] = malloc(sizeof(struct lys_ext_instance));
-                LY_CHECK_ERR_GOTO(!result[u], LOGMEM, error);
+                LY_CHECK_ERR_GOTO(!result[u], LOGMEM(mod->ctx), error);
                 break;
             case LYEXT_COMPLEX:
                 len = ((struct lyext_plugin_complex*)orig[u]->def->plugin)->instance_size;
                 result[u] = calloc(1, len);
-                LY_CHECK_ERR_GOTO(!result[u], LOGMEM, error);
+                LY_CHECK_ERR_GOTO(!result[u], LOGMEM(mod->ctx), error);
 
                 ((struct lys_ext_instance_complex*)result[u])->substmt = ((struct lyext_plugin_complex*)orig[u]->def->plugin)->substmt;
                 /* TODO duplicate data in extension instance content */
@@ -1256,12 +1256,12 @@ lys_ext_dup(struct lys_module *mod, struct lys_ext_instance **orig, uint8_t size
             i = unres_schema_find(unres, -1, &orig, UNRES_EXT);
             if (i == -1) {
                 /* extension not found in unres */
-                LOGINT;
+                LOGINT(mod->ctx);
                 goto error;
             }
             info_orig = unres->str_snode[i];
             info = malloc(sizeof *info);
-            LY_CHECK_ERR_GOTO(!info, LOGMEM, error);
+            LY_CHECK_ERR_GOTO(!info, LOGMEM(mod->ctx), error);
             info->datatype = info_orig->datatype;
             if (info->datatype == LYS_IN_YIN) {
                 info->data.yin = lyxml_dup_elem(mod->ctx, info_orig->data.yin, NULL, 1);
@@ -1295,7 +1295,7 @@ lys_restr_dup(struct lys_module *mod, struct lys_restr *old, int size, int shall
     }
 
     result = calloc(size, sizeof *result);
-    LY_CHECK_ERR_RETURN(!result, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!result, LOGMEM(mod->ctx), NULL);
 
     for (i = 0; i < size; i++) {
         result[i].ext_size = old[i].ext_size;
@@ -1358,7 +1358,7 @@ type_dup(struct lys_module *mod, struct lys_node *parent, struct lys_type *new, 
         new->info.bits.count = old->info.bits.count;
         if (new->info.bits.count) {
             new->info.bits.bit = calloc(new->info.bits.count, sizeof *new->info.bits.bit);
-            LY_CHECK_ERR_RETURN(!new->info.bits.bit, LOGMEM, -1);
+            LY_CHECK_ERR_RETURN(!new->info.bits.bit, LOGMEM(mod->ctx), -1);
 
             for (i = 0; i < new->info.bits.count; i++) {
                 new->info.bits.bit[i].name = lydict_insert(mod->ctx, old->info.bits.bit[i].name, 0);
@@ -1388,7 +1388,7 @@ type_dup(struct lys_module *mod, struct lys_node *parent, struct lys_type *new, 
         new->info.enums.count = old->info.enums.count;
         if (new->info.enums.count) {
             new->info.enums.enm = calloc(new->info.enums.count, sizeof *new->info.enums.enm);
-            LY_CHECK_ERR_RETURN(!new->info.enums.enm, LOGMEM, -1);
+            LY_CHECK_ERR_RETURN(!new->info.enums.enm, LOGMEM(mod->ctx), -1);
 
             for (i = 0; i < new->info.enums.count; i++) {
                 new->info.enums.enm[i].name = lydict_insert(mod->ctx, old->info.enums.enm[i].name, 0);
@@ -1410,7 +1410,7 @@ type_dup(struct lys_module *mod, struct lys_node *parent, struct lys_type *new, 
         new->info.ident.count = old->info.ident.count;
         if (old->info.ident.count) {
             new->info.ident.ref = malloc(old->info.ident.count * sizeof *new->info.ident.ref);
-            LY_CHECK_ERR_RETURN(!new->info.ident.ref, LOGMEM, -1);
+            LY_CHECK_ERR_RETURN(!new->info.ident.ref, LOGMEM(mod->ctx), -1);
             memcpy(new->info.ident.ref, old->info.ident.ref, old->info.ident.count * sizeof *new->info.ident.ref);
         } else {
             /* there can be several unresolved base identities, duplicate them all */
@@ -1466,7 +1466,7 @@ type_dup(struct lys_module *mod, struct lys_node *parent, struct lys_type *new, 
         new->info.uni.count = old->info.uni.count;
         if (new->info.uni.count) {
             new->info.uni.types = calloc(new->info.uni.count, sizeof *new->info.uni.types);
-            LY_CHECK_ERR_RETURN(!new->info.uni.types, LOGMEM, -1);
+            LY_CHECK_ERR_RETURN(!new->info.uni.types, LOGMEM(mod->ctx), -1);
 
             for (i = 0; i < new->info.uni.count; i++) {
                 if (lys_type_dup(mod, parent, &(new->info.uni.types[i]), &(old->info.uni.types[i]), in_grp,
@@ -1492,13 +1492,13 @@ lys_yang_type_dup(struct lys_module *module, struct lys_node *parent, struct yan
     struct yang_type *new;
 
     new = calloc(1, sizeof *new);
-    LY_CHECK_ERR_RETURN(!new, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!new, LOGMEM(module->ctx), NULL);
     new->flags = old->flags;
     new->base = old->base;
     new->name = lydict_insert(module->ctx, old->name, 0);
     new->type = type;
     if (!new->name) {
-        LOGMEM;
+        LOGMEM(module->ctx);
         goto error;
     }
     if (type_dup(module, parent, type, old->type, new->base, in_grp, shallow, unres)) {
@@ -1549,7 +1549,7 @@ lys_copy_union_leafrefs(struct lys_module *mod, struct lys_node *parent, struct 
         }
         if (prev_new->ext) {
             reloc = realloc(prev_new->ext, (prev_new->ext_size + ext_size) * sizeof *prev_new->ext);
-            LY_CHECK_ERR_RETURN(!reloc, LOGMEM, -1);
+            LY_CHECK_ERR_RETURN(!reloc, LOGMEM(mod->ctx), -1);
             prev_new->ext = reloc;
 
             memcpy(prev_new->ext + prev_new->ext_size, ext, ext_size * sizeof *ext);
@@ -1574,7 +1574,7 @@ lys_copy_union_leafrefs(struct lys_module *mod, struct lys_node *parent, struct 
             assert(prev_new->info.uni.count);
 
             prev_new->info.uni.types = calloc(prev_new->info.uni.count, sizeof *prev_new->info.uni.types);
-            LY_CHECK_ERR_RETURN(!prev_new->info.uni.types, LOGMEM, -1);
+            LY_CHECK_ERR_RETURN(!prev_new->info.uni.types, LOGMEM(mod->ctx), -1);
 
             for (i = 0; i < prev_new->info.uni.count; i++) {
                 if (lys_copy_union_leafrefs(mod, parent, &(type->info.uni.types[i]), &(prev_new->info.uni.types[i]), unres)) {
@@ -1879,7 +1879,7 @@ lys_ext_instance_substmt(const struct lys_ext_instance *ext)
         }
         break;
     }
-    LOGINT;
+    LOGINT(NULL);
     return NULL;
 }
 
@@ -2042,7 +2042,7 @@ lys_when_dup(struct lys_module *mod, struct lys_when *old, int shallow, struct u
     }
 
     new = calloc(1, sizeof *new);
-    LY_CHECK_ERR_RETURN(!new, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!new, LOGMEM(mod->ctx), NULL);
     new->cond = lydict_insert(mod->ctx, old->cond, 0);
     new->dsc = lydict_insert(mod->ctx, old->dsc, 0);
     new->ref = lydict_insert(mod->ctx, old->ref, 0);
@@ -2473,7 +2473,7 @@ lys_node_free(struct lys_node *node, void (*private_destructor)(const struct lys
         break;
     case LYS_EXT:
     case LYS_UNKNOWN:
-        LOGINT;
+        LOGINT(ctx);
         break;
     }
 
@@ -2576,7 +2576,7 @@ lys_get_import_module(const struct lys_module *module, const char *prefix, int p
     if (name) {
         str = strndup(name, name_len);
         if (!str) {
-            LOGMEM;
+            LOGMEM(module->ctx);
             return NULL;
         }
         main_module = ly_ctx_get_module(module->ctx, str, NULL);
@@ -2814,10 +2814,10 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
         break;
 
     default:
-        LOGINT;
+        LOGINT(ctx);
         goto error;
     }
-    LY_CHECK_ERR_RETURN(!retval, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!retval, LOGMEM(ctx), NULL);
 
     /*
      * duplicate generic part of the structure
@@ -2840,7 +2840,7 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
     if (node->iffeature_size) {
         retval->iffeature_size = node->iffeature_size;
         retval->iffeature = calloc(retval->iffeature_size, sizeof *retval->iffeature);
-        LY_CHECK_ERR_GOTO(!retval->iffeature, LOGMEM, error);
+        LY_CHECK_ERR_GOTO(!retval->iffeature, LOGMEM(ctx), error);
     }
 
     if (!shallow) {
@@ -2852,12 +2852,12 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
                 /* duplicate compiled expression */
                 size = (size1 / 4) + (size1 % 4) ? 1 : 0;
                 retval->iffeature[i].expr = malloc(size * sizeof *retval->iffeature[i].expr);
-                LY_CHECK_ERR_GOTO(!retval->iffeature[i].expr, LOGMEM, error);
+                LY_CHECK_ERR_GOTO(!retval->iffeature[i].expr, LOGMEM(ctx), error);
                 memcpy(retval->iffeature[i].expr, node->iffeature[i].expr, size * sizeof *retval->iffeature[i].expr);
 
                 /* list of feature pointer must be updated to point to the resulting tree */
                 retval->iffeature[i].features = calloc(size2, sizeof *retval->iffeature[i].features);
-                LY_CHECK_ERR_GOTO(!retval->iffeature[i].features, LOGMEM; free(retval->iffeature[i].expr), error);
+                LY_CHECK_ERR_GOTO(!retval->iffeature[i].features, LOGMEM(ctx); free(retval->iffeature[i].expr), error);
 
                 for (j = 0; (unsigned int)j < size2; j++) {
                     rc = unres_schema_dup(module, unres, &node->iffeature[i].features[j], UNRES_IFFEAT,
@@ -2902,8 +2902,8 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
             if (retval->flags & LYS_CONFIG_SET) {
                 /* skip nodes with an explicit config value */
                 if ((flags & LYS_CONFIG_R) && (retval->flags & LYS_CONFIG_W)) {
-                    LOGVAL(LYE_INARG, LY_VLOG_LYS, retval, "true", "config");
-                    LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL, "State nodes cannot have configuration nodes as children.");
+                    LOGVAL(ctx, LYE_INARG, LY_VLOG_LYS, retval, "true", "config");
+                    LOGVAL(ctx, LYE_SPEC, LY_VLOG_PREV, NULL, "State nodes cannot have configuration nodes as children.");
                     goto error;
                 }
                 break;
@@ -2944,7 +2944,7 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
              * not yet resolved here, it is done below in nodetype specific part */
             if ((retval->nodetype == LYS_LIST) && (retval->flags & LYS_CONFIG_W)
                     && !((struct lys_node_list *)node)->keys_size) {
-                LOGVAL(LYE_MISSCHILDSTMT, LY_VLOG_LYS, retval, "key", "list");
+                LOGVAL(ctx, LYE_MISSCHILDSTMT, LY_VLOG_LYS, retval, "key", "list");
                 goto error;
             }
         }
@@ -2985,7 +2985,7 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
                                             (const struct lys_node **)&choice->dflt);
                 if (rc) {
                     if (rc == EXIT_FAILURE) {
-                        LOGINT;
+                        LOGINT(module->ctx);
                     }
                     goto error;
                 }
@@ -3053,7 +3053,7 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
 
         if (llist_orig->dflt) {
             llist->dflt = malloc(llist_orig->dflt_size * sizeof *llist->dflt);
-            LY_CHECK_ERR_GOTO(!llist->dflt, LOGMEM, error);
+            LY_CHECK_ERR_GOTO(!llist->dflt, LOGMEM(module->ctx), error);
             llist->dflt_size = llist_orig->dflt_size;
 
             for (i = 0; i < llist->dflt_size; i++) {
@@ -3091,7 +3091,7 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
 
         if (list_orig->keys_size) {
             list->keys = calloc(list_orig->keys_size, sizeof *list->keys);
-            LY_CHECK_ERR_GOTO(!list->keys, LOGMEM, error);
+            LY_CHECK_ERR_GOTO(!list->keys, LOGMEM(module->ctx), error);
             list->keys_str = lydict_insert(ctx, list_orig->keys_str, 0);
             list->keys_size = list_orig->keys_size;
 
@@ -3109,19 +3109,19 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
 
         if (list_orig->unique) {
             list->unique = malloc(list_orig->unique_size * sizeof *list->unique);
-            LY_CHECK_ERR_GOTO(!list->unique, LOGMEM, error);
+            LY_CHECK_ERR_GOTO(!list->unique, LOGMEM(module->ctx), error);
             list->unique_size = list_orig->unique_size;
 
             for (i = 0; i < list->unique_size; ++i) {
                 list->unique[i].expr = malloc(list_orig->unique[i].expr_size * sizeof *list->unique[i].expr);
-                LY_CHECK_ERR_GOTO(!list->unique[i].expr, LOGMEM, error);
+                LY_CHECK_ERR_GOTO(!list->unique[i].expr, LOGMEM(module->ctx), error);
                 list->unique[i].expr_size = list_orig->unique[i].expr_size;
                 for (j = 0; j < list->unique[i].expr_size; j++) {
                     list->unique[i].expr[j] = lydict_insert(ctx, list_orig->unique[i].expr[j], 0);
 
                     /* if it stays in unres list, duplicate it also there */
                     unique_info = malloc(sizeof *unique_info);
-                    LY_CHECK_ERR_GOTO(!unique_info, LOGMEM, error);
+                    LY_CHECK_ERR_GOTO(!unique_info, LOGMEM(module->ctx), error);
                     unique_info->list = (struct lys_node *)list;
                     unique_info->expr = list->unique[i].expr[j];
                     unique_info->trg_type = &list->unique[i].trg_type;
@@ -3177,7 +3177,7 @@ lys_node_dup_recursion(struct lys_module *module, struct lys_node *parent, const
 
     default:
         /* LY_NODE_AUGMENT */
-        LOGINT;
+        LOGINT(module->ctx);
         goto error;
     }
 
@@ -3519,7 +3519,7 @@ lys_features_change(const struct lys_module *module, const char *name, int op)
                                     failk = k + 1;
                                     break;
                                 } else {
-                                    LOGERR(LY_EINVAL, "Feature \"%s\" is disabled by its %d. if-feature condition.",
+                                    LOGERR(module->ctx, LY_EINVAL, "Feature \"%s\" is disabled by its %d. if-feature condition.",
                                            f[j].name, k + 1);
                                     return EXIT_FAILURE;
                                 }
@@ -3545,7 +3545,7 @@ lys_features_change(const struct lys_module *module, const char *name, int op)
     }
     if (failk) {
         /* print info about the last failing feature */
-        LOGERR(LY_EINVAL, "Feature \"%s\" is disabled by its %d. if-feature condition.",
+        LOGERR(module->ctx, LY_EINVAL, "Feature \"%s\" is disabled by its %d. if-feature condition.",
                faili == -1 ? module->features[failj].name : module->inc[faili].submodule->features[failj].name, failk);
         return EXIT_FAILURE;
     }
@@ -3624,11 +3624,11 @@ lys_features_list(const struct lys_module *module, uint8_t **states)
         count += module->inc[i].submodule->features_size;
     }
     result = malloc((count + 1) * sizeof *result);
-    LY_CHECK_ERR_RETURN(!result, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!result, LOGMEM(module->ctx), NULL);
 
     if (states) {
         *states = malloc((count + 1) * sizeof **states);
-        LY_CHECK_ERR_RETURN(!(*states), LOGMEM; free(result), NULL);
+        LY_CHECK_ERR_RETURN(!(*states), LOGMEM(module->ctx); free(result), NULL);
     }
     count = 0;
 
@@ -3738,7 +3738,7 @@ lys_set_private(const struct lys_node *node, void *priv)
     void *prev;
 
     if (!node) {
-        LOGERR(LY_EINVAL, "%s: Invalid parameter.", __func__);
+        LOGERR(NULL, LY_EINVAL, "%s: Invalid parameter.", __func__);
         return NULL;
     }
 
@@ -3752,16 +3752,17 @@ int
 lys_leaf_add_leafref_target(struct lys_node_leaf *leafref_target, struct lys_node *leafref)
 {
     struct lys_node_leaf *iter = leafref_target;
+    struct ly_ctx *ctx = leafref->module->ctx;
 
     if (!(leafref_target->nodetype & (LYS_LEAF | LYS_LEAFLIST))) {
-        LOGINT;
+        LOGINT(ctx);
         return -1;
     }
 
     /* check for config flag */
     if (((struct lys_node_leaf*)leafref)->type.info.lref.req != -1 &&
             (leafref->flags & LYS_CONFIG_W) && (leafref_target->flags & LYS_CONFIG_R)) {
-        LOGVAL(LYE_SPEC, LY_VLOG_LYS, leafref,
+        LOGVAL(ctx, LYE_SPEC, LY_VLOG_LYS, leafref,
                "The leafref %s is config but refers to a non-config %s.",
                strnodetype(leafref->nodetype), strnodetype(leafref_target->nodetype));
         return -1;
@@ -3770,7 +3771,7 @@ lys_leaf_add_leafref_target(struct lys_node_leaf *leafref_target, struct lys_nod
     while (iter && iter->type.base == LY_TYPE_LEAFREF) {
         if ((void *)iter == (void *)leafref) {
             /* cycle detected */
-            LOGVAL(LYE_CIRC_LEAFREFS, LY_VLOG_LYS, leafref);
+            LOGVAL(ctx, LYE_CIRC_LEAFREFS, LY_VLOG_LYS, leafref);
             return -1;
         }
         iter = iter->type.info.lref.target;
@@ -3781,7 +3782,7 @@ lys_leaf_add_leafref_target(struct lys_node_leaf *leafref_target, struct lys_nod
     if (!leafref_target->backlinks) {
         leafref_target->backlinks = (void*)ly_set_new();
         if (!leafref_target->backlinks) {
-            LOGMEM;
+            LOGMEM(ctx);
             return -1;
         }
     }
@@ -3878,7 +3879,7 @@ lys_xpath_atomize(const struct lys_node *ctx_node, enum lyxp_node_type ctx_node_
 
     if (lyxp_atomize(expr, ctx_node, ctx_node_type, &set, options, NULL)) {
         free(set.val.snodes);
-        LOGVAL(LYE_SPEC, LY_VLOG_LYS, ctx_node, "Resolving XPath expression \"%s\" failed.", expr);
+        LOGVAL(ctx_node->module->ctx, LYE_SPEC, LY_VLOG_LYS, ctx_node, "Resolving XPath expression \"%s\" failed.", expr);
         return NULL;
     }
 
@@ -3986,7 +3987,8 @@ apply_aug(struct lys_node_augment *augment, struct unres_schema *unres)
     for (parent = augment->target; parent; parent = lys_parent(parent)) {
         if (!lys_node_module(parent)->implemented) {
             if (lys_set_implemented(lys_node_module(parent))) {
-                LOGERR(ly_errno, "Making the augment target module \"%s\" implemented failed.", lys_node_module(parent)->name);
+                LOGERR(augment->module->ctx, ly_errno, "Making the augment target module \"%s\" implemented failed.",
+                       lys_node_module(parent)->name);
                 return -1;
             }
             LOGVRB("Augment target module \"%s\" now implemented.", lys_node_module(parent)->name);
@@ -4127,7 +4129,7 @@ lys_switch_deviation(struct lys_deviation *dev, const struct lys_module *module,
                     ret = resolve_schema_nodeid(parent_path, NULL, module, &set, 0, 1);
                     free(parent_path);
                     if (ret == -1) {
-                        LOGINT;
+                        LOGINT(module->ctx);
                         ly_set_free(set);
                         return;
                     }
@@ -4146,7 +4148,7 @@ lys_switch_deviation(struct lys_deviation *dev, const struct lys_module *module,
             /* adding not-supported deviation */
             ret = resolve_schema_nodeid(dev->target_name, NULL, module, &set, 0, 1);
             if (ret == -1) {
-                LOGINT;
+                LOGINT(module->ctx);
                 ly_set_free(set);
                 return;
             }
@@ -4167,7 +4169,7 @@ lys_switch_deviation(struct lys_deviation *dev, const struct lys_module *module,
     } else {
         ret = resolve_schema_nodeid(dev->target_name, NULL, module, &set, 0, 1);
         if (ret == -1) {
-            LOGINT;
+            LOGINT(module->ctx);
             ly_set_free(set);
             return;
         }
@@ -4190,7 +4192,7 @@ lys_switch_deviations(struct lys_module *module)
 
     if (module->deviated) {
         unres = calloc(1, sizeof *unres);
-        LY_CHECK_ERR_RETURN(!unres, LOGMEM, );
+        LY_CHECK_ERR_RETURN(!unres, LOGMEM(module->ctx), );
 
         while ((mod = ly_ctx_get_module_iter(module->ctx, &i))) {
             if (mod == module) {
@@ -4245,7 +4247,7 @@ remove_dev(struct lys_deviation *dev, const struct lys_module *module, struct un
         target_mod = lys_node_module(dev->orig_node);
         target_submod = dev->orig_node->module;
     } else {
-        LOGINT;
+        LOGINT(module->ctx);
         return;
     }
     lys_switch_deviation(dev, module, unres);
@@ -4282,7 +4284,7 @@ lys_sub_module_apply_devs_augs(struct lys_module *module)
     struct unres_schema *unres;
 
     unres = calloc(1, sizeof *unres);
-    LY_CHECK_ERR_RETURN(!unres, LOGMEM, );
+    LY_CHECK_ERR_RETURN(!unres, LOGMEM(module->ctx), );
 
     /* remove applied deviations */
     for (u = 0; u < module->deviation_size; ++u) {
@@ -4318,7 +4320,7 @@ lys_sub_module_remove_devs_augs(struct lys_module *module)
     struct unres_schema *unres;
 
     unres = calloc(1, sizeof *unres);
-    LY_CHECK_ERR_RETURN(!unres, LOGMEM, );
+    LY_CHECK_ERR_RETURN(!unres, LOGMEM(module->ctx), );
 
     /* remove applied deviations */
     for (u = 0; u < module->deviation_size; ++u) {
@@ -4446,7 +4448,7 @@ lys_set_implemented(const struct lys_module *module)
         }
 
         if (!strcmp(module->name, ctx->models.list[i]->name) && ctx->models.list[i]->implemented) {
-            LOGERR(LY_EINVAL, "Module \"%s\" in another revision already implemented.", module->name);
+            LOGERR(module->ctx, LY_EINVAL, "Module \"%s\" in another revision already implemented.", module->name);
             if (disabled) {
                 /* set it back disabled */
                 lys_set_disabled(module);
@@ -4457,7 +4459,7 @@ lys_set_implemented(const struct lys_module *module)
 
     unres = calloc(1, sizeof *unres);
     if (!unres) {
-        LOGMEM;
+        LOGMEM(module->ctx);
         if (disabled) {
             /* set it back disabled */
             lys_set_disabled(module);
@@ -4548,7 +4550,7 @@ lys_path(const struct lys_node *node)
     uint16_t index = LY_BUF_SIZE - 1;
 
     if (!node) {
-        LOGERR(LY_EINVAL, "%s: NULL node parameter", __func__);
+        LOGERR(NULL, LY_EINVAL, "%s: NULL node parameter", __func__);
         return NULL;
     }
 
@@ -4563,7 +4565,7 @@ lys_path(const struct lys_node *node)
     ly_vlog_build_path_reverse(LY_VLOG_LYS, node, buf, &index);
     result = strdup(&buf[index]);
     if (!result) {
-        LOGMEM;
+        LOGMEM(node->module->ctx);
         /* pass through to cleanup */
     }
 
@@ -4586,7 +4588,7 @@ lys_data_path(const struct lys_node *node)
     const struct lys_module *prev_mod;
 
     if (!node) {
-        LOGERR(LY_EINVAL, "%s: NULL node parameter", __func__);
+        LOGERR(NULL, LY_EINVAL, "%s: NULL node parameter", __func__);
         return NULL;
     }
 
@@ -4597,7 +4599,7 @@ lys_data_path(const struct lys_node *node)
     ly_buf_used++;
 
     set = ly_set_new();
-    LY_CHECK_ERR_GOTO(!set, LOGMEM, error);
+    LY_CHECK_ERR_GOTO(!set, LOGMEM(node->module->ctx), error);
 
     while (node) {
         ly_set_add(set, (void *)node, 0);
@@ -4616,7 +4618,7 @@ lys_data_path(const struct lys_node *node)
     }
 
     result = strdup(buf);
-    LY_CHECK_ERR_GOTO(!result, LOGMEM, error);
+    LY_CHECK_ERR_GOTO(!result, LOGMEM(node->module->ctx), error);
 
 error:
     ly_set_free(set);

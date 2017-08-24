@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 
 #include "common.h"
 #include "context.h"
@@ -72,7 +73,7 @@ ly_ctx_new(const char *search_dir)
     int i;
 
     ctx = calloc(1, sizeof *ctx);
-    LY_CHECK_ERR_RETURN(!ctx, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!ctx, LOGMEM(NULL), NULL);
 
     /* dictionary */
     lydict_init(&ctx->dict);
@@ -82,19 +83,19 @@ ly_ctx_new(const char *search_dir)
 
     /* models list */
     ctx->models.list = calloc(16, sizeof *ctx->models.list);
-    LY_CHECK_ERR_RETURN(!ctx->models.list, LOGMEM; free(ctx), NULL);
+    LY_CHECK_ERR_RETURN(!ctx->models.list, LOGMEM(NULL); free(ctx), NULL);
     ext_plugins_ref++;
     ctx->models.used = 0;
     ctx->models.size = 16;
     if (search_dir) {
         cwd = get_current_dir_name();
         if (chdir(search_dir)) {
-            LOGERR(LY_ESYS, "Unable to use search directory \"%s\" (%s)",
+            LOGERR(NULL, LY_ESYS, "Unable to use search directory \"%s\" (%s)",
                    search_dir, strerror(errno));
             goto error;
         }
         ctx->models.search_paths = malloc(2 * sizeof *ctx->models.search_paths);
-        LY_CHECK_ERR_GOTO(!ctx->models.search_paths, LOGMEM, error);
+        LY_CHECK_ERR_GOTO(!ctx->models.search_paths, LOGMEM(NULL), error);
         ctx->models.search_paths[0] = get_current_dir_name();
         ctx->models.search_paths[1] = NULL;
         if (chdir(cwd)) {
@@ -112,6 +113,9 @@ ly_ctx_new(const char *search_dir)
         }
         module->implemented = internal_modules[i].implemented;
     }
+
+    /* initialize thread-specific key */
+    while ((i = pthread_key_create(&ctx->errlist_key, ly_err_free)) == EAGAIN);
 
     /* cleanup */
     free(cwd);
@@ -178,7 +182,7 @@ ly_ctx_new_yl_common(const char *search_dir, const char *input, LYD_FORMAT forma
         /* use the gathered data to load the module */
         mod = ly_ctx_load_module(ctx, name, revision);
         if (!mod) {
-            LOGERR(LY_EINVAL, "Unable to load module specified by yang library data.");
+            LOGERR(ctx, LY_EINVAL, "Unable to load module specified by yang library data.");
             goto error;
         }
 
@@ -252,7 +256,7 @@ ly_ctx_set_searchdir(struct ly_ctx *ctx, const char *search_dir)
     if (search_dir) {
         cwd = get_current_dir_name();
         if (chdir(search_dir)) {
-            LOGERR(LY_ESYS, "Unable to use search directory \"%s\" (%s)",
+            LOGERR(ctx, LY_ESYS, "Unable to use search directory \"%s\" (%s)",
                    search_dir, strerror(errno));
             goto cleanup;
         }
@@ -260,7 +264,7 @@ ly_ctx_set_searchdir(struct ly_ctx *ctx, const char *search_dir)
         new = get_current_dir_name();
         if (!ctx->models.search_paths) {
             ctx->models.search_paths = malloc(2 * sizeof *ctx->models.search_paths);
-            LY_CHECK_ERR_GOTO(!ctx->models.search_paths, LOGMEM, cleanup);
+            LY_CHECK_ERR_GOTO(!ctx->models.search_paths, LOGMEM(ctx), cleanup);
             index = 0;
         } else {
             for (index = 0; ctx->models.search_paths[index]; index++) {
@@ -271,7 +275,7 @@ ly_ctx_set_searchdir(struct ly_ctx *ctx, const char *search_dir)
                 }
             }
             r = realloc(ctx->models.search_paths, (index + 2) * sizeof *ctx->models.search_paths);
-            LY_CHECK_ERR_GOTO(!r, LOGMEM, cleanup);
+            LY_CHECK_ERR_GOTO(!r, LOGMEM(ctx), cleanup);
             ctx->models.search_paths = r;
         }
         ctx->models.search_paths[index] = new;
@@ -356,7 +360,8 @@ ly_ctx_destroy(struct ly_ctx *ctx, void (*private_destructor)(const struct lys_n
     lyext_clean_plugins();
 
     /* clean the error list */
-    ly_err_clean(0);
+    ly_err_clean(ctx, 0);
+    pthread_key_delete(ctx->errlist_key);
 
     free(ctx);
 }
@@ -652,7 +657,7 @@ ly_ctx_load_sub_module(struct ly_ctx *ctx, struct lys_module *module, const char
             if (module || revision) {
                 /* we already know that the specified revision is not present in context, and we have no other
                  * option in case of submodules */
-                LOGERR(LY_ESYS, "User module retrieval callback failed!");
+                LOGERR(NULL, LY_ESYS, "User module retrieval callback failed!");
                 return NULL;
             } else {
                 /* get the newest revision from the context */
@@ -902,7 +907,7 @@ lys_set_disabled(const struct lys_module *module)
     /* avoid disabling internal modules */
     for (i = 0; i < LY_INTERNAL_MODULE_COUNT; i++) {
         if (mod == ctx->models.list[i]) {
-            LOGERR(LY_EINVAL, "Internal module \"%s\" cannot be disabled.", mod->name);
+            LOGERR(module->ctx, LY_EINVAL, "Internal module \"%s\" cannot be disabled.", mod->name);
             return EXIT_FAILURE;
         }
     }
@@ -1045,7 +1050,7 @@ lys_set_enabled(const struct lys_module *module)
     /* avoid disabling internal modules */
     for (i = 0; i < LY_INTERNAL_MODULE_COUNT; i++) {
         if (mod == ctx->models.list[i]) {
-            LOGERR(LY_EINVAL, "Internal module \"%s\" cannot be removed.", mod->name);
+            LOGERR(module->ctx, LY_EINVAL, "Internal module \"%s\" cannot be removed.", mod->name);
             return EXIT_FAILURE;
         }
     }
@@ -1147,7 +1152,7 @@ ly_ctx_remove_module(const struct lys_module *module,
     /* avoid removing internal modules ... */
     for (i = 0; i < LY_INTERNAL_MODULE_COUNT; i++) {
         if (mod == ctx->models.list[i]) {
-            LOGERR(LY_EINVAL, "Internal module \"%s\" cannot be removed.", mod->name);
+            LOGERR(module->ctx, LY_EINVAL, "Internal module \"%s\" cannot be removed.", mod->name);
             return EXIT_FAILURE;
         }
     }
@@ -1400,7 +1405,7 @@ ylib_submodules(struct lyd_node *parent, struct lys_module *cur_mod)
         }
         if (cur_mod->inc[i].submodule->filepath) {
             if (asprintf(&str, "file://%s", cur_mod->inc[i].submodule->filepath) == -1) {
-                LOGMEM;
+                LOGMEM(cur_mod->ctx);
                 return EXIT_FAILURE;
             } else if (!lyd_new_leaf(item, NULL, "schema", str)) {
                 free(str);
@@ -1429,7 +1434,7 @@ ly_ctx_info(struct ly_ctx *ctx)
 
     mod = ly_ctx_get_module(ctx, "ietf-yang-library", IETF_YANG_LIB_REV);
     if (!mod || !mod->data) {
-        LOGINT;
+        LOGINT(ctx);
         return NULL;
     }
 
@@ -1461,7 +1466,7 @@ ly_ctx_info(struct ly_ctx *ctx)
         }
         if (ctx->models.list[i]->filepath) {
             if (asprintf(&str, "file://%s", ctx->models.list[i]->filepath) == -1) {
-                LOGMEM;
+                LOGMEM(ctx);
                 lyd_free(root);
                 return NULL;
             } else if (!lyd_new_leaf(cont, NULL, "schema", str)) {

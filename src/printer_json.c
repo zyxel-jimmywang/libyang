@@ -594,7 +594,7 @@ json_print_nodes(struct lyout *out, int level, const struct lyd_node *root, int 
             ret = json_print_anydata(out, level, node, toplevel, options);
             break;
         default:
-            LOGINT;
+            LOGINT(root->schema->module->ctx);
             ret = EXIT_FAILURE;
             break;
         }

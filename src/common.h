@@ -77,27 +77,20 @@ char *get_current_dir_name(void);
 
 #define LY_BUF_SIZE 1024
 #define LY_APPTAG_LEN 128
-struct ly_err_item {
-    LY_ERR no;
-    LY_VECODE code;
-    char *msg;
-    char *path;
-    struct ly_err_item *next;
-};
 struct ly_err {
     LY_ERR no;
     LY_VECODE code;
     uint8_t vlog_hide;
     uint8_t buf_used;
     uint16_t path_index;
-    struct ly_err_item *errlist; /* list of stored errors */
     char msg[LY_BUF_SIZE];
     char path[LY_BUF_SIZE];
     char apptag[LY_APPTAG_LEN];
     char buf[LY_BUF_SIZE];
 };
-void ly_err_clean(int with_errno);
-void ly_err_repeat(void);
+void ly_err_free(void *ptr);
+void ly_err_clean(struct ly_ctx *ctx, int with_errno);
+void ly_err_repeat(struct ly_ctx *ctx);
 
 extern THREAD_LOCAL struct ly_err ly_err_main;
 
@@ -119,20 +112,20 @@ char *ly_buf(void);
  */
 extern volatile int8_t ly_log_level;
 
-void ly_log(LY_LOG_LEVEL level, const char *format, ...);
+void ly_log(struct ly_ctx *ctx, LY_LOG_LEVEL level, const char *format, ...);
 
-#define LOGERR(errno, str, args...)                                 \
+#define LOGERR(ctx, errno, str, args...)                            \
     if (errno) { ly_errno = errno; }                                \
-    ly_log(LY_LLERR, str, ##args);
+    ly_log(ctx, LY_LLERR, str, ##args);
 
 #define LOGWRN(str, args...)                                        \
     if (ly_log_level >= LY_LLWRN) {                                 \
-        ly_log(LY_LLWRN, str, ##args);                              \
+        ly_log(NULL, LY_LLWRN, str, ##args);                        \
     }
 
 #define LOGVRB(str, args...)                                        \
     if (ly_log_level >= LY_LLVRB) {                                 \
-        ly_log(LY_LLVRB, str, ##args);                              \
+        ly_log(NULL, LY_LLVRB, str, ##args);                        \
     }
 
 #ifdef NDEBUG
@@ -152,9 +145,9 @@ void ly_log_dbg(LY_LOG_DBG_GROUP group, const char *format, ...);
 
 #define ly_vlog_hidden (ly_err_main.vlog_hide)
 
-#define LOGMEM LOGERR(LY_EMEM, "Memory allocation failed (%s()).", __func__)
+#define LOGMEM(ctx) LOGERR(ctx, LY_EMEM, "Memory allocation failed (%s()).", __func__)
 
-#define LOGINT LOGERR(LY_EINT, "Internal error (%s:%d).", __FILE__, __LINE__)
+#define LOGINT(ctx) LOGERR(ctx, LY_EINT, "Internal error (%s:%d).", __FILE__, __LINE__)
 
 typedef enum {
     LYE_PATH = -2,    /**< error path set */
@@ -270,12 +263,12 @@ enum LY_VLOG_ELEM {
  */
 void ly_vlog_hide(uint8_t hide);
 
-void ly_vlog(LY_ECODE code, enum LY_VLOG_ELEM elem_type, const void *elem, ...);
-#define LOGVAL(code, elem_type, elem, args...)                      \
-    ly_vlog(code, elem_type, elem, ##args);
+void ly_vlog(struct ly_ctx *ctx, LY_ECODE code, enum LY_VLOG_ELEM elem_type, const void *elem, ...);
+#define LOGVAL(ctx, code, elem_type, elem, args...)                      \
+    ly_vlog(ctx, code, elem_type, elem, ##args);
 
-#define LOGPATH(elem_type, elem)                                    \
-    ly_vlog(LYE_PATH, elem_type, elem);
+#define LOGPATH(ctx, elem_type, elem)                                    \
+    ly_vlog(ctx, LYE_PATH, elem_type, elem);
 
 void ly_vlog_build_path_reverse(enum LY_VLOG_ELEM elem_type, const void *elem, char *path, uint16_t *index);
 

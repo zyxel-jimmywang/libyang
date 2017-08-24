@@ -124,7 +124,7 @@ create_indent(int level, uint64_t old_indent, const struct lys_node *node, const
     int next_is_case = 0, has_next = 0;
 
     if (level > 64) {
-        LOGINT;
+        LOGINT(sub_module->ctx);
         return 0;
     }
 

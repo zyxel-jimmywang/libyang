@@ -64,25 +64,33 @@ ly_errapptag(void)
 }
 
 void
-ly_err_clean(int with_errno)
+ly_err_free(void *ptr)
 {
     struct ly_err_item *i, *next;
 
-    i = ly_err_main.errlist;
-    ly_err_main.errlist = NULL;
-    for (; i; i = next) {
+    /* clean the error list */
+    for (i = (struct ly_err_item *)ptr; i; i = next) {
         next = i->next;
         free(i->msg);
         free(i->path);
         free(i);
     }
-
-    if (with_errno) {
-        ly_err_main.no = LY_SUCCESS;
-        ly_err_main.code = LYVE_SUCCESS;
-    }
 }
 
+void
+ly_err_clean(struct ly_ctx *ctx, int with_errno)
+{
+    struct ly_err_item *i;
+
+    i = pthread_getspecific(ctx->errlist_key);
+    pthread_setspecific(ctx->errlist_key, NULL);
+    ly_err_free(i);
+
+    if (i && with_errno) {
+        i->no = LY_SUCCESS;
+        i->code = LYVE_SUCCESS;
+    }
+}
 
 char *
 ly_buf(void)
@@ -228,7 +236,7 @@ _transform_json2xml(const struct lys_module *module, const char *expr, int schem
 
     out_size = strlen(expr) + 1;
     out = malloc(out_size);
-    LY_CHECK_ERR_RETURN(!out, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!out, LOGMEM(module->ctx), NULL);
     out_used = 0;
 
     exp = lyxp_parse_expr(expr);
@@ -252,14 +260,14 @@ _transform_json2xml(const struct lys_module *module, const char *expr, int schem
                     mod = ly_ctx_get_module(module->ctx, name, NULL);
                     free(name);
                     if (!mod) {
-                        LOGVAL(LYE_INMOD_LEN, LY_VLOG_NONE, NULL, name_len, cur_expr);
+                        LOGVAL(module->ctx, LYE_INMOD_LEN, LY_VLOG_NONE, NULL, name_len, cur_expr);
                         goto error;
                     }
                     prev_mod = mod;
                 } else {
                     mod = prev_mod;
                     if (!mod) {
-                        LOGINT;
+                        LOGINT(module->ctx);
                         goto error;
                     }
                     name_len = 0;
@@ -277,7 +285,7 @@ _transform_json2xml(const struct lys_module *module, const char *expr, int schem
                 prefix = transform_module_name2import_prefix(module, name);
                 free(name);
                 if (!prefix) {
-                    LOGVAL(LYE_INMOD_LEN, LY_VLOG_NONE, NULL, name_len, cur_expr);
+                    LOGVAL(module->ctx, LYE_INMOD_LEN, LY_VLOG_NONE, NULL, name_len, cur_expr);
                     goto error;
                 }
             }
@@ -292,9 +300,9 @@ _transform_json2xml(const struct lys_module *module, const char *expr, int schem
                 if (j == *ns_count) {
                     ++(*ns_count);
                     *prefixes = ly_realloc(*prefixes, *ns_count * sizeof **prefixes);
-                    LY_CHECK_ERR_GOTO(!(*prefixes), LOGMEM, error);
+                    LY_CHECK_ERR_GOTO(!(*prefixes), LOGMEM(module->ctx), error);
                     *namespaces = ly_realloc(*namespaces, *ns_count * sizeof **namespaces);
-                    LY_CHECK_ERR_GOTO(!(*namespaces), LOGMEM, error);
+                    LY_CHECK_ERR_GOTO(!(*namespaces), LOGMEM(module->ctx), error);
                     (*prefixes)[*ns_count - 1] = mod->prefix;
                     (*namespaces)[*ns_count - 1] = mod->ns;
                 }
@@ -303,7 +311,7 @@ _transform_json2xml(const struct lys_module *module, const char *expr, int schem
             /* adjust out size (it can even decrease in some strange cases) */
             out_size += strlen(prefix) + 1 - name_len;
             out = ly_realloc(out, out_size);
-            LY_CHECK_ERR_GOTO(!out, LOGMEM, error);
+            LY_CHECK_ERR_GOTO(!out, LOGMEM(module->ctx), error);
 
             /* copy the model name */
             strcpy(&out[out_used], prefix);
@@ -351,9 +359,9 @@ _transform_json2xml(const struct lys_module *module, const char *expr, int schem
                     if (j == *ns_count) {
                         ++(*ns_count);
                         *prefixes = ly_realloc(*prefixes, *ns_count * sizeof **prefixes);
-                        LY_CHECK_ERR_GOTO(!(*prefixes), LOGMEM, error);
+                        LY_CHECK_ERR_GOTO(!(*prefixes), LOGMEM(module->ctx), error);
                         *namespaces = ly_realloc(*namespaces, *ns_count * sizeof **namespaces);
-                        LY_CHECK_ERR_GOTO(!(*namespaces), LOGMEM, error);
+                        LY_CHECK_ERR_GOTO(!(*namespaces), LOGMEM(module->ctx), error);
                         (*prefixes)[*ns_count - 1] = mod->prefix;
                         (*namespaces)[*ns_count - 1] = mod->ns;
                     }
@@ -362,7 +370,7 @@ _transform_json2xml(const struct lys_module *module, const char *expr, int schem
                 /* adjust out size (it can even decrease in some strange cases) */
                 out_size += strlen(prefix) - name_len;
                 out = ly_realloc(out, out_size);
-                LY_CHECK_ERR_GOTO(!out, LOGMEM, error);
+                LY_CHECK_ERR_GOTO(!out, LOGMEM(module->ctx), error);
 
                 /* copy any beginning */
                 strncpy(&out[out_used], cur_expr, ptr - cur_expr);
@@ -427,7 +435,7 @@ transform_xml2json(struct ly_ctx *ctx, const char *expr, struct lyxml_elem *xml,
     out = malloc(out_size);
     if (!out) {
         if (log) {
-            LOGMEM;
+            LOGMEM(ctx);
         }
         return NULL;
     }
@@ -454,7 +462,7 @@ transform_xml2json(struct ly_ctx *ctx, const char *expr, struct lyxml_elem *xml,
             prefix = strndup(cur_expr, pref_len);
             if (!prefix) {
                 if (log) {
-                    LOGMEM;
+                    LOGMEM(ctx);
                 }
                 goto error;
             }
@@ -462,8 +470,8 @@ transform_xml2json(struct ly_ctx *ctx, const char *expr, struct lyxml_elem *xml,
             free(prefix);
             if (!ns) {
                 if (log) {
-                    LOGVAL(LYE_XML_INVAL, LY_VLOG_XML, xml, "namespace prefix");
-                    LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL,
+                    LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_XML, xml, "namespace prefix");
+                    LOGVAL(ctx, LYE_SPEC, LY_VLOG_PREV, NULL,
                         "XML namespace with prefix \"%.*s\" not defined.", pref_len, cur_expr);
                 }
                 goto error;
@@ -478,8 +486,8 @@ transform_xml2json(struct ly_ctx *ctx, const char *expr, struct lyxml_elem *xml,
             }
             if (!mod) {
                 if (log) {
-                    LOGVAL(LYE_XML_INVAL, LY_VLOG_XML, xml, "module namespace");
-                    LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL,
+                    LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_XML, xml, "module namespace");
+                    LOGVAL(ctx, LYE_SPEC, LY_VLOG_PREV, NULL,
                         "Module with the namespace \"%s\" could not be found.", ns->value);
                 }
                 goto error;
@@ -491,7 +499,7 @@ transform_xml2json(struct ly_ctx *ctx, const char *expr, struct lyxml_elem *xml,
                 out = ly_realloc(out, out_size);
                 if (!out) {
                     if (log) {
-                        LOGMEM;
+                        LOGMEM(ctx);
                     }
                     goto error;
                 }
@@ -513,8 +521,8 @@ transform_xml2json(struct ly_ctx *ctx, const char *expr, struct lyxml_elem *xml,
             out_used += exp->tok_len[i] - pref_len;
         } else if ((exp->tokens[i] == LYXP_TOKEN_NAMETEST) && inst_id) {
             if (log) {
-                LOGVAL(LYE_XML_INVAL, LY_VLOG_XML, xml, "namespace prefix");
-                LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL, "Node name is missing module prefix.");
+                LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_XML, xml, "namespace prefix");
+                LOGVAL(ctx, LYE_SPEC, LY_VLOG_PREV, NULL, "Node name is missing module prefix.");
             }
             goto error;
         } else if ((exp->tokens[i] == LYXP_TOKEN_LITERAL) && (end = strnchr(cur_expr, ':', exp->tok_len[i]))) {
@@ -528,7 +536,7 @@ transform_xml2json(struct ly_ctx *ctx, const char *expr, struct lyxml_elem *xml,
             prefix = strndup(cur_expr, pref_len);
             if (!prefix) {
                 if (log) {
-                    LOGMEM;
+                    LOGMEM(ctx);
                 }
                 goto error;
             }
@@ -536,8 +544,8 @@ transform_xml2json(struct ly_ctx *ctx, const char *expr, struct lyxml_elem *xml,
             free(prefix);
             if (!ns) {
                 if (log) {
-                    LOGVAL(LYE_XML_INVAL, LY_VLOG_XML, xml, "namespace prefix");
-                    LOGVAL(LYE_SPEC, LY_VLOG_PREV, NULL,
+                    LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_XML, xml, "namespace prefix");
+                    LOGVAL(ctx, LYE_SPEC, LY_VLOG_PREV, NULL,
                         "XML namespace with prefix \"%.*s\" not defined.", pref_len, cur_expr);
                 }
                 goto error;
@@ -549,7 +557,7 @@ transform_xml2json(struct ly_ctx *ctx, const char *expr, struct lyxml_elem *xml,
                 out = ly_realloc(out, out_size);
                 if (!out) {
                     if (log) {
-                        LOGMEM;
+                        LOGMEM(ctx);
                     }
                     goto error;
                 }
@@ -597,7 +605,7 @@ transform_schema2json(const struct lys_module *module, const char *expr)
 
     out_size = strlen(expr) + 1;
     out = malloc(out_size);
-    LY_CHECK_ERR_RETURN(!out, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!out, LOGMEM(module->ctx), NULL);
     out_used = 0;
 
     exp = lyxp_parse_expr(expr);
@@ -617,14 +625,14 @@ transform_schema2json(const struct lys_module *module, const char *expr)
             pref_len = end - cur_expr;
             mod = lys_get_import_module(module, cur_expr, pref_len, NULL, 0);
             if (!mod) {
-                LOGVAL(LYE_INMOD_LEN, LY_VLOG_NONE, NULL, pref_len, cur_expr);
+                LOGVAL(module->ctx, LYE_INMOD_LEN, LY_VLOG_NONE, NULL, pref_len, cur_expr);
                 goto error;
             }
 
             /* adjust out size (it can even decrease in some strange cases) */
             out_size += strlen(mod->name) - pref_len;
             out = ly_realloc(out, out_size);
-            LY_CHECK_ERR_GOTO(!out, LOGMEM, error);
+            LY_CHECK_ERR_GOTO(!out, LOGMEM(module->ctx), error);
 
             /* copy the model name */
             strcpy(&out[out_used], mod->name);
@@ -646,7 +654,7 @@ transform_schema2json(const struct lys_module *module, const char *expr)
                 /* adjust out size (it can even decrease in some strange cases) */
                 out_size += strlen(mod->name) - pref_len;
                 out = ly_realloc(out, out_size);
-                LY_CHECK_ERR_GOTO(!out, LOGMEM, error);
+                LY_CHECK_ERR_GOTO(!out, LOGMEM(module->ctx), error);
 
                 /* copy any beginning */
                 strncpy(&out[out_used], cur_expr, ptr - cur_expr);
@@ -690,7 +698,7 @@ transform_iffeat_schema2json(const struct lys_module *module, const char *expr)
     in = expr;
     out_size = strlen(in) + 1;
     out = malloc(out_size);
-    LY_CHECK_ERR_RETURN(!out, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!out, LOGMEM(module->ctx), NULL);
     out_used = 0;
 
     while (1) {
@@ -709,7 +717,7 @@ transform_iffeat_schema2json(const struct lys_module *module, const char *expr)
         id_len = col - id;
         rc = parse_identifier(id);
         if (rc < id_len) {
-            LOGVAL(LYE_INCHAR, LY_VLOG_NONE, NULL, id[rc], &id[rc]);
+            LOGVAL(module->ctx, LYE_INCHAR, LY_VLOG_NONE, NULL, id[rc], &id[rc]);
             free(out);
             return NULL;
         }
@@ -717,7 +725,7 @@ transform_iffeat_schema2json(const struct lys_module *module, const char *expr)
         /* get the module */
         mod = lys_get_import_module(module, id, id_len, NULL, 0);
         if (!mod) {
-            LOGVAL(LYE_INMOD_LEN, LY_VLOG_NONE, NULL, id_len, id);
+            LOGVAL(module->ctx, LYE_INMOD_LEN, LY_VLOG_NONE, NULL, id_len, id);
             free(out);
             return NULL;
         }
@@ -725,7 +733,7 @@ transform_iffeat_schema2json(const struct lys_module *module, const char *expr)
         /* adjust out size (it can even decrease in some strange cases) */
         out_size += strlen(mod->name) - id_len;
         out = ly_realloc(out, out_size);
-        LY_CHECK_ERR_RETURN(!out, LOGMEM, NULL);
+        LY_CHECK_ERR_RETURN(!out, LOGMEM(module->ctx), NULL);
 
         /* copy the data before prefix */
         strncpy(&out[out_used], in, id - in);
@@ -744,7 +752,7 @@ transform_iffeat_schema2json(const struct lys_module *module, const char *expr)
     }
 
     /* unreachable */
-    LOGINT;
+    LOGINT(module->ctx);
     return NULL;
 }
 
@@ -756,6 +764,7 @@ transform_json2xpath_subexpr(const struct lys_module *cur_module, const struct l
     size_t name_len;
     char *name;
     const struct lys_module *mod;
+    struct ly_ctx *ctx = cur_module->ctx;
 
     while (*i < exp->used) {
         if (exp->tokens[*i] == end_token) {
@@ -792,7 +801,7 @@ transform_json2xpath_subexpr(const struct lys_module *cur_module, const struct l
                 prev_mod = ly_ctx_get_module(cur_module->ctx, name, NULL);
                 free(name);
                 if (!prev_mod) {
-                    LOGVAL(LYE_INMOD_LEN, LY_VLOG_NONE, NULL, name_len ? name_len : exp->tok_len[*i], cur_expr);
+                    LOGVAL(ctx, LYE_INMOD_LEN, LY_VLOG_NONE, NULL, name_len ? name_len : exp->tok_len[*i], cur_expr);
                     return -1;
                 }
                 /* skip ":" */
@@ -808,7 +817,7 @@ transform_json2xpath_subexpr(const struct lys_module *cur_module, const struct l
                 /* adjust out size (it can even decrease in some strange cases) */
                 *out_size += (strlen(prev_mod->name) - name_len) + 1;
                 *out = ly_realloc(*out, *out_size);
-                LY_CHECK_ERR_RETURN(!*out, LOGMEM, -1);
+                LY_CHECK_ERR_RETURN(!*out, LOGMEM(ctx), -1);
 
                 /* copy the model name */
                 strcpy(*out + *out_used, prev_mod->name);
@@ -838,7 +847,7 @@ transform_json2xpath_subexpr(const struct lys_module *cur_module, const struct l
                 /* adjust out size (it can even decrease in some strange cases) */
                 *out_size += strlen(mod->name) - name_len;
                 *out = ly_realloc(*out, *out_size);
-                LY_CHECK_ERR_RETURN(!*out, LOGMEM, -1);
+                LY_CHECK_ERR_RETURN(!*out, LOGMEM(ctx), -1);
 
                 /* copy any beginning */
                 strncpy(*out + *out_used, cur_expr, ptr - cur_expr);
@@ -878,7 +887,7 @@ transform_json2xpath(const struct lys_module *cur_module, const char *expr)
 
     out_size = strlen(expr) + 1;
     out = malloc(out_size);
-    LY_CHECK_ERR_RETURN(!out, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!out, LOGMEM(cur_module->ctx), NULL);
     out_used = 0;
 
     exp = lyxp_parse_expr(expr);

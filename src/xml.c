@@ -121,7 +121,7 @@ lyxml_dup_attr(struct ly_ctx *ctx, struct lyxml_elem *parent, struct lyxml_attr 
     } else {
         result = calloc(1, sizeof (struct lyxml_attr));
     }
-    LY_CHECK_ERR_RETURN(!result, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!result, LOGMEM(ctx), NULL);
 
     result->value = lydict_insert(ctx, attr->value, 0);
     result->name = lydict_insert(ctx, attr->name, 0);
@@ -203,7 +203,7 @@ lyxml_dup_elem(struct ly_ctx *ctx, struct lyxml_elem *elem, struct lyxml_elem *p
     }
 
     result = calloc(1, sizeof *result);
-    LY_CHECK_ERR_RETURN(!result, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!result, LOGMEM(ctx), NULL);
     result->content = lydict_insert(ctx, elem->content, 0);
     result->name = lydict_insert(ctx, elem->name, 0);
     result->flags = elem->flags;
@@ -467,7 +467,7 @@ lyxml_add_child(struct ly_ctx *ctx, struct lyxml_elem *parent, struct lyxml_elem
 }
 
 int
-lyxml_getutf8(const char *buf, unsigned int *read)
+lyxml_getutf8(struct ly_ctx *ctx, const char *buf, unsigned int *read)
 {
     int c, aux;
     int i;
@@ -477,7 +477,7 @@ lyxml_getutf8(const char *buf, unsigned int *read)
 
     /* buf is NULL terminated string, so 0 means EOF */
     if (!c) {
-        LOGVAL(LYE_EOF, LY_VLOG_NONE, NULL);
+        LOGVAL(ctx, LYE_EOF, LY_VLOG_NONE, NULL);
         return 0;
     }
     *read = 1;
@@ -491,7 +491,7 @@ lyxml_getutf8(const char *buf, unsigned int *read)
         for (i = 1; i <= 3; i++) {
             aux = buf[i];
             if ((aux & 0xc0) != 0x80) {
-                LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
+                LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
                 return 0;
             }
 
@@ -499,7 +499,7 @@ lyxml_getutf8(const char *buf, unsigned int *read)
         }
 
         if (c < 0x1000 || c > 0x10ffff) {
-            LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
+            LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
             return 0;
         }
     } else if ((c & 0xf0) == 0xe0) {
@@ -510,7 +510,7 @@ lyxml_getutf8(const char *buf, unsigned int *read)
         for (i = 1; i <= 2; i++) {
             aux = buf[i];
             if ((aux & 0xc0) != 0x80) {
-                LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
+                LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
                 return 0;
             }
 
@@ -518,7 +518,7 @@ lyxml_getutf8(const char *buf, unsigned int *read)
         }
 
         if (c < 0x800 || (c > 0xd7ff && c < 0xe000) || c > 0xfffd) {
-            LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
+            LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
             return 0;
         }
     } else if ((c & 0xe0) == 0xc0) {
@@ -527,25 +527,25 @@ lyxml_getutf8(const char *buf, unsigned int *read)
 
         aux = buf[1];
         if ((aux & 0xc0) != 0x80) {
-            LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
+            LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
             return 0;
         }
         c = ((c & 0x1f) << 6) | (aux & 0x3f);
 
         if (c < 0x80) {
-            LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
+            LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
             return 0;
         }
     } else if (!(c & 0x80)) {
         /* one byte character */
         if (c < 0x20 && c != 0x9 && c != 0xa && c != 0xd) {
             /* invalid character */
-            LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
+            LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
             return 0;
         }
     } else {
         /* invalid character */
-        LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
+        LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "input character");
         return 0;
     }
 
@@ -554,7 +554,7 @@ lyxml_getutf8(const char *buf, unsigned int *read)
 
 /* logs directly */
 static int
-parse_ignore(const char *data, const char *endstr, unsigned int *len)
+parse_ignore(struct ly_ctx *ctx, const char *data, const char *endstr, unsigned int *len)
 {
     unsigned int slen;
     const char *c = data;
@@ -565,7 +565,7 @@ parse_ignore(const char *data, const char *endstr, unsigned int *len)
         c++;
     }
     if (!*c) {
-        LOGVAL(LYE_XML_MISS, LY_VLOG_NONE, NULL, "closing sequence", endstr);
+        LOGVAL(ctx, LYE_XML_MISS, LY_VLOG_NONE, NULL, "closing sequence", endstr);
         return EXIT_FAILURE;
     }
     c += slen;
@@ -576,7 +576,7 @@ parse_ignore(const char *data, const char *endstr, unsigned int *len)
 
 /* logs directly */
 static char *
-parse_text(const char *data, char delim, unsigned int *len)
+parse_text(struct ly_ctx *ctx, const char *data, char delim, unsigned int *len)
 {
 #define BUFSIZE 1024
 
@@ -589,7 +589,7 @@ parse_text(const char *data, char delim, unsigned int *len)
 
     for (*len = o = 0; cdsect || data[*len] != delim; o++) {
         if (!data[*len] || (!cdsect && !strncmp(&data[*len], "]]>", 3))) {
-            LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "element content, \"]]>\" found");
+            LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "element content, \"]]>\" found");
             goto error;
         }
 
@@ -604,7 +604,7 @@ loop:
                 size = o;
                 result = malloc((size + 1) * sizeof *result);
             }
-            LY_CHECK_ERR_RETURN(!result, LOGMEM, NULL);
+            LY_CHECK_ERR_RETURN(!result, LOGMEM(ctx), NULL);
             memcpy(&result[size - o], buf, o);
 
             /* write again into the beginning of the buffer */
@@ -645,7 +645,7 @@ loop:
                     buf[o] = '\"';
                     *len += 5;
                 } else {
-                    LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "entity reference (only predefined references are supported)");
+                    LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "entity reference (only predefined references are supported)");
                     goto error;
                 }
             } else {
@@ -656,7 +656,7 @@ loop:
                         n = (10 * n) + (data[*len] - '0');
                     }
                     if (data[*len] != ';') {
-                        LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "character reference, missing semicolon");
+                        LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "character reference, missing semicolon");
                         goto error;
                     }
                 } else if (data[(*len)++] == 'x' && isxdigit(data[*len])) {
@@ -671,20 +671,20 @@ loop:
                         n = (16 * n) + r;
                     }
                 } else {
-                    LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "character reference");
+                    LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "character reference");
                     goto error;
 
                 }
-                r = pututf8(&buf[o], n);
+                r = pututf8(ctx, &buf[o], n);
                 if (!r) {
-                    LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "character reference value");
+                    LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "character reference value");
                     goto error;
                 }
                 o += r - 1;     /* o is ++ in for loop */
                 (*len)++;
             }
         } else {
-            r = copyutf8(&buf[o], &data[*len]);
+            r = copyutf8(ctx, &buf[o], &data[*len]);
             if (!r) {
                 goto error;
             }
@@ -709,7 +709,7 @@ loop:
             size = o;
             result = malloc((size + 1) * sizeof *result);
         }
-        LY_CHECK_ERR_RETURN(!result, LOGMEM, NULL);
+        LY_CHECK_ERR_RETURN(!result, LOGMEM(ctx), NULL);
         memcpy(&result[size - o], buf, o);
     }
     if (result) {
@@ -717,7 +717,7 @@ loop:
     } else {
         size = 0;
         result = strdup("");
-        LY_CHECK_ERR_RETURN(!result, LOGMEM, NULL)
+        LY_CHECK_ERR_RETURN(!result, LOGMEM(ctx), NULL)
     }
 
     return result;
@@ -741,7 +741,7 @@ parse_attr(struct ly_ctx *ctx, const char *data, unsigned int *len, struct lyxml
     if (!strncmp(c, "xmlns", 5)) {
         /* namespace */
         attr = calloc(1, sizeof (struct lyxml_ns));
-        LY_CHECK_ERR_RETURN(!attr, LOGMEM, NULL);
+        LY_CHECK_ERR_RETURN(!attr, LOGMEM(ctx), NULL);
 
         attr->type = LYXML_ATTR_NS;
         ((struct lyxml_ns *)attr)->parent = parent;
@@ -754,21 +754,21 @@ parse_attr(struct ly_ctx *ctx, const char *data, unsigned int *len, struct lyxml
     } else {
         /* attribute */
         attr = calloc(1, sizeof *attr);
-        LY_CHECK_ERR_RETURN(!attr, LOGMEM, NULL);
+        LY_CHECK_ERR_RETURN(!attr, LOGMEM(ctx), NULL);
 
         attr->type = LYXML_ATTR_STD;
     }
 
     /* process name part of the attribute */
     start = c;
-    uc = lyxml_getutf8(c, &size);
+    uc = lyxml_getutf8(ctx, c, &size);
     if (!is_xmlnamestartchar(uc)) {
-        LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "NameStartChar of the attribute");
+        LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "NameStartChar of the attribute");
         free(attr);
         return NULL;
     }
     c += size;
-    uc = lyxml_getutf8(c, &size);
+    uc = lyxml_getutf8(ctx, c, &size);
     while (is_xmlnamechar(uc)) {
         if (attr->type == LYXML_ATTR_STD && *c == ':') {
             /* attribute in a namespace */
@@ -780,7 +780,7 @@ parse_attr(struct ly_ctx *ctx, const char *data, unsigned int *len, struct lyxml
             attr->ns = lyxml_get_ns(parent, prefix);
         }
         c += size;
-        uc = lyxml_getutf8(c, &size);
+        uc = lyxml_getutf8(ctx, c, &size);
     }
 
     /* store the name */
@@ -791,7 +791,7 @@ equal:
     /* check Eq mark that can be surrounded by whitespaces */
     ign_xmlws(c);
     if (*c != '=') {
-        LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "attribute definition, \"=\" expected");
+        LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "attribute definition, \"=\" expected");
         goto error;
     }
     c++;
@@ -799,11 +799,11 @@ equal:
 
     /* process value part of the attribute */
     if (!*c || (*c != '"' && *c != '\'')) {
-        LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "attribute value, \" or \' expected");
+        LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "attribute value, \" or \' expected");
         goto error;
     }
     delim = c;
-    attr->value = lydict_insert_zc(ctx, parse_text(++c, *delim, &size));
+    attr->value = lydict_insert_zc(ctx, parse_text(ctx, ++c, *delim, &size));
     if (ly_errno) {
         goto error;
     }
@@ -853,17 +853,17 @@ lyxml_parse_elem(struct ly_ctx *ctx, const char *data, unsigned int *len, struct
     c++;
     e = c;
 
-    uc = lyxml_getutf8(e, &size);
+    uc = lyxml_getutf8(ctx, e, &size);
     if (!is_xmlnamestartchar(uc)) {
-        LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "NameStartChar of the element");
+        LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "NameStartChar of the element");
         return NULL;
     }
     e += size;
-    uc = lyxml_getutf8(e, &size);
+    uc = lyxml_getutf8(ctx, e, &size);
     while (is_xmlnamechar(uc)) {
         if (*e == ':') {
             if (prefix_len) {
-                LOGVAL(LYE_XML_INVAL, LY_VLOG_NONE, NULL, "element name, multiple colons found");
+                LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_NONE, NULL, "element name, multiple colons found");
                 goto error;
             }
             /* element in a namespace */
@@ -875,16 +875,16 @@ lyxml_parse_elem(struct ly_ctx *ctx, const char *data, unsigned int *len, struct
             c = start;
         }
         e += size;
-        uc = lyxml_getutf8(e, &size);
+        uc = lyxml_getutf8(ctx, e, &size);
     }
     if (!*e) {
-        LOGVAL(LYE_EOF, LY_VLOG_NONE, NULL);
+        LOGVAL(ctx, LYE_EOF, LY_VLOG_NONE, NULL);
         return NULL;
     }
 
     /* allocate element structure */
     elem = calloc(1, sizeof *elem);
-    LY_CHECK_ERR_RETURN(!elem, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!elem, LOGMEM(ctx), NULL);
 
     elem->next = NULL;
     elem->prev = elem;
@@ -897,7 +897,7 @@ lyxml_parse_elem(struct ly_ctx *ctx, const char *data, unsigned int *len, struct
     c = e;
 
 process:
-    ly_err_clean(1);
+    ly_err_clean(ctx, 1);
     ign_xmlws(c);
     if (!strncmp("/>", c, 2)) {
         /* we are done, it was EmptyElemTag */
@@ -920,13 +920,13 @@ process:
                 c += 2;
                 /* get name and check it */
                 e = c;
-                uc = lyxml_getutf8(e, &size);
+                uc = lyxml_getutf8(ctx, e, &size);
                 if (!is_xmlnamestartchar(uc)) {
-                    LOGVAL(LYE_XML_INVAL, LY_VLOG_XML, elem, "NameStartChar of the element");
+                    LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_XML, elem, "NameStartChar of the element");
                     goto error;
                 }
                 e += size;
-                uc = lyxml_getutf8(e, &size);
+                uc = lyxml_getutf8(ctx, e, &size);
                 while (is_xmlnamechar(uc)) {
                     if (*e == ':') {
                         /* element in a namespace */
@@ -934,28 +934,28 @@ process:
 
                         /* look for the prefix in namespaces */
                         if (memcmp(prefix, c, e - c)) {
-                            LOGVAL(LYE_SPEC, LY_VLOG_XML, elem,
+                            LOGVAL(ctx, LYE_SPEC, LY_VLOG_XML, elem,
                                    "Invalid (different namespaces) opening (%s) and closing element tags.", elem->name);
                             goto error;
                         }
                         c = start;
                     }
                     e += size;
-                    uc = lyxml_getutf8(e, &size);
+                    uc = lyxml_getutf8(ctx, e, &size);
                 }
                 if (!*e) {
-                    LOGVAL(LYE_EOF, LY_VLOG_NONE, NULL);
+                    LOGVAL(ctx, LYE_EOF, LY_VLOG_NONE, NULL);
                     goto error;
                 }
 
                 /* check that it corresponds to opening tag */
                 size = e - c;
                 str = malloc((size + 1) * sizeof *str);
-                LY_CHECK_ERR_GOTO(!str, LOGMEM, error);
+                LY_CHECK_ERR_GOTO(!str, LOGMEM(ctx), error);
                 memcpy(str, c, e - c);
                 str[e - c] = '\0';
                 if (size != strlen(elem->name) || memcmp(str, elem->name, size)) {
-                    LOGVAL(LYE_SPEC, LY_VLOG_XML, elem,
+                    LOGVAL(ctx, LYE_SPEC, LY_VLOG_XML, elem,
                            "Invalid (mixed names) opening (%s) and closing (%s) element tags.", elem->name, str);
                     free(str);
                     goto error;
@@ -965,7 +965,7 @@ process:
 
                 ign_xmlws(c);
                 if (*c != '>') {
-                    LOGVAL(LYE_SPEC, LY_VLOG_XML, elem, "Data after closing element tag \"%s\".", elem->name);
+                    LOGVAL(ctx, LYE_SPEC, LY_VLOG_XML, elem, "Data after closing element tag \"%s\".", elem->name);
                     goto error;
                 }
                 c++;
@@ -983,7 +983,7 @@ process:
                 }
                 /* PI - ignore it */
                 c += 2;
-                if (parse_ignore(c, "?>", &size)) {
+                if (parse_ignore(ctx, c, "?>", &size)) {
                     goto error;
                 }
                 c += size;
@@ -994,7 +994,7 @@ process:
                 }
                 /* Comment - ignore it */
                 c += 4;
-                if (parse_ignore(c, "-->", &size)) {
+                if (parse_ignore(ctx, c, "-->", &size)) {
                     goto error;
                 }
                 c += size;
@@ -1014,11 +1014,11 @@ process:
                 if (elem->content) {
                     /* we have a mixed content */
                     if (options & LYXML_PARSE_NOMIXEDCONTENT) {
-                        LOGVAL(LYE_XML_INVAL, LY_VLOG_XML, elem, "XML element with mixed content");
+                        LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_XML, elem, "XML element with mixed content");
                         goto error;
                     }
                     child = calloc(1, sizeof *child);
-                    LY_CHECK_ERR_GOTO(!child, LOGMEM, error);
+                    LY_CHECK_ERR_GOTO(!child, LOGMEM(ctx), error);
                     child->content = elem->content;
                     elem->content = NULL;
                     lyxml_add_child(ctx, elem, child);
@@ -1040,7 +1040,7 @@ store_content:
                     c = lws;
                     lws = NULL;
                 }
-                elem->content = lydict_insert_zc(ctx, parse_text(c, '<', &size));
+                elem->content = lydict_insert_zc(ctx, parse_text(ctx, c, '<', &size));
                 if (ly_errno) {
                     goto error;
                 }
@@ -1049,11 +1049,11 @@ store_content:
                 if (elem->child) {
                     /* we have a mixed content */
                     if (options & LYXML_PARSE_NOMIXEDCONTENT) {
-                        LOGVAL(LYE_XML_INVAL, LY_VLOG_XML, elem, "XML element with mixed content");
+                        LOGVAL(ctx, LYE_XML_INVAL, LY_VLOG_XML, elem, "XML element with mixed content");
                         goto error;
                     }
                     child = calloc(1, sizeof *child);
-                    LY_CHECK_ERR_GOTO(!child, LOGMEM, error);
+                    LY_CHECK_ERR_GOTO(!child, LOGMEM(ctx), error);
                     child->content = elem->content;
                     elem->content = NULL;
                     lyxml_add_child(ctx, elem, child);
@@ -1092,7 +1092,7 @@ store_content:
     *len = c - data;
 
     if (!closed_flag) {
-        LOGVAL(LYE_XML_MISS, LY_VLOG_XML, elem, "closing element tag", elem->name);
+        LOGVAL(ctx, LYE_XML_MISS, LY_VLOG_XML, elem, "closing element tag", elem->name);
         goto error;
     }
 
@@ -1116,12 +1116,12 @@ lyxml_parse_mem(struct ly_ctx *ctx, const char *data, int options)
     unsigned int len;
     struct lyxml_elem *root, *first = NULL, *next;
 
-    ly_err_clean(1);
-
     if (!ctx) {
-        LOGERR(LY_EINVAL, "%s: Invalid parameter.", __func__);
+        LOGERR(NULL, LY_EINVAL, "%s: Invalid parameter.", __func__);
         return NULL;
     }
+
+    ly_err_clean(ctx, 1);
 
 repeat:
     /* process document */
@@ -1135,21 +1135,21 @@ repeat:
         } else if (!strncmp(c, "<?", 2)) {
             /* XMLDecl or PI - ignore it */
             c += 2;
-            if (parse_ignore(c, "?>", &len)) {
+            if (parse_ignore(ctx, c, "?>", &len)) {
                 return NULL;
             }
             c += len;
         } else if (!strncmp(c, "<!--", 4)) {
             /* Comment - ignore it */
             c += 2;
-            if (parse_ignore(c, "-->", &len)) {
+            if (parse_ignore(ctx, c, "-->", &len)) {
                 return NULL;
             }
             c += len;
         } else if (!strncmp(c, "<!", 2)) {
             /* DOCTYPE */
             /* TODO - standalone ignore counting < and > */
-            LOGERR(LY_EINVAL, "DOCTYPE not supported in XML documents.");
+            LOGERR(ctx, LY_EINVAL, "DOCTYPE not supported in XML documents.");
             return NULL;
         } else if (*c == '<') {
             /* element - process it in next loop to strictly follow XML
@@ -1157,7 +1157,7 @@ repeat:
              */
             break;
         } else {
-            LOGVAL(LYE_XML_INCHAR, LY_VLOG_NONE, NULL, c);
+            LOGVAL(ctx, LYE_XML_INCHAR, LY_VLOG_NONE, NULL, c);
             return NULL;
         }
     }
@@ -1203,18 +1203,18 @@ lyxml_parse_path(struct ly_ctx *ctx, const char *filename, int options)
     char *addr;
 
     if (!filename || !ctx) {
-        LOGERR(LY_EINVAL, "%s: Invalid parameter.", __func__);
+        LOGERR(NULL, LY_EINVAL, "%s: Invalid parameter.", __func__);
         return NULL;
     }
 
     fd = open(filename, O_RDONLY);
     if (fd == -1) {
-        LOGERR(LY_EINVAL,"Opening file \"%s\" failed.", filename);
+        LOGERR(ctx, LY_EINVAL,"Opening file \"%s\" failed.", filename);
         return NULL;
     }
-    addr = lyp_mmap(fd, 0, &length);
+    addr = lyp_mmap(ctx, fd, 0, &length);
     if (addr == MAP_FAILED) {
-        LOGERR(LY_ESYS, "Mapping file descriptor into memory failed (%s()).", __func__);
+        LOGERR(ctx, LY_ESYS, "Mapping file descriptor into memory failed (%s()).", __func__);
         goto error;
     } else if (!addr) {
         /* empty XML file */

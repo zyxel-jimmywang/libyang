@@ -92,9 +92,9 @@ int lyp_check_edit_attr(struct ly_ctx *ctx, struct lyd_attr *attr, struct lyd_no
 struct lys_type *lyp_parse_value(struct lys_type *type, const char **value_, struct lyxml_elem *xml,
                                 struct lyd_node_leaf_list *leaf, struct lyd_attr *attr, int store, int dflt);
 
-int lyp_check_length_range(const char *expr, struct lys_type *type);
+int lyp_check_length_range(struct ly_ctx *ctx, const char *expr, struct lys_type *type);
 
-int lyp_check_pattern(const char *pattern, pcre **pcre_precomp);
+int lyp_check_pattern(struct ly_ctx *ctx, const char *pattern, pcre **pcre_precomp);
 
 int fill_yin_type(struct lys_module *module, struct lys_node *parent, struct lyxml_elem *yin, struct lys_type *type,
                   int tpdftype, struct unres_schema *unres);
@@ -120,11 +120,12 @@ int lyp_is_rpc_action(struct lys_node *node);
 /**
  * @brief Check validity of data parser options.
  *
+ * @param ctx Context to store errors in.
  * @param options Parser options to be checked.
  * @param func name of the function where called
  * @return 0 for ok, 1 when multiple data types bits are set, or incompatible options are used together.
  */
-int lyp_data_check_options(int options, const char *func);
+int lyp_data_check_options(struct ly_ctx *ctx, int options, const char *func);
 
 int lyp_check_identifier(const char *id, enum LY_IDENT type, struct lys_module *module, struct lys_node *parent);
 int lyp_check_date(const char *date);
@@ -167,6 +168,7 @@ int lyp_add_ietf_netconf_annotations(struct lys_module *mod);
 /**
  * @brief mmap() wrapper for parsers. To unmap, use lyp_munmap().
  *
+ * @param[in] ctx Context to store errors in.
  * @param[in] prot The desired memory protection as in case of mmap().
  * @param[in] fd File descriptor for getting data.
  * @param[in] addsize Number of additional bytes to be allocated (and zeroed) after the implicitly added
@@ -176,7 +178,7 @@ int lyp_add_ietf_netconf_annotations(struct lys_module *mod);
  * is returned and #ly_errno value is set.
  */
 void *
-lyp_mmap(int fd, size_t addsize, size_t *length);
+lyp_mmap(struct ly_ctx *ctx, int fd, size_t addsize, size_t *length);
 
 /**
  * @brief Unmap function for the data mapped by lyp_mmap()
@@ -194,8 +196,8 @@ int lyp_munmap(void *addr, size_t length);
  * 00010000 -- 001FFFFF:    11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
  *
  */
-unsigned int pututf8(char *dst, int32_t value);
-unsigned int copyutf8(char *dst, const char *src);
+unsigned int pututf8(struct ly_ctx *ctx, char *dst, int32_t value);
+unsigned int copyutf8(struct ly_ctx *ctx, char *dst, const char *src);
 
 /*
  * Internal functions implementing YANG extensions support

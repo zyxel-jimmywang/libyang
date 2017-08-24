@@ -97,7 +97,7 @@ ly_print(struct lyout *out, const char *format, ...)
                 out->method.mem.buf = NULL;
                 out->method.mem.len = 0;
                 out->method.mem.size = 0;
-                LOGMEM;
+                LOGMEM(NULL);
                 va_end(ap);
                 return -1;
             }
@@ -152,7 +152,7 @@ ly_write(struct lyout *out, const char *buf, size_t count)
                 out->method.mem.buf = NULL;
                 out->method.mem.len = 0;
                 out->method.mem.size = 0;
-                LOGMEM;
+                LOGMEM(NULL);
                 return -1;
             }
             out->method.mem.buf = aux;
@@ -256,7 +256,7 @@ lys_print_(struct lyout *out, const struct lys_module *module, LYS_OUTFORMAT for
         ret = info_print_model(out, module, target_node);
         break;
     default:
-        LOGERR(LY_EINVAL, "Unknown output format.");
+        LOGERR(module->ctx, LY_EINVAL, "Unknown output format.");
         ret = EXIT_FAILURE;
         break;
     }
@@ -352,7 +352,7 @@ lyd_print_(struct lyout *out, const struct lyd_node *root, LYD_FORMAT format, in
     case LYD_JSON:
         return json_print_data(out, root, options);
     default:
-        LOGERR(LY_EINVAL, "Unknown output format.");
+        LOGERR(root->schema->module->ctx, LY_EINVAL, "Unknown output format.");
         return EXIT_FAILURE;
     }
 }

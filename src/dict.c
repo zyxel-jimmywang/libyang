@@ -187,7 +187,7 @@ dict_insert(struct ly_ctx *ctx, char *value, size_t len, int zerocopy)
             record->value = value;
         } else {
             record->value = malloc((len + 1) * sizeof *record->value);
-            LY_CHECK_ERR_RETURN(!record->value, LOGMEM, NULL);
+            LY_CHECK_ERR_RETURN(!record->value, LOGMEM(ctx), NULL);
             memcpy(record->value, value, len);
             record->value[len] = '\0';
         }
@@ -246,12 +246,12 @@ dict_insert(struct ly_ctx *ctx, char *value, size_t len, int zerocopy)
 
     /* create new record and add it behind the last record */
     new = malloc(sizeof *record);
-    LY_CHECK_ERR_RETURN(!new, LOGMEM, NULL);
+    LY_CHECK_ERR_RETURN(!new, LOGMEM(ctx), NULL);
     if (zerocopy) {
         new->value = value;
     } else {
         new->value = malloc((len + 1) * sizeof *record->value);
-        LY_CHECK_ERR_RETURN(!new->value, LOGMEM; free(new), NULL);
+        LY_CHECK_ERR_RETURN(!new->value, LOGMEM(ctx); free(new), NULL);
         memcpy(new->value, value, len);
         new->value[len] = '\0';
     }
