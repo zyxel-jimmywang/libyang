@@ -834,8 +834,9 @@ int
 lyp_check_pattern(struct ly_ctx *ctx, const char *pattern, pcre **pcre_precomp)
 {
     int idx, idx2, start, end, err_offset, count, end_anchor = 0;
-    char *perl_regex, *ptr;
+    char *perl_regex, *ptr, *ptr_end;
     const char *err_msg, *orig_ptr;
+    size_t n;
     pcre *precomp;
 
     /*
@@ -847,11 +848,13 @@ lyp_check_pattern(struct ly_ctx *ctx, const char *pattern, pcre **pcre_precomp)
     /* we need to replace all "$" with "\$", count them now */
     for (count = 0, ptr = strchr(pattern, '$'); ptr; ++count, ptr = strchr(ptr + 1, '$'));
 
-    perl_regex = malloc((strlen(pattern) + 4 + count) * sizeof(char));
+    n = (strlen(pattern) + 4 + count) * sizeof(char);
+    perl_regex = malloc(n);
     LY_CHECK_ERR_RETURN(!perl_regex, LOGMEM(ctx), EXIT_FAILURE);
     perl_regex[0] = '\0';
 
     ptr = perl_regex;
+    ptr_end = &ptr[n];
 
     if ((strlen(pattern) > 1) && strncmp(pattern + strlen(pattern) - 2, ".*", 2)) {
         /* we wil add line-end anchoring */
@@ -863,7 +866,7 @@ lyp_check_pattern(struct ly_ctx *ctx, const char *pattern, pcre **pcre_precomp)
 
     for (orig_ptr = pattern; orig_ptr[0]; ++orig_ptr) {
         if (orig_ptr[0] == '$') {
-            ptr += sprintf(ptr, "\\$");
+            ptr += snprintf(ptr, ptr_end - ptr, "\\$");
         } else {
             ptr[0] = orig_ptr[0];
             ++ptr;
@@ -871,7 +874,7 @@ lyp_check_pattern(struct ly_ctx *ctx, const char *pattern, pcre **pcre_precomp)
     }
 
     if (end_anchor) {
-        ptr += sprintf(ptr, ")$");
+        ptr += snprintf(ptr, ptr_end - ptr, ")$");
     } else {
         ptr[0] = '\0';
         ++ptr;
@@ -1011,7 +1014,7 @@ make_canonical(struct ly_ctx *ctx, int type, const char **value, void *data1, vo
             }
             if (buf[0]) {
                 LY_CHECK_ERR_RETURN(strlen(buf) + 1 + strlen(bits[i]->name) > buf_len, LOGBUF(bits[i]->name), -1);
-                sprintf(buf + strlen(buf), " %s", bits[i]->name);
+                snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), " %s", bits[i]->name);
             } else {
                 LY_CHECK_ERR_RETURN(strlen(bits[i]->name) > buf_len, LOGBUF(bits[i]->name), -1);
                 strcpy(buf, bits[i]->name);
@@ -1024,7 +1027,7 @@ make_canonical(struct ly_ctx *ctx, int type, const char **value, void *data1, vo
         /* identity must always have a prefix */
         if (!strchr(*value, ':')) {
             LY_CHECK_ERR_RETURN(strlen(module_name) + 1 + strlen(*value) > buf_len, LOGBUF(*value), -1);
-            sprintf(buf, "%s:%s", module_name, *value);
+            snprintf(buf, sizeof(buf), "%s:%s", module_name, *value);
         } else {
             LY_CHECK_ERR_RETURN(strlen(*value) > buf_len, LOGBUF(*value), -1);
             strcpy(buf, *value);
@@ -1100,14 +1103,14 @@ make_canonical(struct ly_ctx *ctx, int type, const char **value, void *data1, vo
         num = *((int64_t *)data1);
         c = *((uint8_t *)data2);
         if (num) {
-            count = sprintf(buf, "%"PRId64" ", num);
+            count = snprintf(buf, sizeof(buf), "%"PRId64" ", num);
             if ( (num > 0 && (count - 1) <= c)
                  || (count - 2) <= c ) {
                 /* we have 0. value, print the value with the leading zeros
                  * (one for 0. and also keep the correct with of num according
                  * to fraction-digits value)
                  * for (num<0) - extra character for '-' sign */
-                count = sprintf(buf, "%0*"PRId64" ", (num > 0) ? (c + 1) : (c + 2), num);
+                count = snprintf(buf, sizeof(buf), "%0*"PRId64" ", (num > 0) ? (c + 1) : (c + 2), num);
             }
             for (i = c, j = 1; i > 0 ; i--) {
                 if (j && i > 1 && buf[count - 2] == '0') {
@@ -1122,7 +1125,7 @@ make_canonical(struct ly_ctx *ctx, int type, const char **value, void *data1, vo
             buf[count - 1] = '.';
         } else {
             /* zero */
-            sprintf(buf, "0.0");
+            snprintf(buf, sizeof(buf), "0.0");
         }
         break;
 
@@ -1131,7 +1134,7 @@ make_canonical(struct ly_ctx *ctx, int type, const char **value, void *data1, vo
     case LY_TYPE_INT32:
     case LY_TYPE_INT64:
         num = *((int64_t *)data1);
-        sprintf(buf, "%"PRId64, num);
+        snprintf(buf, sizeof(buf), "%"PRId64, num);
         break;
 
     case LY_TYPE_UINT8:
@@ -1139,7 +1142,7 @@ make_canonical(struct ly_ctx *ctx, int type, const char **value, void *data1, vo
     case LY_TYPE_UINT32:
     case LY_TYPE_UINT64:
         unum = *((uint64_t *)data1);
-        sprintf(buf, "%"PRIu64, unum);
+        snprintf(buf, sizeof(buf), "%"PRIu64, unum);
         break;
 
     default:

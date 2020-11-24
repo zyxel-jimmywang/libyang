@@ -241,7 +241,7 @@ lyb_parse_model(const char *data, const struct lys_module **mod, int options, st
     LYB_HAVE_READ_GOTO(r, data, error);
 
     if (rev) {
-        sprintf(mod_rev, "%04u-%02u-%02u", ((rev & 0xFE00) >> 9) + 2000, (rev & 0x01E0) >> 5, rev & 0x001Fu);
+        snprintf(mod_rev, sizeof(mod_rev), "%04u-%02u-%02u", ((rev & 0xFE00) >> 9) + 2000, (rev & 0x01E0) >> 5, rev & 0x001Fu);
         *mod = ly_ctx_get_module(lybs->ctx, mod_name, mod_rev, 0);
         if ((options & LYD_OPT_LYB_MOD_UPDATE) && !(*mod)) {
             /* try to use an updated module */
@@ -563,10 +563,11 @@ lyb_parse_val_2(struct lys_type *type, struct lyd_node_leaf_list *leaf, struct l
         str_len = 0;
         for (i = 0; i < rtype->info.bits.count; ++i) {
             if (value->bit[i]) {
-                str = ly_realloc(str, str_len + strlen(value->bit[i]->name) + (str_len ? 1 : 0) + 1);
+		size_t n = str_len + strlen(value->bit[i]->name) + (str_len ? 1 : 0) + 1;
+                str = ly_realloc(str, n);
                 LY_CHECK_ERR_RETURN(!str, LOGMEM(ctx), -1);
 
-                str_len += sprintf(str + str_len, "%s%s", str_len ? " " : "", value->bit[i]->name);
+                str_len += snprintf(str + str_len, n - str_len, "%s%s", str_len ? " " : "", value->bit[i]->name);
             }
         }
 
@@ -594,35 +595,35 @@ lyb_parse_val_2(struct lys_type *type, struct lyd_node_leaf_list *leaf, struct l
         *value_str = lydict_insert(ctx, value->enm->name, 0);
         break;
     case LY_TYPE_INT8:
-        sprintf(num_str, "%d", value->int8);
+        snprintf(num_str, sizeof(num_str), "%d", value->int8);
         *value_str = lydict_insert(ctx, num_str, 0);
         break;
     case LY_TYPE_UINT8:
-        sprintf(num_str, "%u", value->uint8);
+        snprintf(num_str, sizeof(num_str), "%u", value->uint8);
         *value_str = lydict_insert(ctx, num_str, 0);
         break;
     case LY_TYPE_INT16:
-        sprintf(num_str, "%d", value->int16);
+        snprintf(num_str, sizeof(num_str), "%d", value->int16);
         *value_str = lydict_insert(ctx, num_str, 0);
         break;
     case LY_TYPE_UINT16:
-        sprintf(num_str, "%u", value->uint16);
+        snprintf(num_str, sizeof(num_str), "%u", value->uint16);
         *value_str = lydict_insert(ctx, num_str, 0);
         break;
     case LY_TYPE_INT32:
-        sprintf(num_str, "%d", value->int32);
+        snprintf(num_str, sizeof(num_str), "%d", value->int32);
         *value_str = lydict_insert(ctx, num_str, 0);
         break;
     case LY_TYPE_UINT32:
-        sprintf(num_str, "%u", value->uint32);
+        snprintf(num_str, sizeof(num_str), "%u", value->uint32);
         *value_str = lydict_insert(ctx, num_str, 0);
         break;
     case LY_TYPE_INT64:
-        sprintf(num_str, "%"PRId64, value->int64);
+        snprintf(num_str, sizeof(num_str), "%"PRId64, value->int64);
         *value_str = lydict_insert(ctx, num_str, 0);
         break;
     case LY_TYPE_UINT64:
-        sprintf(num_str, "%"PRIu64, value->uint64);
+        snprintf(num_str, sizeof(num_str), "%"PRIu64, value->uint64);
         *value_str = lydict_insert(ctx, num_str, 0);
         break;
     case LY_TYPE_DEC64:
@@ -640,7 +641,7 @@ lyb_parse_val_2(struct lys_type *type, struct lyd_node_leaf_list *leaf, struct l
         }
 
         /* handle special case of int64_t not supporting printing -0 */
-        sprintf(num_str, "%s%"PRId64".%.*"PRId64, (num == 0) && (value->dec64 < 0) ? "-" : "", num, dig, frac);
+        snprintf(num_str, sizeof(num_str), "%s%"PRId64".%.*"PRId64, (num == 0) && (value->dec64 < 0) ? "-" : "", num, dig, frac);
         *value_str = lydict_insert(ctx, num_str, 0);
         break;
     default:
